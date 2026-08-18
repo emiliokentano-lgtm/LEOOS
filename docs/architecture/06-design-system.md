@@ -155,11 +155,46 @@ Built once in `apps/web/components/ui`, then used everywhere:
 | `PermissionGate` | hides UI; explicitly documented as cosmetic |
 | `ConfirmDialog` | required for `risk: high` actions, with typed confirmation for destructive ones |
 | `EmptyState` | one line, one action, no illustration |
+| `AsyncBoundary` | wraps loading / error / empty for any async region — see §4a |
+| `ErrorState` | message, retry action, and a request id for support |
+| `Skeleton` | shape-matched loading placeholder, never a spinner in a table |
 | `LiveIndicator` | connected / reconnecting / offline |
 
 `DataTable` deserves emphasis: persons, vehicles, personnel, incidents, units,
 audit logs, and search results are all the same interaction. Building it once and
 well is the single highest-leverage UI investment in the project.
+
+---
+
+## 4a. Async state convention (rule 26)
+
+Every region that loads data has four visual states, and all four are the
+component author's responsibility — not something added later when a screen looks
+wrong. This is an operational system: an ambiguous blank panel during an incident
+is a failure, because the operator cannot tell whether there is nothing to show or
+whether the system is broken.
+
+```tsx
+<AsyncBoundary
+  query={incidentsQuery}
+  loading={<Skeleton rows={8} />}
+  error={(e, retry) => <ErrorState error={e} onRetry={retry} />}
+  empty={<EmptyState title="No active incidents" action={createIncident} />}
+>
+  {(incidents) => <IncidentTable data={incidents} />}
+</AsyncBoundary>
+```
+
+| State | Rule |
+| --- | --- |
+| **Loading** | Shape-matched skeletons, not spinners — a table loads as grey rows so the layout does not jump. Spinners only for actions under 1 s. |
+| **Error** | What failed, a retry control, and the request id. Never a bare "Something went wrong". A failed live feed degrades to the last REST data with a visible `LiveIndicator`, rather than blanking the screen. |
+| **Empty** | Distinguishes "no results for this filter" from "nothing exists yet" — different text, different action. |
+| **Stale** | Data older than its refresh interval is dimmed with a timestamp. On a dispatch board, silently showing stale unit status is worse than showing none. |
+
+`AsyncBoundary` is a lint-enforced requirement: a component calling `useQuery`
+without rendering all four states fails review. The distinction between *empty*
+and *stale* is the one most often skipped and the one that matters most here.
 
 ---
 

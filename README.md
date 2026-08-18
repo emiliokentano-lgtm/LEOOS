@@ -19,6 +19,11 @@ Police Department (PD) · Medical Department (MD) · Federal Investigation Burea
 Organizations are database entities. Adding a seventh organization is a row insert
 plus a role/permission seed — never a code change.
 
+## Engineering rules
+
+[`CLAUDE.md`](CLAUDE.md) holds the project-wide engineering rules that bind every
+implementation phase, together with the mechanism that enforces each one.
+
 ## Documentation
 
 | Document | Contents |
@@ -33,6 +38,7 @@ plus a role/permission seed — never a code change.
 | [`docs/architecture/07-risks.md`](docs/architecture/07-risks.md) | Security risks, technical risks, mitigations |
 | [`docs/architecture/08-roadmap.md`](docs/architecture/08-roadmap.md) | Phased implementation plan with exit criteria |
 | [`docs/adr/`](docs/adr/) | Architecture Decision Records |
+| [`CLAUDE.md`](CLAUDE.md) | Binding engineering rules and their enforcement points |
 
 ## Open decisions
 

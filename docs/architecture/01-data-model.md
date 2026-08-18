@@ -121,6 +121,9 @@ The bridge between a FiveM player and LEOOS. **The only trusted mapping.**
 | settings | jsonb | per-org toggles (e.g. `hideUnitsFromSharedMap`) |
 | is_active | boolean | default true |
 | created_at / updated_at | timestamptz | |
+| deleted_at / deleted_by / deletion_reason | | soft deletion, see §3a |
+
+`U (key) WHERE deleted_at IS NULL`.
 
 `category` exists so cross-org behaviour can be expressed as data ("medical
 category orgs may view medical records") rather than as `if (key === 'MD')`.
@@ -155,8 +158,9 @@ attached to an organization-scoped role (enforced by trigger, see §8).
 | color | text | |
 | created_by | uuid | FK |
 | created_at / updated_at | timestamptz | |
+| deleted_at / deleted_by / deletion_reason | | soft deletion, see §3a |
 
-`U (organization_id, key)`. Partial `U` on `(organization_id) WHERE is_default`
+`U (organization_id, key) WHERE deleted_at IS NULL`. Partial `U` on `(organization_id) WHERE is_default`
 — exactly one default role per organization.
 
 An open integer level rather than a strict tree: it is simple, orderable, and
@@ -239,6 +243,65 @@ receives no global capability whatsoever.
 
 ---
 
+## 3a. Soft deletion policy
+
+Rules 24 and 25 require that historical personnel and operational records are
+preserved rather than removed. This is not only a policy preference — an incident
+that references a terminated officer, a charge that references a person, or an
+audit row that references a deleted role must all remain readable years later.
+A hard `DELETE` breaks that, and cascading deletes break it silently.
+
+### Classification
+
+| Class | Tables | Deletion behaviour |
+| --- | --- | --- |
+| **Never deleted** | `audit_log`, `incident_log`, `duty_status_history`, `panic_event` | append-only; no delete path exists in the API |
+| **Soft deleted** | `person`, `vehicle`, `role`, `organization`, `incident`, `unit`, `map_marker`, `statute`, `incident_type` | `deleted_at` / `is_active` set; row retained |
+| **Deactivated, not deleted** | `user_account`, `organization_member` | `status` transitions to `disabled` / `terminated`; row retained permanently |
+| **Hard deleted** | `session`, `auth_token`, expired Redis keys, `position_history` beyond retention | ephemeral by nature; retention job removes them |
+
+### Columns
+
+Every soft-deletable table carries:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| deleted_at | timestamptz | null = live |
+| deleted_by | uuid | FK → user_account |
+| deletion_reason | text | required when `deleted_at` is set (`CK`) |
+
+### Consequences that must be handled, not discovered later
+
+1. **Every unique constraint becomes partial.** `vehicle.plate` is unique among
+   *live* rows only — `U (plate) WHERE deleted_at IS NULL` — otherwise a deleted
+   plate permanently blocks re-registration. The same applies to `organization.key`,
+   `role (organization_id, key)`, and `person` natural keys.
+2. **Every query must filter.** All reads go through a repository helper that
+   applies `deleted_at IS NULL` by default; including deleted rows requires an
+   explicit `withDeleted: true`, which is only reachable from screens gated on the
+   relevant `.view_deleted` permission.
+3. **Foreign keys are `ON DELETE RESTRICT`, never `CASCADE`.** A cascade would
+   defeat the entire policy the first time someone removes an organization.
+4. **Permission semantics change.** `persons.delete`, `vehicles.delete`, and
+   `roles.delete` archive rather than erase. Three companion permissions exist:
+   `persons.restore`, `vehicles.restore`, `roles.restore` (`risk: medium`), plus
+   `admin.purge` (`scope: global`, `risk: high`) for the rare legally-mandated
+   erasure — which is a distinct, separately audited operation, not a variant of
+   delete.
+5. **The UI must say "Archive", not "Delete".** Presenting an archive action as a
+   deletion misrepresents what the system does.
+6. **A role cannot be archived while assigned.** Archiving requires zero live
+   `member_role` rows, so no member is silently left without authority. The API
+   returns the blocking assignments so the operator can reassign first.
+7. **An organization cannot be archived while it has active members** — same
+   reasoning, larger blast radius.
+
+### Restoration
+Restoring a soft-deleted row re-validates every partial unique constraint at
+restore time (the plate may have been reissued in the meantime) and fails with a
+specific conflict error rather than throwing a raw constraint violation. Both
+archive and restore are audited.
+
 ## 4. Person & vehicle records
 
 ### `person`
@@ -256,6 +319,7 @@ receives no global capability whatsoever.
 | is_deceased | boolean | |
 | created_by / updated_by | uuid | FK |
 | created_at / updated_at | timestamptz | |
+| deleted_at / deleted_by / deletion_reason | | soft deletion, see §3a |
 
 ### `person_flag`
 | person_id FK · type enum(`wanted`, `armed_dangerous`, `bolo`, `mental_health`, `no_contact`, `informant`) · severity enum(`info`,`caution`,`critical`) · note · created_by · expires_at |
@@ -294,8 +358,11 @@ MD-scoped, field-level visibility enforced in the API.
 | insurance_status | enum | `insured` \| `uninsured` \| `expired` |
 | is_fleet | boolean | |
 | notes | text | |
+| deleted_at / deleted_by / deletion_reason | | soft deletion, see §3a |
 
 `CK`: not both `owner_person_id` and `owner_organization_id` set.
+`U (plate) WHERE deleted_at IS NULL` — a plate is unique among live vehicles, so an
+archived registration does not permanently consume the plate.
 
 ### `vehicle_flag`
 | vehicle_id FK · type enum(`stolen`,`impounded`,`bolo`,`wanted`) · note · created_by · created_at · resolved_at |
@@ -442,6 +509,10 @@ database constraints and because a bug in one code path must not corrupt the mod
 | 10 | Audit log is append-only | table privileges |
 | 11 | Closed incidents have `closed_at` and `closed_by` | CHECK |
 | 12 | An `organization_lead` row requires an active membership | trigger |
+| 13 | Natural keys unique among **live** rows only | partial unique index |
+| 14 | A soft-deleted row always carries `deleted_by` and a reason | CHECK |
+| 15 | No foreign key cascades a delete | `ON DELETE RESTRICT` throughout |
+| 16 | A role cannot be archived while live assignments exist | trigger |
 
 Constraint 6 deserves emphasis: without it, a crafted request that slipped past
 validation could attach a PD Chief role to an ICE membership, producing a rank the

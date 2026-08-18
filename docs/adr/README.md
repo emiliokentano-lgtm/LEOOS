@@ -16,3 +16,4 @@ the old one.
 | [0005](0005-leaflet-crs-simple.md) | Leaflet `CRS.Simple` rather than MapLibre | Accepted |
 | [0006](0006-post-commit-publish.md) | Post-commit publish rather than a transactional outbox | Accepted |
 | [0007](0007-hierarchy-as-integer-level.md) | Integer rank levels rather than a role tree | Accepted |
+| [0008](0008-soft-deletion.md) | Soft deletion for operational records | Accepted |

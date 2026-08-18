@@ -23,7 +23,7 @@ Monorepo, tooling, and a runnable empty system.
 - `docker-compose.yml` — Postgres 16, Redis 7, adminer
 - Env schema validation that refuses to boot on a missing secret
 - Drizzle configured; first migration; seed runner
-- CI: install → typecheck → lint → test → build
+- CI: install → typecheck → lint → test → build → **secret scan** (rule 17)
 - Structured logging with request-id propagation; health and readiness endpoints
 - Error taxonomy and the global error handler
 
@@ -87,6 +87,8 @@ being right.*
 - `DataTable` (virtualised, sortable, URL-persisted), `StatusChip`, `PriorityBadge`,
   `OrgBadge`, `Panel`, `SplitLayout`, `ConfirmDialog`, `EmptyState`, `LiveIndicator`
 - Command palette skeleton
+- `AsyncBoundary` / `Skeleton` / `ErrorState` / `EmptyState` — the four-state
+  convention (rule 26), enforced by lint before any screen is built on it
 - Strict CSP; `dangerouslySetInnerHTML` lint ban
 - Personnel, roles, and organization screens built on the new components — the
   first real consumers, which is how the component set gets validated
@@ -103,13 +105,18 @@ per-row actions; the design passes contrast and keyboard-navigation review.
 - `person`, `person_flag`, `warrant`, `criminal_charge`, `statute`, `license`,
   `medical_record`, `vehicle`, `vehicle_flag`
 - CRUD with permission and field-level visibility (medical gated separately)
+- Soft deletion (ADR-0008): `deleted_at` columns, partial unique indexes,
+  default-filtering repository helper, archive/restore flows, `admin.purge`
 - Trigram indexes; cross-entity search with per-entity permission filtering
 - **Read auditing** on person, medical, and warrant views
 - Person and vehicle detail pages with flag banners
 
 **Exit:** search returns persons and vehicles filtered by permission; an officer
 without `persons.medical.view` cannot obtain medical fields through any endpoint
-(proved by test, not by inspection); every sensitive read appears in the audit log.
+(proved by test, not by inspection); every sensitive read appears in the audit log;
+archiving a vehicle frees its plate for re-registration and restoring it reports a
+conflict if the plate was reissued; no query returns archived rows without an
+explicit opt-in.
 
 ---
 
@@ -163,7 +170,9 @@ material memory growth.
   Redis write, downsampler, delta emission
 - Three-level offline detection
 - Command channel with at-most-once delivery and acknowledgement
-- `resources/leoos_bridge` Lua resource with framework adapter
+- `resources/leoos_bridge` Lua resource with the **`standalone` adapter** (base
+  natives only — no framework assumed, rule 37); ESX/QBCore adapters only if the
+  target server runs them
 - Admin UI for servers, credentials, rotation, anomaly counters
 
 **Exit:** a real FiveM server drives live units onto the map; killing the game
@@ -200,6 +209,25 @@ findings.
 Operator documentation, admin runbook, FiveM server-owner setup guide, onboarding
 flow, seed data for a demo environment, deployment automation, staged rollout with
 a pilot organization.
+
+---
+
+## Phase completion gate (rule 40)
+
+Independently of each phase's own exit criteria, no phase is finished until:
+
+1. `pnpm typecheck && pnpm lint && pnpm test` is green across the workspace — not
+   only the packages that changed.
+2. Any change touching authorization, sessions, ingest verification, or
+   serialization has an added or updated regression test (rule 32). A test that was
+   loosened to pass is a failed gate (rule 33).
+3. Migrations apply cleanly forward on a copy of the previous phase's database
+   (rule 48).
+4. Any integration still behind a mock is named as mocked in the phase report
+   (rules 35, 45). "Implemented" is reserved for code that runs against the real
+   dependency.
+5. The architecture documents are updated where implementation diverged from them
+   (rule 42).
 
 ---
 

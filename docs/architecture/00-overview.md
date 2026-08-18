@@ -69,8 +69,10 @@ because they are what separates LEOOS from a CRUD dashboard:
 2. **Map tile source.** We need a GTA V map raster tile pyramid. Confirm which
    asset set is used and that its licence permits hosting. This is a legal
    question, not a technical one, and it blocks Phase 6.
-3. **FiveM framework.** ESX, QBCore, qbx_core, or standalone? It changes only the
-   identity-extraction layer of the bridge resource, but it changes it concretely.
+3. **FiveM framework.** *No longer blocking.* Per rule 37 no framework is assumed:
+   the bridge ships a `standalone` adapter using base natives only, and ESX/QBCore
+   adapters are added behind the same interface if the server actually runs them.
+   Still worth telling us, so we know whether to build a second adapter.
 4. **Single game server or multiple?** The schema supports many; confirm whether
    the map must merge units from several servers.
 5. **Retention policy.** How long do we keep position history and audit logs?

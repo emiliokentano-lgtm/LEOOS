@@ -81,6 +81,32 @@ supports it from Phase 1; enforcement lands in Phase 8.
 | General API | 300 / min per session, 60 / min per IP unauthenticated |
 | Search endpoints | 30 / min per user (also audited) |
 
+### A.7 Serialization boundary (rule 16)
+
+Secrets must not merely be *omitted* from responses — they must be structurally
+incapable of reaching one. Selecting a whole row and forgetting to strip a field is
+the normal way password hashes leak.
+
+Therefore: **API responses are assembled from DTO types declared in
+`packages/contracts`, never from ORM rows.** Returning a `db.select()` result
+directly from a route handler is a lint error, not a code-review catch.
+
+Fields that must never leave the API process under any circumstance:
+
+| Field | Table |
+| --- | --- |
+| `password_hash` | `user_account` |
+| `totp_secret_enc`, recovery-code hashes | `user_account` |
+| `token_hash` | `session`, `auth_token` |
+| `secret_hash` | `game_server_credential` |
+
+The FiveM credential secret is shown exactly once, at creation, in the response to
+the create call — it is never stored in plaintext and never retrievable again.
+Losing it means rotating the key, which is a supported one-minute operation.
+
+A test asserts that the serialized form of every auth-related DTO contains none of
+these keys, so adding a field to a table cannot quietly widen a response.
+
 ---
 
 ## Part B — Authorization
@@ -142,14 +168,17 @@ export const PERMISSIONS = {
   'roles.view':   { category: 'roles', risk: 'low' },
   'roles.create': { category: 'roles', risk: 'high' },
   'roles.edit':   { category: 'roles', risk: 'high' },
-  'roles.delete': { category: 'roles', risk: 'high' },
+  'roles.delete':  { category: 'roles', risk: 'high' },   // archives, see data-model §3a
+  'roles.restore': { category: 'roles', risk: 'medium' },
   'roles.assign': { category: 'roles', risk: 'high' },
 
   // persons
   'persons.view':          { category: 'persons', risk: 'low' },
   'persons.create':        { category: 'persons', risk: 'low' },
   'persons.edit':          { category: 'persons', risk: 'medium' },
-  'persons.delete':        { category: 'persons', risk: 'high' },
+  'persons.delete':        { category: 'persons', risk: 'high' },   // archives
+  'persons.restore':       { category: 'persons', risk: 'medium' },
+  'persons.view_deleted':  { category: 'persons', risk: 'medium' },
   'persons.flags.manage':  { category: 'persons', risk: 'medium' },
   'persons.warrants.manage': { category: 'persons', risk: 'high' },
   'persons.criminal.view': { category: 'persons', risk: 'medium' },
@@ -160,7 +189,9 @@ export const PERMISSIONS = {
   'vehicles.view':   { category: 'vehicles', risk: 'low' },
   'vehicles.create': { category: 'vehicles', risk: 'low' },
   'vehicles.edit':   { category: 'vehicles', risk: 'medium' },
-  'vehicles.delete': { category: 'vehicles', risk: 'high' },
+  'vehicles.delete':  { category: 'vehicles', risk: 'high' },   // archives
+  'vehicles.restore': { category: 'vehicles', risk: 'medium' },
+  'vehicles.view_deleted': { category: 'vehicles', risk: 'medium' },
   'vehicles.flags.manage': { category: 'vehicles', risk: 'medium' },
 
   // dispatch
@@ -191,6 +222,7 @@ export const PERMISSIONS = {
   'admin.audit_logs':    { category: 'admin', risk: 'high', scope: 'global' },
   'admin.game_servers':  { category: 'admin', risk: 'high', scope: 'global' },
   'admin.impersonate':   { category: 'admin', risk: 'high', scope: 'global' },
+  'admin.purge':         { category: 'admin', risk: 'high', scope: 'global' },  // irreversible erasure
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
@@ -198,6 +230,11 @@ export type PermissionKey = keyof typeof PERMISSIONS;
 
 `scope: 'global'` permissions cannot be attached to an organization role. That
 is what stops a PD Chief from writing themselves an `admin.users` role.
+
+Note that the `.delete` permissions **archive** rather than erase (data model §3a).
+Irreversible erasure is `admin.purge`, a separate global permission — so the
+capability to remove a record permanently is never bundled into an ordinary
+organizational role.
 
 ### B.3 The hierarchy rule — normative specification
 

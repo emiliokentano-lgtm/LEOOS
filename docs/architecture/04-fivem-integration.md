@@ -278,9 +278,33 @@ Implementation constraints that shape this design:
   is never retried — a one-second-old position is worthless, and retrying it turns
   a blip into a thundering herd.
 - Backoff on failure: 1s → 2s → 4s → 8s → 15s cap, with jitter.
-- Framework adapters (`ESX`, `QBCore`, standalone) are isolated in
-  `collector.lua` behind a single `getPlayerIdentity(src)` function. Only the
-  identifier extraction differs between frameworks. **[CONFIRM] which framework.**
+- **No framework is assumed** (rule 37). The default and reference implementation
+  is `standalone`, which uses only base FiveM natives (`GetPlayerIdentifiers`,
+  `GetEntityCoords`, `GetEntityHeading`, `GetVehiclePedIsIn`) and depends on
+  nothing else. It works on any FiveM server.
+
+  Framework-specific access is confined to one adapter interface in
+  `server/adapters/`, and nothing outside that directory may reference a framework
+  global such as `ESX` or `QBCore`:
+
+  ```lua
+  -- server/adapters/init.lua
+  ---@class LeoosAdapter
+  ---@field name string
+  ---@field detect fun(): boolean          -- is this framework present?
+  ---@field getIdentity fun(src: number): { license: string?, steam: string?, discord: string? }
+  ---@field getCharacterName fun(src: number): string|nil   -- optional, advisory only
+  ```
+
+  Adapters are selected by explicit config (`leoos_adapter` convar), with
+  autodetection only as a fallback that logs which adapter it chose. `standalone`
+  ships in Phase 7; `esx` and `qbcore` adapters are added only if the server
+  actually runs them.
+
+  Note that even a framework adapter supplies **only identifiers**, plus an
+  advisory character name. It never supplies organization, rank, or callsign —
+  those always resolve from the LEOOS database (§1), so the choice of framework
+  cannot affect authorization.
 - The resource must degrade silently: if LEOOS is unreachable, the game server
   logs and continues. A dispatch outage must never affect gameplay.
 
