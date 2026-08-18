@@ -36,3 +36,6 @@ apps/web/public/map/tiles/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# visual check output
+.visual/

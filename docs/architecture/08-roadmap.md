@@ -78,8 +78,13 @@ being right.*
 
 ---
 
-## Phase 3 — Application shell & design system
+## Phase 3 — Application shell & design system ✅ **COMPLETE**
 *Estimate: 1–1.5 weeks*
+
+Delivered ahead of Phases 1 and 2 at the product owner's direction, so that every
+later module has a design system to extend rather than inventing its own. The
+screens built here are presentation only: they render fixture data, perform no
+mutations, and state plainly where a capability is not yet implemented.
 
 - Token layer, typography, dark theme
 - App shell: sidebar (server-filtered by permission), top bar, status bar
@@ -238,7 +243,7 @@ Independently of each phase's own exit criteria, no phase is finished until:
 | 0 | Foundation | 3–5 d | — |
 | 1 | Auth & accounts | 1–1.5 w | 0 |
 | 2 | **Orgs, roles, permissions** | 2–2.5 w | 1 |
-| 3 | Shell & design system | 1–1.5 w | 2 |
+| 3 | Shell & design system ✅ | 1–1.5 w | — (built first) |
 | 4 | Persons & vehicles | 1.5–2 w | 3 |
 | 5 | Dispatch & real-time | 2–2.5 w | 3 |
 | 6 | Map | 1.5–2 w | 5 · **tile licence** |

@@ -1,5 +1,11 @@
 # 06 — Design System & UI Architecture
 
+> **Status: implemented.** This document described the intended system; the
+> design foundation and application shell now exist in `apps/web`. Where the
+> implementation diverged from the original plan, this document has been
+> corrected rather than left aspirational (engineering rule 42). Divergences are
+> noted inline as **[built]**.
+
 The brief asks for something that reads as a professional emergency operations
 platform. That is a specific visual tradition — CAD systems, air traffic consoles,
 NOC walls — and it has rules. It is not "a dark admin template".
@@ -220,6 +226,50 @@ permits them for that specific row, computed server-side per row — so an opera
 never sees an action that would be refused.
 
 ---
+
+## 5a. What was built
+
+| Area | Location |
+| --- | --- |
+| Tokens | `apps/web/app/globals.css` |
+| Component library (30 components) | `apps/web/components/ui/` |
+| Application shell | `apps/web/components/shell/` |
+| Shared catalogues (permissions, statuses, geo) | `packages/contracts/src/` |
+| Screens | `apps/web/app/(app)/`, `apps/web/app/(auth)/` |
+| Living reference | `/design` route |
+| Visual check | `apps/web/scripts/visual-check.mjs` |
+
+**[built] Semantic token aliases.** Tailwind v4's `@theme` emits variables with a
+`--color-` prefix, but the status catalogues in `packages/contracts` name their
+tokens semantically (`--status-available`) so they stay framework-agnostic and
+can be read by the API or a future non-Tailwind consumer. A `:root` alias block
+in `globals.css` binds the two. This is load-bearing: without it every
+`var(--status-*)` resolves to nothing and status badges silently lose their
+colour — which is exactly the bug the first visual pass caught.
+
+**[built] Map rendering.** The canvas unit layer specified in
+[ADR-0005](../adr/0005-leaflet-crs-simple.md) is implemented now, ahead of
+Leaflet, because it is the part with the performance constraint. The base layer
+is a coordinate grid placeholder — the real raster pyramid remains blocked on
+tile licensing — but positions already use the shared `worldToMap` transform, so
+dropping tiles in will not move anything. The map auto-fits to the active units
+on load rather than opening at full world extent, which is mostly empty water.
+
+**[built] `AsyncBoundary` is library-agnostic.** It takes a small
+`AsyncResource<T>` shape rather than a TanStack Query result, so the four-state
+convention holds regardless of which fetching library Phase 4 adopts.
+
+**[built] No TanStack Query yet.** Nothing fetches in this phase, so the
+dependency is deferred to the first screen that needs it (engineering rules 28,
+29). Same reasoning for Turborepo: with one app, pnpm workspace scripts are
+enough; it arrives with `apps/api`.
+
+**[built] Toasts are hand-rolled** (~90 lines) rather than a dependency, because
+an operations console needs behaviour a generic library does not give: danger
+toasts that never auto-dismiss, and assertive live regions.
+
+**[built] Next 16 / React 19 / Tailwind 4**, rather than the Next 15 named in
+the original overview — those were the current releases at implementation time.
 
 ## 6. Accessibility
 

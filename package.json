@@ -1,0 +1,15 @@
+{
+  "name": "leoos",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @leoos/web dev",
+    "build": "pnpm --filter @leoos/web build",
+    "start": "pnpm --filter @leoos/web start",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck"
+  }
+}

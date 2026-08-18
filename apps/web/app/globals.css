@@ -1,0 +1,281 @@
+@import 'tailwindcss';
+
+/* ==========================================================================
+   LEOOS DESIGN TOKENS
+   --------------------------------------------------------------------------
+   Single source of truth for the visual language. Every component reads from
+   these tokens; no component defines its own colour, radius, or timing.
+
+   Principles enforced here:
+   1. Chrome is neutral. Colour is reserved for operational meaning.
+   2. Five surface steps in a tight range — no pure black, no high contrast
+      jumps that cause eye strain over an 8-hour shift.
+   3. Small radii. Anything above 4px reads as consumer software.
+   4. Motion is feedback, never decoration.
+   ========================================================================== */
+
+@theme {
+  /* ── Surfaces ─────────────────────────────────────────────────────────── */
+  --color-base: #0b0e14;        /* app background                            */
+  --color-surface: #12161f;     /* sidebar, panels                           */
+  --color-raised: #171c27;      /* cards, table headers, inputs              */
+  --color-overlay: #1d2330;     /* dialogs, popovers, dropdowns              */
+  --color-hover: #232a3a;       /* interactive hover                         */
+  --color-active: #2b3346;      /* interactive pressed / selected row        */
+
+  /* ── Borders ──────────────────────────────────────────────────────────── */
+  --color-border-subtle: #1e2532;
+  --color-border: #2a3242;
+  --color-border-strong: #3a4459;
+
+  /* ── Text ─────────────────────────────────────────────────────────────── */
+  --color-text-primary: #e6eaf2;
+  --color-text-secondary: #9aa5b8;
+  --color-text-tertiary: #6b7686;
+  --color-text-disabled: #4a5260;
+  --color-text-inverse: #0b0e14;
+
+  /* ── Operational status ───────────────────────────────────────────────────
+     The only saturated colours in the system. Muted deliberately: they must
+     pass AA contrast on --color-raised and remain distinguishable to viewers
+     with colour vision deficiency. Never used as the sole indicator — every
+     status also carries a label and an icon.                                */
+  --color-status-available: #2ea86b;
+  --color-status-busy: #d99a2b;
+  --color-status-onscene: #3b82d9;
+  --color-status-operation: #8b5cf6;
+  --color-status-transport: #14b8a6;
+  --color-status-hq: #64748b;
+  --color-status-hold: #a16207;
+  --color-status-panic: #ff3b3b;
+  --color-status-offline: #5a6474;
+
+  /* ── Incident priority ────────────────────────────────────────────────── */
+  --color-priority-1: #ff3b3b;
+  --color-priority-2: #ff7a2f;
+  --color-priority-3: #d99a2b;
+  --color-priority-4: #3b82d9;
+  --color-priority-5: #6b7686;
+
+  /* ── Semantic feedback ────────────────────────────────────────────────── */
+  --color-danger: #d94141;
+  --color-danger-strong: #ef4444;
+  --color-warning: #d99a2b;
+  --color-success: #2ea86b;
+  --color-info: #3b82d9;
+
+  /* ── Accent — used only for focus and the active nav marker ───────────── */
+  --color-accent: #4d8ee8;
+  --color-accent-muted: #1e3a5f;
+
+  /* ── Typography ───────────────────────────────────────────────────────────
+     Sans for interface text. Mono for anything read aloud over radio or
+     compared character by character: callsigns, plates, incident numbers,
+     coordinates, timestamps.                                                */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Dense scale — 13px base. A dispatcher needs 30 rows visible, not 8.      */
+  --text-2xs: 0.6875rem;   /* 11px — table meta, badges                      */
+  --text-xs: 0.75rem;      /* 12px — secondary text, labels                  */
+  --text-sm: 0.8125rem;    /* 13px — BASE interface size                     */
+  --text-base: 0.875rem;   /* 14px — body copy, inputs                       */
+  --text-lg: 1rem;         /* 16px — panel titles                            */
+  --text-xl: 1.125rem;     /* 18px — page titles                             */
+  --text-2xl: 1.375rem;    /* 22px — statistics                              */
+  --text-3xl: 1.75rem;     /* 28px — large metrics                           */
+
+  /* ── Radii — deliberately small ───────────────────────────────────────── */
+  --radius-xs: 2px;        /* inputs, buttons, badges                        */
+  --radius-sm: 3px;
+  --radius-md: 4px;        /* panels, cards, dialogs — the maximum           */
+  --radius-lg: 6px;        /* map floating panels only                       */
+
+  /* ── Shadows — minimal; elevation comes from surface steps ────────────── */
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-overlay: 0 8px 24px -4px rgb(0 0 0 / 0.5), 0 2px 6px rgb(0 0 0 / 0.3);
+  --shadow-focus: 0 0 0 2px var(--color-base), 0 0 0 4px var(--color-accent);
+
+  /* ── Motion — feedback only ───────────────────────────────────────────── */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 120ms;
+  --duration-base: 160ms;
+  --duration-slow: 240ms;
+
+  /* ── Layout constants ─────────────────────────────────────────────────── */
+  --spacing-sidebar: 244px;
+  --spacing-sidebar-collapsed: 56px;
+  --spacing-topbar: 48px;
+  --spacing-statusbar: 28px;
+  --spacing-row: 32px;         /* default dense table row                    */
+  --spacing-row-comfortable: 40px;
+}
+
+/* ==========================================================================
+   SEMANTIC TOKEN ALIASES
+   --------------------------------------------------------------------------
+   Tailwind's `@theme` emits its variables with a `--color-` prefix, but the
+   shared status catalogues in `@leoos/contracts` name their tokens
+   semantically (`--status-available`) so they stay framework-agnostic — the API
+   and any future non-Tailwind consumer read the same names.
+
+   These aliases bind the two. Without them `var(--status-available)` resolves to
+   nothing and a status badge silently loses its colour.
+   ========================================================================== */
+
+:root {
+  --status-available: var(--color-status-available);
+  --status-busy: var(--color-status-busy);
+  --status-onscene: var(--color-status-onscene);
+  --status-operation: var(--color-status-operation);
+  --status-transport: var(--color-status-transport);
+  --status-hq: var(--color-status-hq);
+  --status-hold: var(--color-status-hold);
+  --status-panic: var(--color-status-panic);
+  --status-offline: var(--color-status-offline);
+
+  --priority-1: var(--color-priority-1);
+  --priority-2: var(--color-priority-2);
+  --priority-3: var(--color-priority-3);
+  --priority-4: var(--color-priority-4);
+  --priority-5: var(--color-priority-5);
+}
+
+/* ==========================================================================
+   BASE
+   ========================================================================== */
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-base);
+    color: var(--color-text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    /* An operational console should not rubber-band or pull-to-refresh. */
+    overscroll-behavior: none;
+  }
+
+  /* Numbers must align in columns everywhere they are compared. */
+  table, .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Consistent, always-visible keyboard focus. Dispatchers work by keyboard. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+    border-radius: var(--radius-xs);
+  }
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  ::selection {
+    background-color: var(--color-accent-muted);
+    color: var(--color-text-primary);
+  }
+
+  /* Scrollbars styled to match the chrome rather than punching a light hole
+     through a dark interface. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border-strong) transparent;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--color-border-strong);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: #4a5568; }
+
+  /* Remove the number-input spinners — every numeric field here is typed. */
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button {
+    appearance: none;
+    margin: 0;
+  }
+}
+
+/* ==========================================================================
+   UTILITIES
+   ========================================================================== */
+
+@layer utilities {
+  /* The single looping animation in the product. It exists because a panic
+     alert must be noticeable from across a room. */
+  @keyframes leoos-panic-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+  .animate-panic {
+    animation: leoos-panic-pulse 1.1s var(--ease-out) infinite;
+  }
+
+  @keyframes leoos-skeleton {
+    0% { opacity: 0.5; }
+    50% { opacity: 0.85; }
+    100% { opacity: 0.5; }
+  }
+  .animate-skeleton {
+    animation: leoos-skeleton 1.6s ease-in-out infinite;
+  }
+
+  @keyframes leoos-fade-in {
+    from { opacity: 0; transform: translateY(2px); }
+    to { opacity: 1; transform: none; }
+  }
+  .animate-in-fast {
+    animation: leoos-fade-in var(--duration-fast) var(--ease-out);
+  }
+
+  @keyframes leoos-slide-from-right {
+    from { transform: translateX(100%); }
+    to { transform: none; }
+  }
+  .animate-drawer {
+    animation: leoos-slide-from-right var(--duration-base) var(--ease-out);
+  }
+
+  /* Applied to the scrolling region of a data table so the header can stick. */
+  .table-scroll {
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+}
+
+/* Respect reduced motion — including the panic pulse, which becomes a static
+   high-contrast ring rather than disappearing entirely. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .animate-panic {
+    animation: none;
+    outline: 2px solid var(--color-status-panic);
+    outline-offset: 1px;
+  }
+}
+
+/* Windows high-contrast / forced-colors mode. */
+@media (forced-colors: active) {
+  * {
+    border-color: CanvasText;
+  }
+}

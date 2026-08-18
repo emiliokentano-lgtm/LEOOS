@@ -7,9 +7,41 @@ dashboard.
 
 ## Status
 
-**Phase: Architecture.** No application code exists yet. This repository currently
-contains the proposed architecture only. Implementation begins once the
-architecture is approved.
+**Phase 3 (design system & application shell): complete.** The visual foundation,
+component library, application shell and screen layouts exist and run. There is
+**no backend**: every screen renders fixture data from `apps/web/mocks`, no
+mutation is performed, and authentication is not implemented. Screens say so
+explicitly rather than faking success.
+
+Phases 0–2 (foundation, auth, authorization kernel) are still outstanding.
+
+## Running it
+
+```bash
+pnpm install
+NEXT_PUBLIC_LEOOS_DEMO=1 pnpm dev     # http://localhost:3000
+```
+
+`NEXT_PUBLIC_LEOOS_DEMO=1` enables the fixture data and the "Demo data" badge in
+the top bar. Without it the screens render empty — there is nothing else to show
+them yet.
+
+Useful routes: `/dashboard`, `/dispatch`, `/map`, `/design` (the living design
+system reference), `/login`.
+
+```bash
+pnpm --filter @leoos/web typecheck
+pnpm --filter @leoos/web lint
+pnpm --filter @leoos/web visual-check   # needs a running server
+```
+
+## Workspace
+
+```
+apps/web            Next.js 16 — UI, shell, screens
+packages/contracts  permissions, status catalogues, coordinate transform
+docs/               architecture and ADRs
+```
 
 ## Supported organizations (data-driven, not hardcoded)
 
