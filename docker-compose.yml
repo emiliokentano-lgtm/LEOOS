@@ -1,0 +1,37 @@
+# Local development stack.
+#
+# Postgres 16 is the system of record. Redis is declared here because the
+# real-time layer needs it from Phase 5 — live unit state must never be written
+# to Postgres at telemetry rate (engineering rules 21, 22).
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: leoos-postgres
+    environment:
+      POSTGRES_USER: leoos
+      POSTGRES_PASSWORD: leoos
+      POSTGRES_DB: leoos
+    ports:
+      - '5432:5432'
+    volumes:
+      - leoos-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U leoos -d leoos']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: leoos-redis
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  leoos-pgdata:

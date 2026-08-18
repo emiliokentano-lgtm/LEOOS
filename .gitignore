@@ -39,3 +39,6 @@ apps/web/public/map/tiles/
 
 # visual check output
 .visual/
+
+# local database state
+pgdata/

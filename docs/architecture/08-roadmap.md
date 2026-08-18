@@ -13,8 +13,13 @@ Estimates assume one focused full-stack developer and are ranges, not commitment
 
 ---
 
-## Phase 0 — Foundation
+## Phase 0 — Foundation ⚑ **schema complete**
 *Estimate: 3–5 days*
+
+The database layer of this phase is built: `packages/db` holds the full schema,
+two forward-only migrations, idempotent reference-data seeds and 41 tests that
+run against a real PostgreSQL instance. Remaining Phase 0 work is the API
+scaffold, CI wiring and structured logging.
 
 Monorepo, tooling, and a runnable empty system.
 

@@ -17,3 +17,4 @@ the old one.
 | [0006](0006-post-commit-publish.md) | Post-commit publish rather than a transactional outbox | Accepted |
 | [0007](0007-hierarchy-as-integer-level.md) | Integer rank levels rather than a role tree | Accepted |
 | [0008](0008-soft-deletion.md) | Soft deletion for operational records | Accepted |
+| [0009](0009-uuid-v7-primary-keys.md) | UUID v7 primary keys | Accepted |

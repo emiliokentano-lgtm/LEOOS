@@ -1,5 +1,13 @@
 # 01 — Data Model
 
+> **Status: implemented.** The schema described here exists in
+> [`packages/db`](../../packages/db). Where implementation diverged from the
+> original design, this document has been corrected rather than left
+> aspirational (engineering rule 42); divergences are marked **[built]**.
+>
+> 42 tables · 146 indexes · 94 foreign keys · 17 CHECK constraints · 28 triggers.
+> Verified by 41 tests against a real PostgreSQL 16 instance.
+
 PostgreSQL 16. All tables use `uuid` v7 primary keys (time-sortable, index-friendly),
 `timestamptz` for all times, and `citext` for case-insensitive natural keys.
 
@@ -517,6 +525,59 @@ database constraints and because a bug in one code path must not corrupt the mod
 Constraint 6 deserves emphasis: without it, a crafted request that slipped past
 validation could attach a PD Chief role to an ICE membership, producing a rank the
 authorization kernel would then honour.
+
+---
+
+## 8a. What was built, and what changed
+
+| Concern | Location |
+| --- | --- |
+| Schema, by bounded context | `packages/db/src/schema/` |
+| Migrations (forward only) | `packages/db/migrations/` |
+| Reference-data seeds | `packages/db/src/seed/` |
+| Tests | `packages/db/test/` |
+
+**[built] `uuidv7()` is implemented, not assumed.** Postgres 16 has no native
+v7. The prelude defines one, with the 12 `rand_a` bits carrying sub-millisecond
+precision (RFC 9562 §6.2 method 3) so ids created in a burst still sort in
+creation order — the plain random-`rand_a` form is only ordered across
+milliseconds, which would make "sorted by id" quietly wrong for rows written in a
+burst, exactly what a dispatch system does. A first attempt using bit-string
+concatenation put the version nibble in the wrong half of the byte; the
+conformance test caught it.
+
+**[built] `citext` for every human-typed natural key** — email, username, plate,
+callsign, organization key. `LSPD0412` and `lspd0412` must not be two plates, and
+lowercasing in application code is a convention, not a guarantee.
+
+**[built] Append-only is enforced by trigger, not only by privilege.** The
+original design revoked `UPDATE`/`DELETE` from the application role. That relies
+on the deployment actually using that role. A `refuse_mutation()` trigger holds
+regardless of who connects; the privilege revoke remains as a second layer.
+
+**[built] `incident_closure_complete` requires `closed_at` but not `closed_by`.**
+The original constraint required both. That was wrong: the schema supports
+`source = 'automatic'`, so a retention job or the FiveM bridge can close a call
+with no human actor, and requiring one would make a flow the model already
+anticipates impossible. Who closed it is answered by `audit_log`, which records
+an `actor_type` for exactly this reason.
+
+**[built] `member_status_history` uses `ON DELETE RESTRICT`, not `CASCADE`.**
+It is a history table; a cascade would let a membership deletion silently erase
+the record of who was on duty when. Caught by a test asserting that no foreign
+key cascades into operational history.
+
+**[built] Attribution columns are deliberately unindexed.** `assigned_by`,
+`granted_by`, `changed_by`, `actor_user_id` are written on every row and read
+essentially never. Indexing them costs write throughput on the hot path to serve
+a query nobody makes; "who did this" is answered from `audit_log`, which is
+indexed on actor. Relationship foreign keys on unbounded tables *are* all
+indexed, and a test enforces the distinction.
+
+**[built] `operational_status` is a table, not an enum.** The brief listed
+statuses as fixed values; making them rows means an organization can add one
+without a migration, which is the same reasoning that makes organizations and
+roles data.
 
 ---
 

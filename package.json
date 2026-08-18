@@ -10,6 +10,11 @@
     "build": "pnpm --filter @leoos/web build",
     "start": "pnpm --filter @leoos/web start",
     "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "db:migrate": "pnpm --filter @leoos/db migrate",
+    "db:seed": "pnpm --filter @leoos/db seed",
+    "db:seed:demo": "pnpm --filter @leoos/db seed:demo",
+    "db:generate": "pnpm --filter @leoos/db generate",
+    "test": "pnpm -r test"
   }
 }
