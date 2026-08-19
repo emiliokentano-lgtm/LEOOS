@@ -138,6 +138,8 @@ export async function setAccountStatus(
  * membership. A suite that only ever creates bare accounts never executes it,
  * which is exactly how a query bug reached a running server.
  */
+let membershipCounter = 0;
+
 export async function grantMembership(
   db: Database,
   username: string,
@@ -159,10 +161,15 @@ export async function grantMembership(
   `);
   if (!role) throw new Error(`no role ${orgKey}/${roleKey}`);
 
-  const suffix = Math.floor(Math.random() * 100000);
+  // Callsigns and employee numbers are unique per ACTIVE member per
+  // organization, and the test database keeps its members on purpose (see
+  // `resetAccounts`). A random suffix collides more often the longer the
+  // database lives, so the suffix is drawn from the clock plus a counter.
+  membershipCounter += 1;
+  const suffix = `${Date.now().toString(36)}${membershipCounter}`;
   const [member] = await db.execute<{ id: string }>(sql`
     INSERT INTO organization_member (user_id, organization_id, callsign, employee_number, status)
-    VALUES (${user.id}, ${org.id}, ${`T-${suffix}`}, ${String(suffix)}, 'active')
+    VALUES (${user.id}, ${org.id}, ${`T-${suffix}`}, ${suffix}, 'active')
     ON CONFLICT (user_id, organization_id) DO UPDATE SET status = 'active'
     RETURNING id
   `);

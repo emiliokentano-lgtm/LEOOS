@@ -180,6 +180,41 @@ describe('organization lead', () => {
       allowed: false, reason: 'TARGET_IS_ORG_LEAD',
     });
   });
+
+  it('holds every organization-scoped permission implicitly', () => {
+    // The capability is granted to a PERSON, not to a rank: a lead's nominal
+    // role is often a low one. Reading their authority off their role set alone
+    // would leave the lead of PD unable to hire or fire anybody in PD.
+    const lead = actor({ isOrgLead: true, level: UNBOUNDED_LEVEL, permissions: new Set() });
+    expect(can(lead, 'personnel.fire')).toBe(true);
+    expect(can(lead, 'personnel.promote')).toBe(true);
+    expect(can(lead, 'roles.assign')).toBe(true);
+    expect(can(lead, 'organization.edit')).toBe(true);
+  });
+
+  it('holds NO global-scope permission', () => {
+    // Running one organization must never become running the system.
+    const lead = actor({ isOrgLead: true, level: UNBOUNDED_LEVEL, permissions: new Set() });
+    expect(can(lead, 'admin.users')).toBe(false);
+    expect(can(lead, 'admin.audit_logs')).toBe(false);
+    expect(can(lead, 'admin.purge')).toBe(false);
+    expect(can(lead, 'admin.impersonate')).toBe(false);
+  });
+
+  it('holds nothing once their membership is no longer active', () => {
+    const lead = actor({
+      isOrgLead: true, level: UNBOUNDED_LEVEL,
+      permissions: new Set(), membershipActive: false,
+    });
+    expect(can(lead, 'personnel.fire')).toBe(false);
+  });
+
+  it('confers no permission in another organization', () => {
+    // `isOrgLead` is resolved for the organization the context is scoped to, so
+    // a lead of PD carries no lead flag while acting against MD.
+    const actingElsewhere = actor({ isOrgLead: false, level: 0, permissions: new Set() });
+    expect(can(actingElsewhere, 'personnel.fire')).toBe(false);
+  });
 });
 
 describe('global admin', () => {

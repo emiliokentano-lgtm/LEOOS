@@ -6,6 +6,7 @@ import errorsPlugin from './plugins/errors.js';
 import authPlugin from './plugins/auth.js';
 import authRoutes from './modules/auth/auth.routes.js';
 import organizationRoutes from './modules/organizations/organization.routes.js';
+import personnelRoutes from './modules/personnel/personnel.routes.js';
 import type { MailTransport } from './modules/auth/mail.js';
 
 export interface BuildOptions {
@@ -68,6 +69,12 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
 
   await app.register(authRoutes, { prefix: '/api/v1/auth' });
   await app.register(organizationRoutes, { prefix: '/api/v1/organizations' });
+  // Personnel hangs off the organization, so the organization id is a path
+  // segment rather than a body field — see the module comment in
+  // personnel.routes.ts.
+  await app.register(personnelRoutes, {
+    prefix: '/api/v1/organizations/:organizationId/personnel',
+  });
 
   return app;
 }

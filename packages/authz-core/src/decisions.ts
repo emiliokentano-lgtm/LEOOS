@@ -41,10 +41,36 @@ export function isSelfServiceAction(action: string): action is SelfServiceAction
   return (SELF_SERVICE_ACTIONS as readonly string[]).includes(action);
 }
 
-/** Does the actor hold this permission at all? */
+/**
+ * Does the actor hold this permission at all?
+ *
+ * Three sources, in order:
+ *
+ *   1. global admin — holds everything, including global-scope keys
+ *   2. an explicit grant, from a role or an override
+ *   3. the ORGANIZATION LEAD capability, which confers every
+ *      organization-scoped permission inside the lead's own organization
+ *
+ * Source 3 is not a shortcut. A lead's nominal role is frequently a low one —
+ * the capability is granted to a person, not to a rank — so reading their
+ * authority off their role set alone would leave the lead of PD unable to hire
+ * or fire anybody in PD. `canGrantPermissions`, `canManageMember` and
+ * `canAssignRole` all already treat a lead as unbounded within their
+ * organization; this makes the permission check agree with them.
+ *
+ * GLOBAL-SCOPE PERMISSIONS ARE EXCLUDED. `admin.users`, `admin.audit_logs`,
+ * `admin.purge` and the rest are never conferred by an organization capability,
+ * which is what keeps "runs one organization" from becoming "runs the system".
+ *
+ * The `ActorContext` is already scoped to one organization — `isOrgLead` is
+ * resolved for that organization and is false everywhere else — so there is no
+ * organization argument to compare here.
+ */
 export function can(actor: ActorContext, permission: PermissionKey): boolean {
   if (actor.isGlobalAdmin) return true;
-  return actor.permissions.has(permission);
+  if (actor.permissions.has(permission)) return true;
+  if (actor.isOrgLead && actor.membershipActive && !isGlobalPermission(permission)) return true;
+  return false;
 }
 
 export function requirePermission(actor: ActorContext, permission: PermissionKey): Decision {
