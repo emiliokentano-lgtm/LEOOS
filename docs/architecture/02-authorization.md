@@ -452,6 +452,32 @@ them reach up to the Chief role and drag it down. Reordering is the operation
 where a single-ended check is a hole, so the batch endpoint applies the same
 two-ended rule per entry and is all-or-nothing.
 
+**The shared registers are gated by PERMISSION, not by organization scope.**
+Persons and vehicles are not owned by a department — a citizen record scoped per
+organization would mean six copies of the same person, and a plate is looked up
+by whoever stops the car. This is where "some organizations have broader access
+than others" is actually implemented, and it needs no organization-specific code:
+PD's field bundle carries `persons.criminal.view` and not
+`persons.medical.view`, MD's medical bundle the reverse. A withheld section is
+NOT LOADED, not loaded-and-trimmed — a field removed at the DTO boundary has
+still left the database.
+
+Two pieces inside those registers are scoped, because the DATA is
+organization-owned rather than the actor: a warrant belongs to the organization
+that issued it (so another organization may SERVE it but not REVOKE it — a
+shared wanted list is useless if only one department can close a case, and
+dangerous if any department can quietly cancel another's), and a fleet vehicle
+belongs to the organization that operates it (so another organization may FLAG it
+but not edit or archive it — reporting a vehicle stolen is exactly what the
+shared register is for).
+
+**Sensitive READS are audited.** Misuse of a police or medical database is
+overwhelmingly a read problem, and the audit trail is the only thing that makes
+it answerable afterwards. Opening a person record, a medical record or a plate
+writes an audit row naming the reader. Medical CONTENT is never copied into that
+row: recording who looked is oversight, copying the diagnosis into a table read
+under a different permission would defeat gating the record at all.
+
 **The subset rule is asymmetric, deliberately.** Adding a permission to a role
 requires the actor to hold it (H4). Removing one does not: removal cannot raise
 anyone's authority, and requiring the permission in order to remove it would

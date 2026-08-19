@@ -131,8 +131,18 @@ per-row actions; the design passes contrast and keyboard-navigation review.
 
 ---
 
-## Phase 4 — Persons, vehicles & search
+## Phase 4 — Persons, vehicles & search ⭐ **PARTIALLY COMPLETE**
 *Estimate: 1.5–2 weeks*
+
+**Built:** both registers end to end — search with trigram matching and exact
+identifier lookup, server-side paging, create/edit/archive/restore, aliases,
+flags, warrants, the medical record behind its own permission, and read
+auditing on person, medical and vehicle lookups. Person and vehicle screens
+with detail drawers, flag banners and permission-aware sections.
+
+**Not yet built:** cross-entity search (the `/search` screen that spans persons,
+vehicles and incidents at once), criminal-charge and licence mutation endpoints,
+and `admin.purge`. The tables and the read paths for all of them exist.
 
 - `person`, `person_flag`, `warrant`, `criminal_charge`, `statute`, `license`,
   `medical_record`, `vehicle`, `vehicle_flag`
@@ -141,7 +151,7 @@ per-row actions; the design passes contrast and keyboard-navigation review.
   default-filtering repository helper, archive/restore flows, `admin.purge`
 - Trigram indexes; cross-entity search with per-entity permission filtering
 - **Read auditing** on person, medical, and warrant views
-- Person and vehicle detail pages with flag banners
+- Person and vehicle detail pages with flag banners ✅
 
 **Exit:** search returns persons and vehicles filtered by permission; an officer
 without `persons.medical.view` cannot obtain medical fields through any endpoint

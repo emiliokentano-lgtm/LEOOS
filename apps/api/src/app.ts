@@ -8,6 +8,8 @@ import authRoutes from './modules/auth/auth.routes.js';
 import organizationRoutes from './modules/organizations/organization.routes.js';
 import personnelRoutes from './modules/personnel/personnel.routes.js';
 import roleRoutes from './modules/roles/role.routes.js';
+import personRoutes from './modules/persons/person.routes.js';
+import vehicleRoutes from './modules/vehicles/vehicle.routes.js';
 import type { MailTransport } from './modules/auth/mail.js';
 
 export interface BuildOptions {
@@ -79,6 +81,14 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
   await app.register(roleRoutes, {
     prefix: '/api/v1/organizations/:organizationId/roles',
   });
+  /**
+   * Persons and vehicles are NOT nested under an organization. They are a shared
+   * register — a citizen and a plate belong to the world, not to a department —
+   * so access is decided by permission rather than by organization scope. See
+   * the module comments in person.routes.ts and vehicle.routes.ts.
+   */
+  await app.register(personRoutes, { prefix: '/api/v1/persons' });
+  await app.register(vehicleRoutes, { prefix: '/api/v1/vehicles' });
 
   return app;
 }
