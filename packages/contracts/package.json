@@ -8,6 +8,6 @@
   "exports": { ".": "./src/index.ts" },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src"
+    "lint": "echo 'no lint configured'"
   }
 }

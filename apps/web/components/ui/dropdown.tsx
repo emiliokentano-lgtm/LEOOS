@@ -8,14 +8,30 @@ import { cn } from '@/lib/utils';
 export const Dropdown = Menu.Root;
 export const DropdownTrigger = Menu.Trigger;
 
+/**
+ * Menu clicks stop here.
+ *
+ * The content is rendered through a React portal, and a React portal propagates
+ * events along the REACT tree rather than the DOM tree — so a menu opened from
+ * inside a clickable table row bubbles its clicks straight into that row's
+ * handler. Selecting "Change rank" would open the rank dialog AND the row's
+ * detail drawer, and the drawer's overlay would then sit on top of the dialog.
+ *
+ * A menu's clicks are never meant for whatever is behind it, so this is stopped
+ * here for every menu rather than remembered at each call site.
+ */
 export function DropdownContent({
-  className, align = 'end', sideOffset = 4, ...props
+  className, align = 'end', sideOffset = 4, onClick, ...props
 }: React.ComponentPropsWithoutRef<typeof Menu.Content>) {
   return (
     <Menu.Portal>
       <Menu.Content
         align={align}
         sideOffset={sideOffset}
+        onClick={(event) => {
+          event.stopPropagation();
+          onClick?.(event);
+        }}
         className={cn(
           'z-50 min-w-[180px] overflow-hidden rounded-xs border border-border bg-overlay p-1',
           'shadow-(--shadow-overlay) animate-in-fast',

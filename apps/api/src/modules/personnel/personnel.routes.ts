@@ -45,6 +45,9 @@ const listQuery = z.object({
   dutyStatus: z.string().max(40).optional(),
   minLevel: z.coerce.number().int().min(0).max(1000).optional(),
   maxLevel: z.coerce.number().int().min(0).max(1000).optional(),
+  // Bounded at 200: a client cannot ask for the whole roster in one response.
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
 });
 
 const callsignSchema = z.string().trim().min(1).max(16)
@@ -138,7 +141,7 @@ export default async function personnelRoutes(app: FastifyInstance): Promise<voi
     const viewer = requireScope(request, organizationId);
     const actor = app.actorContext(request);
 
-    const rows = await listPersonnel(app.db, organizationId, query);
+    const page = await listPersonnel(app.db, organizationId, query);
 
     const capabilities: PersonnelCapabilitiesDto = {
       canHire: actor.isGlobalAdmin || actor.isOrgLead || actor.permissions.has('personnel.hire'),
@@ -153,7 +156,10 @@ export default async function personnelRoutes(app: FastifyInstance): Promise<voi
     };
 
     return reply.send({
-      personnel: rows.map((row) => toPersonnelListItemDto(row, viewer)),
+      personnel: page.rows.map((row) => toPersonnelListItemDto(row, viewer)),
+      total: page.total,
+      limit: query.limit ?? 50,
+      offset: query.offset ?? 0,
       capabilities,
     });
   });

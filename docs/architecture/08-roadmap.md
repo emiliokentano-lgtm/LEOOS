@@ -69,10 +69,13 @@ Postgres.
 **Built:** organization CRUD, the Organization Lead capability with its full
 grant/revoke lifecycle, organization-scoped authorization, the organization admin
 UI, and audit logging of every privileged action including refused attempts.
+Personnel management end to end — hire, terminate, promote, demote, assign and
+remove a role, set a callsign, edit a record — with the roster, profile drawer and
+dialogs on the web side.
 
-**Not yet built:** personnel mutations (hire, fire, promote, demote) and role
-mutations (create, edit, assign). The kernel those need already exists and is
-tested; what is missing is the endpoints that call it.
+**Not yet built:** role mutations (create, edit, archive a role and edit its
+permission set) and per-member permission overrides. The kernel those need already
+exists and is tested; what is missing is the endpoints that call it.
 
 - `organization`, `permission`, `role`, `role_permission`, `organization_member`,
   `member_role`, `member_permission_override`, `organization_lead`
@@ -82,8 +85,9 @@ tested; what is missing is the endpoints that call it.
   `canEditRole`, `canGrantPermissions`
 - `apps/api/src/authz`: transactional loaders with `FOR UPDATE`, version-keyed cache
 - All database triggers and constraints from data-model §8
-- Personnel operations: hire, fire, promote, demote, assign/remove role, override
-- Organization Lead grant/revoke (global admin only)
+- Personnel operations: hire, fire, promote, demote, assign/remove role ✅
+  (per-member permission override still outstanding)
+- Organization Lead grant/revoke (global admin only) ✅
 - **The test suite described in authorization §B.9**
 
 **Exit:** the full hierarchy matrix passes; property tests hold; concurrency tests

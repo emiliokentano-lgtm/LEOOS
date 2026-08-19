@@ -38,6 +38,19 @@ export interface PersonnelFilters {
   /** Inclusive hierarchy band. */
   minLevel?: number;
   maxLevel?: number;
+  /**
+   * Page window. Bounded at the route, because an unbounded roster is both a
+   * denial-of-service surface and an unusable screen — a large organization
+   * would otherwise ship every member on every request.
+   */
+  limit?: number;
+  offset?: number;
+}
+
+export interface PersonnelPage {
+  rows: PersonnelRow[];
+  /** Total matching the filters, before the page window. */
+  total: number;
 }
 
 const LEVEL_SQL = sql<number>`COALESCE((
@@ -48,9 +61,41 @@ export async function listPersonnel(
   db: Database,
   organizationId: string,
   filters: PersonnelFilters = {},
-): Promise<PersonnelRow[]> {
+): Promise<PersonnelPage> {
   const search = filters.search?.trim();
   const status = filters.status ?? 'active';
+  const limit = filters.limit ?? 50;
+  const offset = filters.offset ?? 0;
+
+  // Built once and used by both the count and the page, so the two can never
+  // describe different sets.
+  const where = and(
+    eq(organizationMember.organizationId, organizationId),
+    status === 'all' ? undefined : eq(organizationMember.status, status),
+    search
+      ? or(
+          sql`${userAccount.displayName} ILIKE ${'%' + search + '%'}`,
+          sql`${userAccount.username}::text ILIKE ${'%' + search + '%'}`,
+          sql`${organizationMember.callsign}::text ILIKE ${'%' + search + '%'}`,
+          sql`${organizationMember.employeeNumber}::text ILIKE ${'%' + search + '%'}`,
+        )
+      : undefined,
+    filters.dutyStatus ? eq(memberStatus.statusKey, filters.dutyStatus) : undefined,
+    filters.roleId
+      ? sql`EXISTS (SELECT 1 FROM member_role mr
+            WHERE mr.member_id = ${organizationMember.id} AND mr.role_id = ${filters.roleId})`
+      : undefined,
+    filters.minLevel !== undefined ? sql`${LEVEL_SQL} >= ${filters.minLevel}` : undefined,
+    filters.maxLevel !== undefined ? sql`${LEVEL_SQL} <= ${filters.maxLevel}` : undefined,
+  );
+
+  const totals = await db
+    .select({ total: sql<number>`COUNT(*)::int` })
+    .from(organizationMember)
+    .innerJoin(userAccount, eq(userAccount.id, organizationMember.userId))
+    .leftJoin(memberStatus, eq(memberStatus.memberId, organizationMember.id))
+    .where(where);
+  const total = Number(totals[0]?.total ?? 0);
 
   const rows = await db
     .select({
@@ -75,28 +120,15 @@ export async function listPersonnel(
     .innerJoin(userAccount, eq(userAccount.id, organizationMember.userId))
     .leftJoin(memberStatus, eq(memberStatus.memberId, organizationMember.id))
     .leftJoin(unit, eq(unit.id, memberStatus.unitId))
-    .where(and(
-      eq(organizationMember.organizationId, organizationId),
-      status === 'all' ? undefined : eq(organizationMember.status, status),
-      search
-        ? or(
-            sql`${userAccount.displayName} ILIKE ${'%' + search + '%'}`,
-            sql`${userAccount.username}::text ILIKE ${'%' + search + '%'}`,
-            sql`${organizationMember.callsign}::text ILIKE ${'%' + search + '%'}`,
-            sql`${organizationMember.employeeNumber}::text ILIKE ${'%' + search + '%'}`,
-          )
-        : undefined,
-      filters.dutyStatus ? eq(memberStatus.statusKey, filters.dutyStatus) : undefined,
-      filters.roleId
-        ? sql`EXISTS (SELECT 1 FROM member_role mr
-              WHERE mr.member_id = ${organizationMember.id} AND mr.role_id = ${filters.roleId})`
-        : undefined,
-      filters.minLevel !== undefined ? sql`${LEVEL_SQL} >= ${filters.minLevel}` : undefined,
-      filters.maxLevel !== undefined ? sql`${LEVEL_SQL} <= ${filters.maxLevel}` : undefined,
-    ))
-    .orderBy(desc(LEVEL_SQL), asc(userAccount.displayName));
+    .where(where)
+    // Ordered by member id last so the sort is TOTAL: without a tie-break, two
+    // members of the same rank and name could swap places between pages and one
+    // of them would never be shown.
+    .orderBy(desc(LEVEL_SQL), asc(userAccount.displayName), asc(organizationMember.id))
+    .limit(limit)
+    .offset(offset);
 
-  if (rows.length === 0) return [];
+  if (rows.length === 0) return { rows: [], total };
 
   const memberIds = rows.map((r) => r.memberId);
   const roleRows = await db
@@ -111,16 +143,19 @@ export async function listPersonnel(
       isNull(role.deletedAt),
     ));
 
-  return rows.map((r) => ({
-    ...r,
-    hierarchyLevel: Number(r.hierarchyLevel),
-    joinedAt: r.joinedAt.toISOString(),
-    leftAt: r.leftAt?.toISOString() ?? null,
-    roles: roleRows
-      .filter((rr) => rr.memberId === r.memberId)
-      .map(({ memberId: _m, ...rest }) => rest)
-      .sort((a, b) => b.hierarchyLevel - a.hierarchyLevel),
-  }));
+  return {
+    total,
+    rows: rows.map((r) => ({
+      ...r,
+      hierarchyLevel: Number(r.hierarchyLevel),
+      joinedAt: r.joinedAt.toISOString(),
+      leftAt: r.leftAt?.toISOString() ?? null,
+      roles: roleRows
+        .filter((rr) => rr.memberId === r.memberId)
+        .map(({ memberId: _m, ...rest }) => rest)
+        .sort((a, b) => b.hierarchyLevel - a.hierarchyLevel),
+    })),
+  };
 }
 
 export interface PersonnelProfile extends PersonnelRow {

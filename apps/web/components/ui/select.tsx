@@ -6,6 +6,12 @@ import { Check, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface SelectOption {
+  /**
+   * Must NOT be the empty string. Radix reserves `''` for "nothing selected",
+   * so an option with that value can never be shown as chosen — the trigger
+   * falls back to the placeholder instead. Use a sentinel such as `'any'` for a
+   * "no filter" choice and map it back at the call site.
+   */
   value: string;
   label: string;
   /** Rendered before the label — a status dot, an org badge, an icon. */

@@ -426,3 +426,19 @@ The authz kernel does not ship without:
 3. Concurrency tests against real Postgres (Testcontainers) that run demotion and
    promotion simultaneously and assert no interleaving grants escalated privilege.
 4. Explicit regression cases for each attack in §B.3.
+
+**Status.** Obligations 1, 2 and 4 are met for personnel management by
+`packages/authz-core/test/decisions.test.ts` (the matrix and the property tests)
+and `apps/api/test/personnel.test.ts` (the attacks, exercised through the HTTP
+surface against real Postgres). Obligation 3 is met by the TOCTOU case at the end
+of that file, which sequences the race deterministically — it holds a lock on the
+actor's membership row while their own promotion request is in flight, demotes
+them, and asserts the request is then decided on the rank they actually hold. The
+same obligations still apply to role mutations, which are not yet built.
+
+One kernel correction came out of writing these tests. `can()` consulted only the
+actor's explicit permission set, so an Organization Lead whose nominal role was a
+low one held no permissions at all — while `canManageMember`, `canAssignRole` and
+`canGrantPermissions` all already treated a lead as unbounded within their
+organization. `can()` now agrees with them, and excludes global-scope permissions
+so the capability cannot become an administrative one.

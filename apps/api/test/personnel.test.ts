@@ -46,8 +46,16 @@ interface Person {
   headers: Record<string, string>;
 }
 
-/** An active member of `orgKey` holding exactly `roleKey`, signed in. */
+/**
+ * An active member of `orgKey` holding exactly `roleKey`, signed in.
+ *
+ * Clears the rate limiter first: several tests here build a five-rank chain of
+ * command, and registration limiting is a separate concern with its own suite.
+ * Leaving it armed would make this file fail on fixture setup rather than on
+ * anything it is trying to prove.
+ */
 async function member(prefix: string, orgKey: string, roleKey: string): Promise<Person> {
+  h.app.limiter.resetAll();
   const creds = await createActiveUser(h, prefix);
   const m = await grantMembership(h.db, creds.username, { orgKey, roleKey });
   const auth = await signIn(h, creds);
@@ -62,6 +70,7 @@ async function member(prefix: string, orgKey: string, roleKey: string): Promise<
 
 /** An account with no membership anywhere — the candidate pool for hiring. */
 async function outsider(prefix = 'outsider'): Promise<{ userId: string; username: string }> {
+  h.app.limiter.resetAll();
   const creds = await createActiveUser(h, prefix);
   return { userId: await userIdByUsername(h.db, creds.username), username: creds.username };
 }
@@ -907,12 +916,16 @@ describe('reads', () => {
   });
 
   it('marks who the caller may manage without deciding anything', async () => {
-    const commander = await member('readC', 'PD', 'commander');
-    const officer = await member('readD', 'PD', 'officer');
-    const chief = await member('readE', 'PD', 'chief');
+    // Scoped by search: the roster is paged, and the test database holds
+    // hundreds of members from earlier runs.
+    const tag = `mng${Date.now().toString(36)}`;
+    const commander = await member(`${tag}c`, 'PD', 'commander');
+    const officer = await member(`${tag}o`, 'PD', 'officer');
+    const chief = await member(`${tag}k`, 'PD', 'chief');
 
     const res = await h.app.inject({
-      method: 'GET', url: base(commander.organizationId), headers: commander.headers,
+      method: 'GET', url: `${base(commander.organizationId)}?search=${tag}`,
+      headers: commander.headers,
     });
     const rows = (res.json() as { personnel: { memberId: string; manageable: boolean }[] }).personnel;
 
@@ -922,8 +935,9 @@ describe('reads', () => {
   });
 
   it('filters terminated members out of the default roster but keeps them findable', async () => {
-    const chief = await member('filtA', 'PD', 'chief');
-    const officer = await member('filtB', 'PD', 'officer');
+    const tag = `flt${Date.now().toString(36)}`;
+    const chief = await member(`${tag}k`, 'PD', 'chief');
+    const officer = await member(`${tag}o`, 'PD', 'officer');
 
     await h.app.inject({
       method: 'POST', url: `${base(chief.organizationId)}/${officer.memberId}/termination`,
@@ -931,18 +945,57 @@ describe('reads', () => {
     });
 
     const active = await h.app.inject({
-      method: 'GET', url: base(chief.organizationId), headers: chief.headers,
+      method: 'GET', url: `${base(chief.organizationId)}?search=${tag}`, headers: chief.headers,
     });
     const activeIds = (active.json() as { personnel: { memberId: string }[] })
       .personnel.map((p) => p.memberId);
     expect(activeIds).not.toContain(officer.memberId);
 
     const all = await h.app.inject({
-      method: 'GET', url: `${base(chief.organizationId)}?status=terminated`, headers: chief.headers,
+      method: 'GET', url: `${base(chief.organizationId)}?search=${tag}&status=terminated`,
+      headers: chief.headers,
     });
     const allIds = (all.json() as { personnel: { memberId: string }[] })
       .personnel.map((p) => p.memberId);
     expect(allIds).toContain(officer.memberId);
+  });
+
+  it('pages the roster and reports the full total', async () => {
+    // An unbounded roster is a denial-of-service surface and an unusable screen.
+    const tag = `pag${Date.now().toString(36)}`;
+    const chief = await member(`${tag}k`, 'PD', 'chief');
+    await member(`${tag}a`, 'PD', 'officer');
+    await member(`${tag}b`, 'PD', 'officer');
+    await member(`${tag}c`, 'PD', 'officer');
+
+    const first = await h.app.inject({
+      method: 'GET', url: `${base(chief.organizationId)}?search=${tag}&limit=2`,
+      headers: chief.headers,
+    });
+    const page1 = first.json() as { personnel: { memberId: string }[]; total: number };
+    expect(page1.personnel).toHaveLength(2);
+    // The total describes the whole match, not the page.
+    expect(page1.total).toBe(4);
+
+    const second = await h.app.inject({
+      method: 'GET', url: `${base(chief.organizationId)}?search=${tag}&limit=2&offset=2`,
+      headers: chief.headers,
+    });
+    const page2 = second.json() as { personnel: { memberId: string }[]; total: number };
+    expect(page2.personnel).toHaveLength(2);
+    expect(page2.total).toBe(4);
+
+    // Pages must not overlap — the ordering carries a tie-break for exactly this.
+    const ids = new Set([...page1.personnel, ...page2.personnel].map((p) => p.memberId));
+    expect(ids.size).toBe(4);
+  });
+
+  it('refuses an unbounded page size', async () => {
+    const chief = await member('limitA', 'PD', 'chief');
+    const res = await h.app.inject({
+      method: 'GET', url: `${base(chief.organizationId)}?limit=100000`, headers: chief.headers,
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   it('refuses a member id from another organization on the profile route', async () => {
