@@ -14,6 +14,7 @@ import vehicleRoutes from './modules/vehicles/vehicle.routes.js';
 import searchRoutes from './modules/search/search.routes.js';
 import mapRoutes from './modules/map/map.routes.js';
 import dispatchRoutes from './modules/dispatch/dispatch.routes.js';
+import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
 import type { MailTransport } from './modules/auth/mail.js';
 import type { LivePositionStore } from './modules/map/sources/live-positions.js';
 import type { PositionSource } from './modules/map/sources/position-source.js';
@@ -147,6 +148,11 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
    * modules/dispatch/dispatch.scope.ts.
    */
   await app.register(dispatchRoutes, { prefix: '/api/v1/dispatch' });
+  /**
+   * The dashboard is a summary of the dispatch data, composed from the same
+   * reads and gated on the same permission — see modules/dashboard.
+   */
+  await app.register(dashboardRoutes, { prefix: '/api/v1/dashboard' });
 
   return app;
 }

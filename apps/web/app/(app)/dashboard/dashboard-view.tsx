@@ -1,247 +1,590 @@
 'use client';
 
+import * as React from 'react';
 import Link from 'next/link';
-import { Activity, ArrowUpRight, Clock, Radio, TriangleAlert, Users } from 'lucide-react';
-import type { OrganizationSummary } from '@leoos/contracts';
-import { DUTY_STATUSES, DUTY_STATUS_LIST } from '@leoos/contracts';
+import { ArrowUpRight, Radio, TriangleAlert } from 'lucide-react';
 import {
-  Alert, Badge, Button, Panel, PanelHeader, StatTile,
-  EmptyState, Tooltip,
+  INCIDENT_STATUSES, PRIORITY_LIST,
+  type DashboardAlert, type DashboardSnapshot, type DispatchIncidentSummary,
+  type DispatchUnit, type OperationalStatusMeta,
+} from '@leoos/contracts';
+import {
+  Alert, Badge, Button, EmptyState, Panel, PanelHeader, SkeletonRows, useToast,
 } from '@/components/ui';
 import { PageContainer } from '@/components/shell/page-container';
 import { StatusChip } from '@/components/domain/status-chip';
 import { useDutyStatus } from '@/components/shell/duty-status-context';
-import { IncidentRow } from '@/components/domain/incident-row';
-import { UnitRow } from '@/components/domain/unit-row';
-import type { Session } from '@/lib/session';
-import { cn, timeAgo } from '@/lib/utils';
+import { Icon } from '@/components/icon';
 import {
-  MOCK_ACTIVITY, MOCK_INCIDENTS, MOCK_NOW, MOCK_UNITS,
-} from '@/mocks/operations';
+  HttpDashboardSource, type DashboardConnectionState,
+} from '@/lib/dashboard/dashboard-source';
+import { useNow } from '@/lib/map/use-now';
+import { cn, formatElapsed } from '@/lib/utils';
+import { CountTile, MetricTile } from './metric-tile';
 
 /**
  * Operational overview.
  *
- * Three columns: incidents (primary, left), units (centre), alerts and
- * statistics (right). Everything that needs attention is above the fold — an
+ * Everything that needs a decision is above the fold on a 1920×1080 display: an
  * operator should not scroll to discover a P1 is unassigned.
  *
- * No decorative widgets: no donut charts, no trend sparklines, no greeting.
+ * Alerts first, then three columns — active incidents (primary, widest), unit
+ * and personnel figures (centre), the operator's own state (right). No
+ * decorative widgets: no donut charts, no trend sparklines, no greeting.
+ *
+ * Every figure here is computed server-side over exactly the rows this caller
+ * may see. The screen aggregates nothing, which is what keeps it consistent with
+ * the dispatch board it links to.
  */
 export function DashboardView({
-  session, organization,
+  initialSnapshot,
 }: {
-  session: Session;
-  organization: OrganizationSummary;
+  initialSnapshot: DashboardSnapshot | null;
 }) {
-  const { currentStatus } = useDutyStatus();
+  const [snapshot, setSnapshot] = React.useState<DashboardSnapshot | null>(initialSnapshot);
+  const [connection, setConnection] = React.useState<DashboardConnectionState>('connecting');
+  const [connectionDetail, setConnectionDetail] = React.useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = React.useState<string | null>(null);
 
-  const openIncidents = MOCK_INCIDENTS.filter((i) => i.status !== 'closed' && i.status !== 'cancelled');
-  const unassigned = openIncidents.filter((i) => i.assignedUnitIds.length === 0);
-  const p1 = openIncidents.filter((i) => i.priority === 1);
-  const onDuty = MOCK_UNITS.filter((u) => DUTY_STATUSES[u.status].isOnDuty);
-  const available = MOCK_UNITS.filter((u) => DUTY_STATUSES[u.status].isAvailable);
+  const sourceRef = React.useRef<HttpDashboardSource | null>(null);
+  const duty = useDutyStatus();
+  const now = useNow();
 
-  const myUnit = MOCK_UNITS.find((u) => u.memberNames.includes(session.displayName));
-  const myIncident = myUnit?.incidentId
-    ? MOCK_INCIDENTS.find((i) => i.id === myUnit.incidentId)
-    : undefined;
+  /**
+   * The live feed.
+   *
+   * Covers every event the brief lists — incident created, incident updated,
+   * unit status changed, unit joined or left, panic, personnel status changed —
+   * because all six move the shared dispatch revision. One mechanism, not six
+   * subscriptions, and no manual refresh.
+   */
+  React.useEffect(() => {
+    const feed = new HttpDashboardSource();
+    sourceRef.current = feed;
+    feed.start({
+      onSnapshot: setSnapshot,
+      onStateChange(state, detail) {
+        setConnection(state);
+        setConnectionDetail(detail);
+      },
+    });
+    return () => feed.stop();
+  }, []);
 
-  // Unit counts per status, for the board header.
-  const statusCounts = DUTY_STATUS_LIST.map((meta) => ({
-    meta,
-    count: MOCK_UNITS.filter((u) => u.status === meta.key).length,
-  })).filter((s) => s.count > 0);
+  const refresh = React.useCallback(() => sourceRef.current?.refresh(), []);
+
+  // ── Loading and error states ────────────────────────────────────────────
+  if (snapshot === null && connection === 'connecting') {
+    return (
+      <PageContainer>
+        <div className="flex flex-col gap-3">
+          <SkeletonRows rows={3} />
+          <SkeletonRows rows={6} />
+        </div>
+      </PageContainer>
+    );
+  }
+
+  if (snapshot === null) {
+    return (
+      <PageContainer>
+        <Alert tone="danger" title="The dashboard is unavailable" className="max-w-xl">
+          The operational data could not be loaded, so nothing on this screen would
+          be trustworthy. {connectionDetail ?? ''}
+        </Alert>
+      </PageContainer>
+    );
+  }
+
+  const { self, counts, statistics, alerts, incidents, units, statuses } = snapshot;
+
+  const visibleUnits = statusFilter === null
+    ? units
+    : units.filter((u) => u.status.key === statusFilter);
 
   return (
     <PageContainer padded={false} className="overflow-hidden">
       <div className="flex h-full min-h-0 flex-col gap-3 overflow-auto p-3">
-        {/* Alerts first. Nothing above them. */}
-        {p1.length > 0 ? (
+        {connection === 'reconnecting' || connection === 'failed' ? (
           <Alert
-            tone="danger"
-            title={`${p1.length} priority-1 incident${p1.length > 1 ? 's' : ''} active`}
-            action={
-              <Button asChild variant="danger" size="sm">
-                <Link href="/dispatch">Open dispatch</Link>
-              </Button>
-            }
+            tone={connection === 'failed' ? 'danger' : 'warning'}
+            title={connection === 'failed' ? 'Live updates stopped' : 'Reconnecting'}
           >
-            {p1.map((i) => i.title).join(' · ')}
+            {connectionDetail ?? 'These figures may be out of date.'}
           </Alert>
         ) : null}
 
-        {unassigned.length > 0 ? (
-          <Alert tone="warning" title={`${unassigned.length} incident${unassigned.length > 1 ? 's' : ''} awaiting assignment`}>
-            Oldest: {unassigned[unassigned.length - 1]?.title}
-          </Alert>
+        {/* Alerts first. Nothing above them. */}
+        {alerts.length > 0 ? (
+          <AlertPanel
+            alerts={alerts}
+            overflow={snapshot.alertOverflow}
+            now={now}
+          />
         ) : null}
 
-        {/* Statistics strip */}
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-          <StatTile label="Open incidents" value={openIncidents.length} icon={<Activity />} />
-          <StatTile
-            label="Priority 1" value={p1.length}
-            tone={p1.length > 0 ? 'danger' : 'default'} icon={<TriangleAlert />}
-          />
-          <StatTile
-            label="Unassigned" value={unassigned.length}
-            tone={unassigned.length > 0 ? 'warning' : 'default'} icon={<Clock />}
-          />
-          <StatTile label="Units on duty" value={onDuty.length} icon={<Radio />} />
-          <StatTile
-            label="Available" value={available.length}
-            tone={available.length === 0 ? 'danger' : 'success'} icon={<Users />}
-          />
-          <StatTile
-            label="Avg. response" value="4:12"
-            hint="Last 24 h, all priorities" icon={<Clock />}
-          />
-        </div>
-
-        {/* Main three-column grid. Collapses to one column below xl so a laptop
-            shows full-width panels rather than three cramped ones. */}
-        {/* Fills the remaining height on tall displays so the board reaches the
-            bottom of the screen rather than floating with dead space beneath. */}
-        <div className="grid min-h-[420px] flex-1 grid-cols-1 gap-3 xl:grid-cols-[1.4fr_1fr_1fr]">
+        <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_minmax(280px,0.9fr)]">
           {/* Active incidents */}
-          <Panel flush className="min-h-[320px]">
+          <Panel flush className="min-h-0">
             <PanelHeader
               title="Active incidents"
-              icon={<Activity />}
               actions={
-                <>
-                  <Badge variant="neutral" mono>{openIncidents.length}</Badge>
-                  <Button asChild variant="ghost" size="xs">
-                    <Link href="/dispatch">
-                      Dispatch <ArrowUpRight aria-hidden />
-                    </Link>
-                  </Button>
-                </>
+                <div className="flex items-center gap-2">
+                  <Badge variant="neutral" mono>{counts.activeIncidents}</Badge>
+                  <Link
+                    href="/dispatch"
+                    className="flex items-center gap-0.5 text-2xs text-accent hover:underline"
+                  >
+                    Dispatch <ArrowUpRight className="size-3" aria-hidden />
+                  </Link>
+                </div>
               }
             />
             <div className="min-h-0 flex-1 overflow-auto">
-              {openIncidents.length === 0 ? (
-                <EmptyState title="No active incidents" description="The board is clear." />
+              {incidents.length === 0 ? (
+                <EmptyState
+                  title="No active incidents"
+                  description="The board is clear."
+                />
               ) : (
-                [...openIncidents]
-                  .sort((a, b) => a.priority - b.priority || a.createdAt.getTime() - b.createdAt.getTime())
-                  .map((incident) => <IncidentRow key={incident.id} incident={incident} />)
+                incidents.map((incident) => (
+                  <IncidentRow key={incident.id} incident={incident} units={units} now={now} />
+                ))
               )}
             </div>
           </Panel>
 
-          {/* Unit status board */}
-          <Panel flush className="min-h-[320px]">
-            <PanelHeader
-              title="Units"
-              icon={<Radio />}
-              actions={
-                <div className="flex items-center gap-1">
-                  {statusCounts.map(({ meta, count }) => (
-                    <Tooltip key={meta.key} content={`${count} ${meta.label}`}>
-                      <span className="flex items-center gap-0.5">
-                        <span
-                          className="size-1.5 rounded-full"
-                          style={{ backgroundColor: `var(${meta.token})` }}
-                          aria-hidden
-                        />
-                        <span className="font-mono text-2xs text-text-tertiary">{count}</span>
-                      </span>
-                    </Tooltip>
-                  ))}
-                </div>
-              }
-            />
-            <div className="min-h-0 flex-1 overflow-auto">
-              {MOCK_UNITS.filter((u) => DUTY_STATUSES[u.status].isOnDuty).map((unit) => (
-                <UnitRow key={unit.id} unit={unit} />
-              ))}
-            </div>
-          </Panel>
-
-          {/* Right column: own status + recent activity */}
+          {/* Units and statistics */}
           <div className="flex min-h-0 flex-col gap-3">
             <Panel flush>
-              <PanelHeader title="Your status" icon={<Users />} />
-              <div className="flex flex-col gap-2.5 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-text-tertiary">Operational status</span>
-                  <StatusChip status={currentStatus} />
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-text-tertiary">Organization</span>
-                  <span className="flex items-center gap-1.5 text-xs text-text-primary">
-                    <span
-                      className="size-2 rounded-[1px]"
-                      style={{ backgroundColor: organization.color }}
-                      aria-hidden
-                    />
-                    {organization.shortName}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-text-tertiary">Rank</span>
-                  <span className="text-xs text-text-primary">{session.roleName}</span>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-text-tertiary">Callsign</span>
-                  <span className="font-mono text-xs text-text-primary">{session.callsign}</span>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-text-tertiary">Current unit</span>
-                  <span className="font-mono text-xs text-text-primary">
-                    {myUnit ? myUnit.callsign : '—'}
-                  </span>
-                </div>
-                <div className="flex items-start justify-between gap-2 border-t border-border-subtle pt-2.5">
-                  <span className="shrink-0 text-xs text-text-tertiary">Assignment</span>
-                  {myIncident ? (
-                    <span className="text-right text-xs text-text-primary">
-                      <span className="font-mono">{myIncident.number}</span>
-                      <br />
-                      <span className="text-text-secondary">{myIncident.type}</span>
-                    </span>
+              <PanelHeader
+                title="Units"
+                actions={
+                  <div className="flex items-center gap-2">
+                    {statusFilter !== null ? (
+                      <Button variant="ghost" size="xs" onClick={() => setStatusFilter(null)}>
+                        Clear
+                      </Button>
+                    ) : null}
+                    <Badge variant="neutral" mono>{counts.unitsTotal}</Badge>
+                  </div>
+                }
+              />
+              {/* Clicking a figure filters the list below it — the units are
+                  right there, so navigating away to see six rows would be worse
+                  than showing them in place. */}
+              <div className="grid grid-cols-3 gap-1.5 p-2">
+                <UnitCount label="Available" value={counts.unitsAvailable}
+                  statusKey="available" filter={statusFilter} onFilter={setStatusFilter} />
+                <UnitCount label="Busy" value={counts.unitsBusy}
+                  statusKey="busy" filter={statusFilter} onFilter={setStatusFilter} />
+                <UnitCount label="In operation" value={counts.unitsInOperation}
+                  statusKey="in_operation" filter={statusFilter} onFilter={setStatusFilter} />
+                <UnitCount label="At HQ" value={counts.unitsAtHq}
+                  statusKey="at_hq" filter={statusFilter} onFilter={setStatusFilter} />
+                <UnitCount label="Panic" value={counts.unitsPanic} tone="danger"
+                  statusKey="panic" filter={statusFilter} onFilter={setStatusFilter} />
+                <UnitCount label="Offline" value={counts.unitsOffline}
+                  statusKey="off_duty" filter={statusFilter} onFilter={setStatusFilter} />
+              </div>
+
+              {statusFilter !== null ? (
+                <div className="max-h-[220px] overflow-auto border-t border-border-subtle">
+                  {visibleUnits.length === 0 ? (
+                    <EmptyState variant="filtered" title="No units in that status" />
                   ) : (
-                    <span className="text-xs text-text-tertiary">None</span>
+                    visibleUnits.map((unit) => (
+                      <UnitLine key={unit.id} unit={unit} />
+                    ))
                   )}
                 </div>
-              </div>
+              ) : null}
             </Panel>
 
-            <Panel flush className="min-h-0 flex-1">
-              <PanelHeader title="Recent activity" icon={<Clock />} />
-              <ul className="min-h-0 flex-1 overflow-auto">
-                {MOCK_ACTIVITY.map((entry) => (
-                  <li
-                    key={entry.id}
-                    className="flex items-start gap-2 border-b border-border-subtle px-3 py-1.5 last:border-b-0"
-                  >
-                    <span
-                      className={cn(
-                        'mt-1.5 size-1.5 shrink-0 rounded-full',
-                        entry.tone === 'danger' && 'bg-danger',
-                        entry.tone === 'warning' && 'bg-warning',
-                        entry.tone === 'default' && 'bg-text-disabled',
-                      )}
-                      aria-hidden
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs text-text-secondary">
-                        <span className="text-text-primary">{entry.actor}</span> {entry.action}
-                      </p>
-                      <p className="truncate text-2xs text-text-tertiary">{entry.target}</p>
-                    </div>
-                    <span className="shrink-0 font-mono text-2xs text-text-tertiary">
-                      {timeAgo(entry.at, MOCK_NOW)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+            <Panel flush className="min-h-0">
+              <PanelHeader
+                title="Today"
+                actions={
+                  <span className="text-2xs text-text-tertiary">
+                    since {new Date(statistics.windowStart).toLocaleTimeString([], {
+                      hour: '2-digit', minute: '2-digit',
+                    })}
+                  </span>
+                }
+              />
+              <div className="grid grid-cols-2 gap-1.5 p-2">
+                <CountTile label="Calls opened" value={statistics.incidentsToday} />
+                <CountTile label="Calls closed" value={statistics.incidentsClosedToday} />
+                <CountTile label="On duty" value={counts.personnelOnDuty}
+                  sub={`of ${counts.personnelTotal} personnel`} />
+                <CountTile label="Signed in" value={counts.personnelSignedIn}
+                  sub="live sessions" />
+              </div>
+              <div className="grid grid-cols-1 gap-1.5 border-t border-border-subtle p-2 sm:grid-cols-3">
+                <MetricTile
+                  label="To first unit"
+                  metric={statistics.timeToFirstUnit}
+                  hint="Median time from a call being created to its first unit being assigned. This is time to dispatch, not response time."
+                />
+                <MetricTile
+                  label="To active"
+                  metric={statistics.timeToActive}
+                  hint="Median time from a call being created to a dispatcher marking it Active."
+                />
+                <MetricTile
+                  label="Response time"
+                  metric={statistics.responseTime}
+                  hint="Dispatch to arrival on scene. Nothing records an arrival yet, so this is not measured rather than estimated."
+                />
+              </div>
             </Panel>
           </div>
+
+          {/* The operator */}
+          <SelfPanel
+            self={self}
+            statuses={statuses}
+            canOperate={self.canOperate}
+            pendingStatus={duty.loading}
+            onSetStatus={async (key) => {
+              const result = await duty.setStatus(key);
+              if (result.ok) refresh();
+              return result;
+            }}
+          />
         </div>
       </div>
     </PageContainer>
+  );
+}
+
+// ── Alerts ─────────────────────────────────────────────────────────────────
+
+function AlertPanel({
+  alerts, overflow, now,
+}: {
+  alerts: DashboardAlert[];
+  overflow: number;
+  now: number;
+}) {
+  return (
+    <div
+      className="flex flex-col gap-1 rounded-xs border border-border-subtle bg-surface p-2"
+      role="region"
+      aria-label="Operational alerts"
+    >
+      {alerts.map((alert) => (
+        <AlertLine key={alert.id} alert={alert} now={now} />
+      ))}
+      {overflow > 0 ? (
+        <Link
+          href="/dispatch"
+          className="px-1 text-2xs text-text-tertiary hover:text-text-secondary hover:underline"
+        >
+          + {overflow} more requiring attention
+        </Link>
+      ) : null}
+    </div>
+  );
+}
+
+function AlertLine({ alert, now }: { alert: DashboardAlert; now: number }) {
+  /**
+   * Critical without being overwhelming.
+   *
+   * A danger alert gets a coloured left edge and a bold label; it does not get a
+   * filled red row. Six filled red rows is a screen an operator stops reading,
+   * which is the opposite of what an alert is for. Panic is the single exception
+   * and is the only thing here that animates.
+   */
+  const body = (
+    <div
+      className={cn(
+        'flex items-center gap-2 rounded-xs border-l-2 px-2 py-1 text-xs',
+        alert.tone === 'danger' ? 'border-l-danger bg-danger/5'
+          : alert.tone === 'warning' ? 'border-l-warning bg-warning/5'
+            : 'border-l-border-strong bg-raised',
+      )}
+    >
+      <TriangleAlert
+        className={cn(
+          'size-3.5 shrink-0',
+          alert.tone === 'danger' ? 'text-danger'
+            : alert.tone === 'warning' ? 'text-warning' : 'text-text-tertiary',
+          alert.kind === 'panic' && 'animate-panic',
+        )}
+        aria-hidden
+      />
+      <span
+        className={cn(
+          'shrink-0 text-2xs font-semibold uppercase tracking-wide',
+          alert.tone === 'danger' ? 'text-danger'
+            : alert.tone === 'warning' ? 'text-warning' : 'text-text-tertiary',
+        )}
+      >
+        {alert.kind === 'critical-incident' ? 'Critical'
+          : alert.kind === 'unassigned' ? 'Waiting'
+            : alert.kind === 'system' ? 'System' : 'Panic'}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-text-primary">{alert.title}</span>
+      {alert.detail !== null ? (
+        <span className="hidden shrink-0 text-text-tertiary md:inline">{alert.detail}</span>
+      ) : null}
+      {alert.since !== null && now !== 0 ? (
+        <span className="shrink-0 font-mono text-2xs text-text-tertiary">
+          {formatElapsed(new Date(alert.since), new Date(now))}
+        </span>
+      ) : null}
+    </div>
+  );
+
+  // The API names a screen; the route table lives here, where it belongs.
+  if (alert.target === null) return body;
+  return (
+    <Link
+      href={alert.target === 'map' ? '/map' : '/dispatch'}
+      className="block hover:brightness-125"
+    >
+      {body}
+    </Link>
+  );
+}
+
+// ── Incidents ──────────────────────────────────────────────────────────────
+
+function IncidentRow({
+  incident, units, now,
+}: {
+  incident: DispatchIncidentSummary;
+  units: DispatchUnit[];
+  now: number;
+}) {
+  const status = INCIDENT_STATUSES[incident.status];
+  const priority = PRIORITY_LIST[incident.priority - 1]!;
+  const assigned = units.filter((u) => incident.assignedUnitIds.includes(u.id));
+  const unassigned = assigned.length === 0;
+
+  return (
+    <Link
+      href="/dispatch"
+      prefetch={false}
+      className="flex items-start gap-2 border-b border-border-subtle px-3 py-2 transition-colors hover:bg-hover"
+    >
+      <span
+        className="mt-0.5 w-1 shrink-0 self-stretch rounded-full"
+        style={{ backgroundColor: `var(${priority.token})` }}
+        aria-hidden
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span className="font-mono text-2xs text-text-tertiary">{incident.number}</span>
+          <span
+            className="text-[10px] font-semibold"
+            style={{ color: `var(${priority.token})` }}
+          >
+            {priority.label} {priority.name}
+          </span>
+          <span className="text-2xs" style={{ color: `var(${status.token})` }}>
+            {status.label}
+          </span>
+          <span className="ml-auto font-mono text-2xs text-text-tertiary">
+            {now === 0 ? '—' : formatElapsed(new Date(incident.createdAt), new Date(now))}
+          </span>
+        </div>
+        <p className="truncate text-xs font-medium text-text-primary">{incident.title}</p>
+        <div className="flex items-center gap-1.5 text-2xs">
+          {incident.locationText !== null ? (
+            <span className="truncate text-text-tertiary">{incident.locationText}</span>
+          ) : (
+            <span className="text-text-disabled">No location</span>
+          )}
+          <span aria-hidden className="text-text-disabled">·</span>
+          {unassigned ? (
+            <span className="font-medium text-warning">No units assigned</span>
+          ) : (
+            <span className="truncate text-text-secondary">
+              {assigned.length} unit{assigned.length === 1 ? '' : 's'}:{' '}
+              <span className="font-mono">{assigned.map((u) => u.callsign).join(', ')}</span>
+            </span>
+          )}
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+// ── Units ──────────────────────────────────────────────────────────────────
+
+function UnitCount({
+  label, value, statusKey, filter, onFilter, tone,
+}: {
+  label: string;
+  value: number;
+  statusKey: string;
+  filter: string | null;
+  onFilter: (key: string | null) => void;
+  tone?: 'danger';
+}) {
+  return (
+    <CountTile
+      label={label}
+      value={value}
+      tone={tone ?? (value === 0 ? undefined : undefined)}
+      active={filter === statusKey}
+      onClick={() => onFilter(filter === statusKey ? null : statusKey)}
+    />
+  );
+}
+
+function UnitLine({ unit }: { unit: DispatchUnit }) {
+  return (
+    <div className="flex items-center gap-2 border-b border-border-subtle px-3 py-1.5 text-xs last:border-b-0">
+      <span className="font-mono font-semibold text-text-primary">{unit.callsign}</span>
+      <span
+        className="rounded-[2px] border px-1 text-[9px]"
+        style={{ borderColor: unit.organization.color, color: unit.organization.color }}
+      >
+        {unit.organization.shortName}
+      </span>
+      <span className="min-w-0 flex-1 truncate text-text-tertiary">
+        {unit.crew.length === 0 ? 'Uncrewed' : unit.crew.map((c) => c.name).join(', ')}
+      </span>
+      {unit.incident !== null ? (
+        <span className="shrink-0 font-mono text-2xs text-accent">{unit.incident.number}</span>
+      ) : null}
+    </div>
+  );
+}
+
+// ── The operator ───────────────────────────────────────────────────────────
+
+function SelfPanel({
+  self, statuses, canOperate, pendingStatus, onSetStatus,
+}: {
+  self: DashboardSnapshot['self'];
+  statuses: OperationalStatusMeta[];
+  canOperate: boolean;
+  pendingStatus: boolean;
+  onSetStatus: (key: string) => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const [busy, setBusy] = React.useState(false);
+  const toast = useToast();
+  const current = statuses.find((s) => s.key === self.statusKey) ?? null;
+  const pickable = statuses.filter((s) => !s.isPanic);
+
+  async function pick(key: string) {
+    setBusy(true);
+    const result = await onSetStatus(key);
+    setBusy(false);
+    if (!result.ok) {
+      toast.push({ tone: 'danger', title: 'Status not changed', description: result.error });
+    }
+  }
+
+  return (
+    <Panel flush className="min-h-0">
+      <PanelHeader title="You" actions={<StatusChip status={current} />} />
+
+      <dl className="flex flex-col gap-1.5 border-b border-border-subtle p-3 text-xs">
+        <Fact label="Name">{self.displayName}</Fact>
+        <Fact label="Organization">
+          {self.organization === null ? (
+            <span className="text-text-tertiary">None</span>
+          ) : (
+            <span
+              className="rounded-[2px] border px-1 text-[10px] font-medium"
+              style={{ borderColor: self.organization.color, color: self.organization.color }}
+            >
+              {self.organization.shortName}
+            </span>
+          )}
+        </Fact>
+        <Fact label="Rank">{self.rankName ?? <span className="text-text-tertiary">—</span>}</Fact>
+        <Fact label="Callsign">
+          {self.memberCallsign !== null ? (
+            <span className="font-mono">{self.memberCallsign}</span>
+          ) : (
+            <span className="text-text-tertiary">—</span>
+          )}
+        </Fact>
+        <Fact label="Unit">
+          {self.unitId === null ? (
+            <span className="text-text-tertiary">None</span>
+          ) : (
+            <span className="flex items-center gap-1.5">
+              <span className="font-mono">{self.unitCallsign}</span>
+              {self.isUnitLeader ? (
+                <span className="text-[9px] uppercase tracking-wide text-text-tertiary">lead</span>
+              ) : null}
+            </span>
+          )}
+        </Fact>
+        <Fact label="Assignment">
+          {self.assignment === null ? (
+            <span className="text-text-tertiary">None</span>
+          ) : (
+            <Link href="/dispatch" className="font-mono text-accent hover:underline">
+              {self.assignment.number}
+            </Link>
+          )}
+        </Fact>
+      </dl>
+
+      {canOperate ? (
+        <div className="p-3">
+          <p className="mb-1.5 text-2xs uppercase tracking-wide text-text-disabled">
+            Set your status
+          </p>
+          <div className="grid grid-cols-2 gap-1.5">
+            {pickable.map((status) => {
+              const active = status.key === self.statusKey;
+              return (
+                <button
+                  key={status.key}
+                  type="button"
+                  disabled={busy || pendingStatus}
+                  onClick={() => { void pick(status.key); }}
+                  aria-pressed={active}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-xs border px-2 py-1.5 text-xs',
+                    'transition-colors duration-(--duration-fast) disabled:opacity-50',
+                    active
+                      ? 'border-border-strong bg-active text-text-primary'
+                      : 'border-border bg-raised text-text-secondary hover:border-border-strong',
+                  )}
+                  style={active ? { borderColor: `var(${status.colorToken})` } : undefined}
+                >
+                  <span className="shrink-0" style={{ color: `var(${status.colorToken})` }}>
+                    <Icon name={status.icon} className="size-3.5" />
+                  </span>
+                  <span className="truncate">{status.label}</span>
+                </button>
+              );
+            })}
+          </div>
+          <Link
+            href="/dispatch"
+            className="mt-2 flex items-center justify-center gap-1 rounded-xs border border-border bg-raised py-1.5 text-xs text-text-secondary transition-colors hover:border-border-strong"
+          >
+            <Radio className="size-3.5" aria-hidden /> Open dispatch
+          </Link>
+        </div>
+      ) : (
+        <p className="p-3 text-xs text-text-tertiary">
+          {self.organizationId === null
+            ? 'You are not acting in an organization, so you cannot go on duty.'
+            : 'Your membership is not active, so you cannot go on duty.'}
+        </p>
+      )}
+    </Panel>
+  );
+}
+
+function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <dt className="shrink-0 text-text-tertiary">{label}</dt>
+      <dd className="min-w-0 text-right text-text-primary">{children}</dd>
+    </div>
   );
 }

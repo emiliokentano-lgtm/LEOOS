@@ -128,6 +128,9 @@ is actually held.
 | 9, 10, 11 | Self-actions need only an active membership; everything touching another person needs a permission, checked after scope, inside the transaction. | [dispatch §1, §8](docs/architecture/09-dispatch.md) |
 | 23 | Every dispatch state change writes an append-only `incident_log` entry AND an audit row in the same transaction. | [dispatch §5](docs/architecture/09-dispatch.md) |
 | 45 | Panic is a `panic_event` row with a lifecycle, not a client flag; the confirmation dialog lists only what the server actually does. | [dispatch §6](docs/architecture/09-dispatch.md) |
+| 34, 45 | Dashboard statistics are a `Metric` union: an unavailable figure carries a reason and cannot render as a number. Response time is reported as *not measured*, and "personnel online" is split into the two exact figures it conflated. | [dashboard §1, §2](docs/architecture/10-dashboard.md) |
+| 4 | The dashboard is composed from the dispatch reads and shares its revision, so its counts cannot drift from the board it links to. | [dashboard §3](docs/architecture/10-dashboard.md) |
+| 26 | Loading, error, degraded-feed and empty are all distinct states; a partial dashboard is never rendered as if whole. | [dashboard §6](docs/architecture/10-dashboard.md) |
 
 ---
 
