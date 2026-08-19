@@ -29,6 +29,13 @@
       "when": 1787200001000,
       "tag": "0003_seeded_roles_not_system",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787300000000,
+      "tag": "0004_search_indexes",
+      "breakpoints": true
     }
   ]
 }

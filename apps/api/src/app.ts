@@ -10,6 +10,7 @@ import personnelRoutes from './modules/personnel/personnel.routes.js';
 import roleRoutes from './modules/roles/role.routes.js';
 import personRoutes from './modules/persons/person.routes.js';
 import vehicleRoutes from './modules/vehicles/vehicle.routes.js';
+import searchRoutes from './modules/search/search.routes.js';
 import type { MailTransport } from './modules/auth/mail.js';
 
 export interface BuildOptions {
@@ -89,6 +90,12 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
    */
   await app.register(personRoutes, { prefix: '/api/v1/persons' });
   await app.register(vehicleRoutes, { prefix: '/api/v1/vehicles' });
+  /**
+   * Global search spans every register, so it is not nested under any of them.
+   * The categories it may read are resolved from the caller's permissions —
+   * see modules/search/search.scope.ts.
+   */
+  await app.register(searchRoutes, { prefix: '/api/v1/search' });
 
   return app;
 }

@@ -471,6 +471,28 @@ belongs to the organization that operates it (so another organization may FLAG i
 but not edit or archive it — reporting a vehicle stolen is exactly what the
 shared register is for).
 
+**GLOBAL SEARCH IS THE EASIEST PLACE IN THE SYSTEM TO LEAK SOMETHING** — one
+screen that touches every table at once, where a category nobody remembered to
+filter turns the search box into a way to enumerate records the operator could
+not open directly. The reach is therefore resolved ONCE, in
+`modules/search/search.scope.ts`, and every category query takes it as an
+argument rather than deciding for itself. Three rules hold there:
+
+- a category is gated by the SAME permission that gates its own screen — search
+  must never be a second, weaker door into the same data;
+- a category the caller may not read is NOT QUERIED, not queried-and-filtered
+  and not returned empty. An empty result set still says "this category exists
+  and you matched nothing", which is a different statement from "you cannot
+  search this";
+- COUNTS ARE FILTERED TOO. "MD personnel: 42" leaks the size of another
+  organization's roster as surely as listing them would.
+
+A search that matched something is audited with the term and the per-category
+counts — never the matched records, which would make the audit table a second
+copy of the register. A search that matched nothing is not logged: it says
+nothing about anyone, and logging every keystroke pause would bury the entries
+that matter.
+
 **Sensitive READS are audited.** Misuse of a police or medical database is
 overwhelmingly a read problem, and the audit trail is the only thing that makes
 it answerable afterwards. Opening a person record, a medical record or a plate

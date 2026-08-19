@@ -84,3 +84,108 @@ SELECT m.id, (ARRAY['available','busy','on_scene','off_duty','at_hq'])[
 FROM organization_member m JOIN user_account u ON u.id = m.user_id
 WHERE u.username LIKE 'ui.%'
 ON CONFLICT (member_id) DO NOTHING;
+
+-- ── Registers ──────────────────────────────────────────────────────────────
+-- Persons, vehicles, units and incidents for the browser walkthroughs. Kept in
+-- this file rather than run ad hoc, because the database test suite drops the
+-- schema and anything seeded outside here does not survive it.
+
+WITH people(first_name, last_name, dob, phone, address, status) AS (VALUES
+  ('Marisol','Reyes','1991-03-14','555-0148','412 Vespucci Blvd','alive'),
+  ('Dwayne','Okafor','1985-07-02','555-0177','88 Grove Street','alive'),
+  ('Bianca','Ferretti','1996-12-30','555-0102','7 Rockford Drive','alive'),
+  ('Anders','Holm','1978-05-21','555-0139','19 Paleto Way','incarcerated'),
+  ('Junko','Watanabe','2000-01-09','555-0166','3 Mirror Park Ave','alive'),
+  ('Terrence','Boyle','1969-11-11','555-0121','55 Sandy Shores Rd','missing'),
+  ('Elif','Demirtas','1993-08-26','555-0195','21 Little Seoul','alive'),
+  ('Ruben','Castellanos','1988-02-05','555-0183','9 Chumash Plaza','alive')
+)
+INSERT INTO person (first_name, last_name, date_of_birth, phone_number, address, status, is_deceased)
+SELECT first_name, last_name, dob::date, phone, address, status::person_status, false
+FROM people
+WHERE NOT EXISTS (
+  SELECT 1 FROM person p WHERE p.first_name = people.first_name AND p.last_name = people.last_name);
+
+INSERT INTO person_alias (person_id, alias)
+SELECT p.id, a.alias FROM person p
+JOIN (VALUES ('Reyes','Sol'), ('Okafor','Big D'), ('Holm','The Swede')) AS a(surname, alias)
+  ON p.last_name = a.surname
+ON CONFLICT DO NOTHING;
+
+INSERT INTO person_flag (person_id, type, severity, note)
+SELECT p.id, f.type, f.sev::flag_severity, f.note FROM person p
+JOIN (VALUES
+  ('Holm','armed and dangerous','critical','Firearm recovered at last stop.'),
+  ('Boyle','mental health caution','caution','Approach with EMS support.'),
+  ('Okafor','known to flee','caution',NULL)
+) AS f(surname, type, sev, note) ON p.last_name = f.surname
+ON CONFLICT DO NOTHING;
+
+INSERT INTO warrant (person_id, organization_id, type, reason)
+SELECT p.id, (SELECT id FROM organization WHERE key='PD'), 'arrest', 'Failure to appear'
+FROM person p WHERE p.last_name = 'Holm'
+  AND NOT EXISTS (SELECT 1 FROM warrant w WHERE w.person_id = p.id);
+
+INSERT INTO medical_record (person_id, blood_type, allergies, conditions, emergency_contact)
+SELECT p.id, 'O-', ARRAY['Penicillin'], ARRAY['Asthma'], 'Sister — 555-0190'
+FROM person p WHERE p.last_name = 'Reyes'
+ON CONFLICT (person_id) DO NOTHING;
+
+INSERT INTO criminal_charge (person_id, title, severity, status)
+SELECT p.id, 'Grand theft auto', 'felony', 'convicted'
+FROM person p WHERE p.last_name = 'Holm'
+  AND NOT EXISTS (SELECT 1 FROM criminal_charge c WHERE c.person_id = p.id);
+
+INSERT INTO vehicle (plate, model, display_name, color, vehicle_class, owner_person_id,
+                     registration_status, insurance_status)
+SELECT v.plate, v.model, v.display_name, v.color, v.class, p.id,
+       v.reg::vehicle_registration_status, v.ins::vehicle_insurance_status
+FROM (VALUES
+  ('46EEK572','sultan','Karin Sultan','Black','Sports','Reyes','registered','insured'),
+  ('8HGX1120','buffalo','Bravado Buffalo','Blue','Muscle','Okafor','expired','uninsured'),
+  ('LSPD0091','police3','Interceptor','Black/White','Emergency','Ferretti','registered','insured'),
+  ('K7T44PQ','blista','Dinka Blista','Red','Compact','Watanabe','registered','insured'),
+  ('RUSTBKT','rebel','Rusted Rebel','Brown','Off-road','Holm','unregistered','uninsured')
+) AS v(plate, model, display_name, color, class, surname, reg, ins)
+JOIN person p ON p.last_name = v.surname
+WHERE NOT EXISTS (SELECT 1 FROM vehicle x WHERE x.plate = v.plate AND x.deleted_at IS NULL);
+
+INSERT INTO vehicle (plate, model, display_name, color, owner_organization_id, is_fleet,
+                     registration_status, insurance_status)
+SELECT f.plate, f.model, f.display_name, f.color,
+       (SELECT id FROM organization WHERE key = f.orgkey), true, 'registered', 'insured'
+FROM (VALUES
+  ('LSPD1401','police','Cruiser 14','Black/White','PD'),
+  ('EMS0302','ambulance','Rescue 3','White','MD'),
+  ('FIB0007','fbi','Unmarked','Grey','FIB')
+) AS f(plate, model, display_name, color, orgkey)
+WHERE NOT EXISTS (SELECT 1 FROM vehicle x WHERE x.plate = f.plate AND x.deleted_at IS NULL);
+
+INSERT INTO vehicle_flag (vehicle_id, type, note)
+SELECT v.id, 'stolen', 'Reported taken from Vinewood.' FROM vehicle v WHERE v.plate = 'RUSTBKT'
+  AND NOT EXISTS (SELECT 1 FROM vehicle_flag f WHERE f.vehicle_id = v.id);
+
+INSERT INTO unit (organization_id, callsign, name, unit_type, status_key)
+SELECT (SELECT id FROM organization WHERE key = u.orgkey), u.callsign, u.name, u.utype, u.skey
+FROM (VALUES
+  ('PD','1-ADAM-12','Adam Twelve','patrol','available'),
+  ('PD','1-LINCOLN-10','Supervisor 10','supervisor','busy'),
+  ('PD','AIR-1','Air Support','air','at_hq'),
+  ('MD','MEDIC-3','Rescue Three','ems','on_scene'),
+  ('FIB','SIERRA-1','Field Office','investigation','available')
+) AS u(orgkey, callsign, name, utype, skey)
+WHERE NOT EXISTS (SELECT 1 FROM unit x WHERE x.callsign = u.callsign AND x.status = 'active');
+
+INSERT INTO incident (organization_id, title, description, priority, status, location_text, closed_at)
+SELECT (SELECT id FROM organization WHERE key = i.orgkey), i.title, i.descr,
+       i.prio, i.status::incident_status, i.loc,
+       -- A closed incident must record WHEN it closed (incident_closure_complete).
+       CASE WHEN i.status = 'closed' THEN now() ELSE NULL END
+FROM (VALUES
+  ('PD','Burglary in progress','Rear door forced.',1,'dispatched','412 Vespucci Blvd'),
+  ('PD','Traffic collision','Two vehicles, minor injuries.',3,'on_scene','Route 68 at Zancudo'),
+  ('MD','Cardiac arrest','Bystander CPR in progress.',1,'on_scene','Mirror Park Ave'),
+  ('FIB','Surveillance detail','Ongoing federal matter.',4,'pending','Downtown'),
+  ('PD','Shoplifting report','Suspect left on foot.',4,'closed','Rockford Hills')
+) AS i(orgkey, title, descr, prio, status, loc)
+WHERE NOT EXISTS (SELECT 1 FROM incident x WHERE x.title = i.title);

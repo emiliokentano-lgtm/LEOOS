@@ -140,17 +140,21 @@ flags, warrants, the medical record behind its own permission, and read
 auditing on person, medical and vehicle lookups. Person and vehicle screens
 with detail drawers, flag banners and permission-aware sections.
 
-**Not yet built:** cross-entity search (the `/search` screen that spans persons,
-vehicles and incidents at once), criminal-charge and licence mutation endpoints,
-and `admin.purge`. The tables and the read paths for all of them exist.
+Cross-entity search across all six categories — persons, vehicles, personnel,
+organizations, units and incidents — in the Ctrl+K palette and on the search
+page, with per-category permission and organization filtering, grouped results,
+true counts, paging and read auditing.
+
+**Not yet built:** criminal-charge and licence mutation endpoints, and
+`admin.purge`. The tables and the read paths for both exist.
 
 - `person`, `person_flag`, `warrant`, `criminal_charge`, `statute`, `license`,
   `medical_record`, `vehicle`, `vehicle_flag`
 - CRUD with permission and field-level visibility (medical gated separately)
 - Soft deletion (ADR-0008): `deleted_at` columns, partial unique indexes,
   default-filtering repository helper, archive/restore flows, `admin.purge`
-- Trigram indexes; cross-entity search with per-entity permission filtering
-- **Read auditing** on person, medical, and warrant views
+- Trigram indexes; cross-entity search with per-entity permission filtering ✅
+- **Read auditing** on person, medical, and warrant views ✅
 - Person and vehicle detail pages with flag banners ✅
 
 **Exit:** search returns persons and vehicles filtered by permission; an officer
