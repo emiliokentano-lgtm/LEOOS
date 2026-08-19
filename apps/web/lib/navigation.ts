@@ -58,6 +58,7 @@ export const NAVIGATION: NavSection[] = [
     label: 'System',
     items: [
       { href: '/admin', label: 'Administration', icon: 'Settings', permission: 'admin.users' },
+      { href: '/admin/organizations', label: 'Organizations', icon: 'Building2', permission: 'admin.organizations' },
       { href: '/audit', label: 'Audit Logs', icon: 'ScrollText', permission: 'admin.audit_logs' },
     ],
   },

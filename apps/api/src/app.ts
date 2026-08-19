@@ -5,6 +5,7 @@ import contextPlugin from './plugins/context.js';
 import errorsPlugin from './plugins/errors.js';
 import authPlugin from './plugins/auth.js';
 import authRoutes from './modules/auth/auth.routes.js';
+import organizationRoutes from './modules/organizations/organization.routes.js';
 import type { MailTransport } from './modules/auth/mail.js';
 
 export interface BuildOptions {
@@ -66,6 +67,7 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
   });
 
   await app.register(authRoutes, { prefix: '/api/v1/auth' });
+  await app.register(organizationRoutes, { prefix: '/api/v1/organizations' });
 
   return app;
 }

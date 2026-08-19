@@ -193,3 +193,55 @@ export async function setPermissionOverride(
     DO UPDATE SET effect = ${effect}::permission_override_effect
   `);
 }
+
+/** Makes an account a global administrator. */
+export async function makeGlobalAdmin(db: Database, username: string): Promise<void> {
+  await db.execute(sql`
+    INSERT INTO user_global_role (user_id, capability)
+    VALUES ((SELECT id FROM user_account WHERE username = ${username}), 'global_admin')
+    ON CONFLICT DO NOTHING
+  `);
+}
+
+/**
+ * Grants the Organization Lead capability directly, bypassing the API.
+ *
+ * Used to SET UP a lead so the tests can then prove what that lead cannot do.
+ * The API path for granting is tested separately; using it here would make every
+ * scoping test depend on the grant endpoint working.
+ */
+export async function makeOrgLead(
+  db: Database,
+  username: string,
+  orgKey: string,
+  granterUsername: string,
+): Promise<void> {
+  await db.execute(sql`
+    INSERT INTO organization_lead (user_id, organization_id, granted_by)
+    VALUES (
+      (SELECT id FROM user_account WHERE username = ${username}),
+      (SELECT id FROM organization WHERE key = ${orgKey}),
+      (SELECT id FROM user_account WHERE username = ${granterUsername})
+    )
+    ON CONFLICT (user_id, organization_id)
+    DO UPDATE SET revoked_at = NULL, revoked_by = NULL
+  `);
+}
+
+export async function organizationIdByKey(db: Database, key: string): Promise<string> {
+  const rows = await db.execute<{ id: string }>(
+    sql`SELECT id FROM organization WHERE key = ${key}`,
+  );
+  const id = rows[0]?.id;
+  if (!id) throw new Error(`organization ${key} not seeded`);
+  return id;
+}
+
+export async function userIdByUsername(db: Database, username: string): Promise<string> {
+  const rows = await db.execute<{ id: string }>(
+    sql`SELECT id FROM user_account WHERE username = ${username}`,
+  );
+  const id = rows[0]?.id;
+  if (!id) throw new Error(`user ${username} not found`);
+  return id;
+}

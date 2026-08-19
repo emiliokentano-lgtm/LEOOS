@@ -37,6 +37,38 @@ pretending to send mail.
 | DELETE | `/api/v1/auth/sessions/:id` | own sessions only; others 404, never 403 |
 | POST | `/api/v1/auth/sessions/revoke-others` | keeps the current session |
 
+### Organizations
+
+Every route takes `:organizationId` in the PATH. No request body carries an
+organization id, so there is nothing for a client to rewrite — and the actor's
+authority over the organization named in the path is re-derived from the database
+on every call.
+
+| Method | Path | Who |
+| --- | --- | --- |
+| GET | `/api/v1/organizations` | anyone; a non-admin sees only their own memberships |
+| POST | `/api/v1/organizations` | global admin |
+| GET | `/api/v1/organizations/:id` | members of that organization, or global admin |
+| PATCH | `/api/v1/organizations/:id` | that organization's lead, `organization.edit`, or global admin |
+| DELETE | `/api/v1/organizations/:id` | global admin; refused while active members remain |
+| GET | `/api/v1/organizations/:id/leads` | scoped to that organization |
+| POST | `/api/v1/organizations/:id/leads` | **global admin only** |
+| DELETE | `/api/v1/organizations/:id/leads/:userId` | **global admin only** |
+| GET | `/api/v1/organizations/:id/{members,roles,units,vehicles}` | each authorized independently |
+
+**Organization Lead is not delegable.** A lead cannot appoint another lead. If
+they could, the capability would be self-propagating and "the global
+administrator decides who leads an organization" would stop being true after the
+first grant. That is why it lives in its own table rather than as a role or a
+permission: no amount of role editing inside an organization can reach it.
+
+**Category and activation are global-administrator decisions**, even for a lead
+of that organization: category drives cross-organization visibility (medical
+records), and disabling a department is a decision above one of its own members.
+
+**Out of scope reads as 404, not 403.** A 403 would confirm the organization
+exists.
+
 ## Security decisions
 
 **Passwords** — Argon2id at the OWASP 2024 baseline, parameters encoded in the

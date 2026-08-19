@@ -1,6 +1,9 @@
 # 02 — Authentication & Authorization
 
 > **Status: Part A implemented, Part B partially implemented.**
+> Organization scoping is now built and proven: `packages/authz-core` carries the
+> scope decisions, `apps/api/src/modules/organizations` enforces them, and 23
+> tests assert that a lead of one organization can do nothing in another.
 > Authentication (`apps/api/src/modules/auth`) is complete. The authorization
 > KERNEL exists as pure functions in `packages/authz-core` with 31 tests
 > including an exhaustive rank matrix, and context resolution is implemented in

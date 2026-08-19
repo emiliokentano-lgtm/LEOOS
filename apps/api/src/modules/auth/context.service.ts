@@ -227,7 +227,19 @@ export async function resolveIdentity(
   return { account, memberships };
 }
 
-/** Builds the kernel's actor context for one organization. */
+/**
+ * Builds the kernel's actor context for one organization.
+ *
+ * `organizationId` on the result is the organization the actor ACTUALLY BELONGS
+ * TO, not the one that was asked about. If the requested organization is one
+ * they have no membership in, it comes back null.
+ *
+ * This is load-bearing. If the requested id were echoed back unconditionally,
+ * every scope check of the form `actor.organizationId !== organizationId` would
+ * compare a value to itself and always pass — the check would be tautological,
+ * and a lead of one organization would fall through to a permission check
+ * against the wrong organization instead of being refused for scope.
+ */
 export function toActorContext(
   identity: ResolvedIdentity,
   organizationId: string | null,
@@ -243,7 +255,7 @@ export function toActorContext(
 
   return {
     userId: identity.account.userId,
-    organizationId,
+    organizationId: membership ? membership.organizationId : null,
     isGlobalAdmin: identity.account.isGlobalAdmin,
     isOrgLead,
     level,
@@ -275,9 +287,27 @@ export async function loadActorContextLocked(
   const identity = await resolveIdentity(tx, userId);
   if (!identity) {
     return {
-      userId, organizationId, isGlobalAdmin: false, isOrgLead: false, level: 0,
+      userId, organizationId: null, isGlobalAdmin: false, isOrgLead: false, level: 0,
       permissions: new Set(), globalCapabilities: new Set(), membershipActive: false,
     };
   }
   return toActorContext(identity, organizationId);
+}
+
+/**
+ * Bumps a user's permission version.
+ *
+ * Called whenever anything that could change their effective permissions
+ * changes — a role assignment, an override, a membership status change, an
+ * organization-lead grant or revocation. The authorization cache is keyed on
+ * this value, so invalidation is a key change rather than a delete, which is
+ * race-free (docs/architecture/02-authorization.md §B.6).
+ *
+ * Must be called inside the same transaction as the change it describes.
+ */
+export async function bumpPermissionVersion(tx: Database, userId: string): Promise<void> {
+  await tx
+    .update(userAccount)
+    .set({ permissionVersion: sql`${userAccount.permissionVersion} + 1` })
+    .where(eq(userAccount.id, userId));
 }

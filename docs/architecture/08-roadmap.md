@@ -63,8 +63,16 @@ Postgres.
 
 ---
 
-## Phase 2 — Organizations, roles, permissions ⭐
+## Phase 2 — Organizations, roles, permissions ⭐ **PARTIALLY COMPLETE**
 *Estimate: 2–2.5 weeks — the highest-risk phase*
+
+**Built:** organization CRUD, the Organization Lead capability with its full
+grant/revoke lifecycle, organization-scoped authorization, the organization admin
+UI, and audit logging of every privileged action including refused attempts.
+
+**Not yet built:** personnel mutations (hire, fire, promote, demote) and role
+mutations (create, edit, assign). The kernel those need already exists and is
+tested; what is missing is the endpoints that call it.
 
 - `organization`, `permission`, `role`, `role_permission`, `organization_member`,
   `member_role`, `member_permission_override`, `organization_lead`

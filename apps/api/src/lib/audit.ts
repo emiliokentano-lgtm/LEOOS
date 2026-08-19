@@ -73,3 +73,46 @@ export function deniedEntry(entry: AuditEntry): AuditEntry {
 }
 
 export const auditSql = sql;
+
+/**
+ * Records a refused attempt.
+ *
+ * MUST be called on the pool, never on the transaction that was rolled back.
+ * Writing a denial audit inside the failing transaction is self-defeating: the
+ * rollback takes the audit row with it, and the refusal leaves no trace — which
+ * is precisely the case an operations lead most needs to see.
+ */
+export async function auditDenied(db: Database, entry: AuditEntry): Promise<void> {
+  await writeAudit(db, { ...entry, outcome: 'denied' });
+}
+
+/**
+ * Runs a mutation and records a denial if authorization refuses it.
+ *
+ * The audit write happens after the transaction has already rolled back, on the
+ * pool, so it survives.
+ */
+export async function withDenialAudit<T>(
+  db: Database,
+  entry: () => AuditEntry,
+  fn: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    const isForbidden =
+      typeof error === 'object' && error !== null && 'code' in error &&
+      (error as { code: unknown }).code === 'FORBIDDEN';
+    if (isForbidden) {
+      const detail = (error as { detail?: { reason?: string } }).detail;
+      const base = entry();
+      await auditDenied(db, {
+        ...base,
+        metadata: { ...(base.metadata ?? {}), reason: detail?.reason ?? 'FORBIDDEN' },
+      }).catch(() => {
+        // Never let an audit failure mask the original refusal.
+      });
+    }
+    throw error;
+  }
+}

@@ -49,8 +49,15 @@ export class UnauthenticatedError extends AppError {
 }
 
 export class ForbiddenError extends AppError {
-  constructor(reason: string, detail?: unknown) {
-    super(403, 'FORBIDDEN', reason, detail, 'You do not have permission to do that.');
+  /**
+   * `publicMessage` is for refusals whose REASON is a policy rather than a fact
+   * about a resource — "this is reserved to global administrators" tells an
+   * attacker nothing they could not read in the documentation, and telling the
+   * legitimate user is far better than a blank denial. Anything that would
+   * confirm a resource exists must NOT be passed here.
+   */
+  constructor(reason: string, detail?: unknown, publicMessage?: string) {
+    super(403, 'FORBIDDEN', reason, detail, publicMessage ?? 'You do not have permission to do that.');
   }
 }
 

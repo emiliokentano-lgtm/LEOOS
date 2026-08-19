@@ -203,3 +203,123 @@ export function effectivePermissions(input: {
   for (const key of input.denies ?? []) set.delete(key);
   return set;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Organization scope
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * The organization-management decisions.
+ *
+ * The rule these all encode: an Organization Lead is unbounded WITHIN their own
+ * organization and holds nothing anywhere else. A PD lead editing MD is not a
+ * permission failure to be reported as "insufficient rank" — it is a scope
+ * failure, and it must be refused before any rank comparison happens.
+ *
+ * The organization id passed here must always be derived from the resource being
+ * acted on or from the actor's membership — NEVER read from a request body
+ * (engineering rule 11). These functions cannot enforce that; the service layer
+ * does, and the tests prove it.
+ */
+
+/** Only a global administrator may create or archive an organization. */
+export function canCreateOrganization(actor: ActorContext): Decision {
+  if (actor.isGlobalAdmin) return ALLOW;
+  if (actor.globalCapabilities.has('org_admin')) return ALLOW;
+  return deny('PERMISSION_NOT_HELD', 'admin.organizations');
+}
+
+export const canArchiveOrganization = canCreateOrganization;
+
+/**
+ * May the actor edit this organization's profile and settings?
+ *
+ * Three ways in, in order of scope:
+ *   1. global admin / org_admin capability — any organization
+ *   2. organization lead — their own organization only
+ *   3. `organization.edit` permission — their own organization only
+ */
+export function canEditOrganization(
+  actor: ActorContext,
+  organizationId: string,
+): Decision {
+  if (actor.isGlobalAdmin || actor.globalCapabilities.has('org_admin')) return ALLOW;
+
+  // Scope is checked BEFORE permission: a PD lead pointed at MD is out of
+  // scope, and saying "insufficient permission" would imply the right
+  // permission would work.
+  if (actor.organizationId === null || actor.organizationId !== organizationId) {
+    return deny('CROSS_ORGANIZATION', organizationId);
+  }
+  if (!actor.membershipActive) return deny('NO_ACTIVE_MEMBERSHIP');
+
+  if (actor.isOrgLead) return ALLOW;
+  if (actor.permissions.has('organization.edit')) return ALLOW;
+  return deny('PERMISSION_NOT_HELD', 'organization.edit');
+}
+
+/** Reading an organization's detail — same scoping, lower bar. */
+export function canViewOrganization(
+  actor: ActorContext,
+  organizationId: string,
+): Decision {
+  if (actor.isGlobalAdmin || actor.globalCapabilities.has('org_admin')) return ALLOW;
+  if (actor.globalCapabilities.has('audit_viewer')) return ALLOW;
+
+  if (actor.organizationId === null || actor.organizationId !== organizationId) {
+    return deny('CROSS_ORGANIZATION', organizationId);
+  }
+  if (actor.isOrgLead) return ALLOW;
+  if (actor.permissions.has('organization.view')) return ALLOW;
+  return deny('PERMISSION_NOT_HELD', 'organization.view');
+}
+
+/**
+ * May the actor grant or revoke the Organization Lead capability?
+ *
+ * GLOBAL ADMINISTRATORS ONLY — deliberately not delegable.
+ *
+ * An organization lead must not be able to appoint another lead, or to appoint
+ * themselves elsewhere. If leads could grant the capability, the capability
+ * would be self-propagating and "global admin controls who leads an
+ * organization" would stop being true after the first grant. This is why the
+ * capability lives in its own table rather than being a role or a permission:
+ * no amount of role editing inside an organization can reach it.
+ */
+export function canManageOrganizationLead(actor: ActorContext): Decision {
+  if (actor.isGlobalAdmin) return ALLOW;
+  if (actor.globalCapabilities.has('org_admin')) return ALLOW;
+  return deny('PERMISSION_NOT_HELD', 'admin.org_leads');
+}
+
+/** May the actor see who leads organizations? Global view, or own org. */
+export function canViewOrganizationLeads(
+  actor: ActorContext,
+  organizationId: string | null,
+): Decision {
+  if (actor.isGlobalAdmin || actor.globalCapabilities.has('org_admin')) return ALLOW;
+  if (organizationId === null) return deny('PERMISSION_NOT_HELD', 'admin.org_leads');
+  return canViewOrganization(actor, organizationId);
+}
+
+/**
+ * May the actor list an organization's members, roles, units or vehicles?
+ *
+ * The organization-admin screen aggregates all of these, and every panel is
+ * scoped independently so a partial permission set yields a partial page rather
+ * than an error.
+ */
+export function canViewOrganizationSection(
+  actor: ActorContext,
+  organizationId: string,
+  permission: PermissionKey,
+): Decision {
+  if (actor.isGlobalAdmin || actor.globalCapabilities.has('org_admin')) return ALLOW;
+
+  if (actor.organizationId === null || actor.organizationId !== organizationId) {
+    return deny('CROSS_ORGANIZATION', organizationId);
+  }
+  if (actor.isOrgLead) return ALLOW;
+  if (actor.permissions.has(permission)) return ALLOW;
+  return deny('PERMISSION_NOT_HELD', permission);
+}

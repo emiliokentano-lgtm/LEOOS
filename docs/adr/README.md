@@ -19,3 +19,4 @@ the old one.
 | [0008](0008-soft-deletion.md) | Soft deletion for operational records | Accepted |
 | [0009](0009-uuid-v7-primary-keys.md) | UUID v7 primary keys | Accepted |
 | [0010](0010-web-tier-holds-cookie-api-holds-truth.md) | Web tier holds the cookie; the API holds the truth | Accepted |
+| [0011](0011-organization-lead-is-not-delegable.md) | Organization Lead is a capability, and it is not delegable | Accepted |
