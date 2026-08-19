@@ -7,6 +7,7 @@ import authPlugin from './plugins/auth.js';
 import authRoutes from './modules/auth/auth.routes.js';
 import organizationRoutes from './modules/organizations/organization.routes.js';
 import personnelRoutes from './modules/personnel/personnel.routes.js';
+import roleRoutes from './modules/roles/role.routes.js';
 import type { MailTransport } from './modules/auth/mail.js';
 
 export interface BuildOptions {
@@ -74,6 +75,9 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
   // personnel.routes.ts.
   await app.register(personnelRoutes, {
     prefix: '/api/v1/organizations/:organizationId/personnel',
+  });
+  await app.register(roleRoutes, {
+    prefix: '/api/v1/organizations/:organizationId/roles',
   });
 
   return app;

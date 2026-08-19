@@ -105,6 +105,12 @@ export const AUDIT_ACTIONS = {
   ROLE_ARCHIVED: 'role.archived',
   ROLE_RESTORED: 'role.restored',
   ROLE_PERMISSIONS_CHANGED: 'role.permissions_changed',
+  /**
+   * A hierarchy move, separate from a plain update: it changes the rank of
+   * everyone holding the role and who may manage them, which is a different
+   * question from a rename and deserves to be filterable on its own.
+   */
+  ROLE_LEVEL_CHANGED: 'role.level_changed',
   ROLE_ASSIGNED: 'role.assigned',
   ROLE_UNASSIGNED: 'role.unassigned',
   PERMISSION_OVERRIDE_SET: 'permission.override_set',

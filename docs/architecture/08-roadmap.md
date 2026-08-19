@@ -73,9 +73,13 @@ Personnel management end to end — hire, terminate, promote, demote, assign and
 remove a role, set a callsign, edit a record — with the roster, profile drawer and
 dialogs on the web side.
 
-**Not yet built:** role mutations (create, edit, archive a role and edit its
-permission set) and per-member permission overrides. The kernel those need already
-exists and is tested; what is missing is the endpoints that call it.
+Role and permission management end to end — create, edit, move, reorder,
+archive, restore, set the default role, and edit a role's permission set —
+with the rank structure list and the permission editor on the web side.
+
+**Not yet built:** per-member permission overrides. The table, the kernel and
+the effective-permission resolution all exist and are tested; what is missing is
+the endpoints and the UI to set one.
 
 - `organization`, `permission`, `role`, `role_permission`, `organization_member`,
   `member_role`, `member_permission_override`, `organization_lead`
@@ -86,7 +90,8 @@ exists and is tested; what is missing is the endpoints that call it.
 - `apps/api/src/authz`: transactional loaders with `FOR UPDATE`, version-keyed cache
 - All database triggers and constraints from data-model §8
 - Personnel operations: hire, fire, promote, demote, assign/remove role ✅
-  (per-member permission override still outstanding)
+- Role operations: create, edit, move, reorder, archive, restore, default,
+  permission set ✅ (per-member permission override still outstanding)
 - Organization Lead grant/revoke (global admin only) ✅
 - **The test suite described in authorization §B.9**
 

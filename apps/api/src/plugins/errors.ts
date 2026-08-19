@@ -40,6 +40,34 @@ export default fp(async (app) => {
       });
     }
 
+    /**
+     * Framework errors carry their own status.
+     *
+     * Fastify raises a 4xx `FastifyError` for a malformed request — an empty
+     * body under a JSON content-type, a payload over the limit, an unsupported
+     * media type. Falling through to 500 told the caller the server had broken
+     * when the request was at fault, which sends them looking in the wrong
+     * place, and it hides a real 500 among the noise.
+     *
+     * Only the client-error range is passed through: a framework error at 5xx is
+     * still ours, and still reported as such.
+     */
+    const framework = error as { statusCode?: unknown; code?: unknown };
+    const status = typeof framework.statusCode === 'number' ? framework.statusCode : 500;
+    if (status >= 400 && status < 500) {
+      request.log.info(
+        { code: framework.code, reason: (error as { message?: string }).message },
+        'malformed request',
+      );
+      return reply.status(status).send({
+        error: {
+          code: typeof framework.code === 'string' ? framework.code : 'BAD_REQUEST',
+          message: 'The request could not be read.',
+        },
+        requestId: request.requestId,
+      });
+    }
+
     request.log.error({ err: error }, 'unhandled error');
     return reply.status(500).send({
       error: { code: 'INTERNAL_ERROR', message: 'Something went wrong.' },

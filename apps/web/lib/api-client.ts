@@ -39,7 +39,11 @@ export async function apiFetch<T>(path: string, init: ApiRequest = {}): Promise<
   const { method = 'GET', body, withSession = true, headers = {} } = init;
 
   const outgoing: Record<string, string> = {
-    'content-type': 'application/json',
+    // Only when there IS a body. Declaring a JSON content-type on a bodyless
+    // POST makes Fastify reject the request outright ("Body cannot be empty when
+    // content-type is set to 'application/json'"), which broke every action that
+    // needs no payload — restoring a role, setting the default role.
+    ...(body === undefined ? {} : { 'content-type': 'application/json' }),
     // Identifies this as the trusted web tier. Exempts the call from the
     // browser-oriented CSRF checks, which do not apply to a server-to-server hop.
     'x-leoos-internal': INTERNAL_TOKEN,

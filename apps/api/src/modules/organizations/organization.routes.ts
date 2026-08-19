@@ -17,8 +17,7 @@ import {
   toLeadDto, toOrganizationDto, type OrganizationDetailDto,
 } from './organization.dto.js';
 import {
-  listOrganizationMembers, listOrganizationRoles, listOrganizationUnits,
-  listOrganizationVehicles,
+  listOrganizationMembers, listOrganizationUnits, listOrganizationVehicles,
 } from './organization.read.js';
 
 /**
@@ -209,13 +208,10 @@ export default async function organizationRoutes(app: FastifyInstance): Promise<
     return reply.send({ members: await listOrganizationMembers(app.db, organizationId) });
   });
 
-  app.get('/:organizationId/roles', async (request, reply) => {
-    const { organizationId } = idParam.parse(request.params);
-    const actor = app.actorContext(request);
-    const decision = canViewOrganizationSection(actor, organizationId, 'roles.view');
-    if (!decision.allowed) throw new NotFoundError('organization roles');
-    return reply.send({ roles: await listOrganizationRoles(app.db, organizationId) });
-  });
+  // Roles are served by the roles module at this same path — see
+  // `modules/roles/role.routes.ts`. Its response is a superset of what this
+  // handler returned (the same fields plus per-role capabilities and the
+  // permission set), so the organization screen reads it unchanged.
 
   app.get('/:organizationId/units', async (request, reply) => {
     const { organizationId } = idParam.parse(request.params);

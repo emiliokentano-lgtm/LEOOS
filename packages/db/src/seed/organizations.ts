@@ -63,7 +63,7 @@ const COMMAND: PermissionKey[] = [
   ...SUPERVISOR,
   'personnel.hire', 'personnel.fire', 'personnel.promote', 'personnel.demote',
   'personnel.create',
-  'roles.create', 'roles.edit', 'roles.assign',
+  'roles.create', 'roles.edit', 'roles.assign', 'roles.permissions',
   'persons.delete', 'persons.restore', 'vehicles.delete', 'vehicles.restore',
   'map.track_all_orgs', 'map.history',
 ];
@@ -187,7 +187,7 @@ export const ORGANIZATION_SEEDS: OrganizationSeed[] = [
     category: 'civil_service',
     color: '#d99a2b',
     roles: [
-      { key: 'owner', name: 'Owner', level: 100, permissions: [...MECHANIC_BASE, 'organization.edit', 'personnel.hire', 'personnel.fire', 'personnel.promote', 'personnel.demote', 'roles.create', 'roles.edit', 'roles.delete', 'roles.assign', 'personnel.edit', 'personnel.callsign', 'units.manage', 'dispatch.manage', 'dispatch.assign', 'dispatch.close'] },
+      { key: 'owner', name: 'Owner', level: 100, permissions: [...MECHANIC_BASE, 'organization.edit', 'personnel.hire', 'personnel.fire', 'personnel.promote', 'personnel.demote', 'roles.create', 'roles.edit', 'roles.delete', 'roles.assign', 'roles.permissions', 'personnel.edit', 'personnel.callsign', 'units.manage', 'dispatch.manage', 'dispatch.assign', 'dispatch.close'] },
       { key: 'manager', name: 'Manager', level: 70, permissions: [...MECHANIC_BASE, 'personnel.edit', 'personnel.callsign', 'units.manage', 'dispatch.manage', 'dispatch.assign', 'dispatch.close', 'roles.assign'] },
       { key: 'senior_mechanic', name: 'Senior Mechanic', level: 40, permissions: [...MECHANIC_BASE, 'vehicles.flags.manage', 'dispatch.manage'] },
       { key: 'mechanic', name: 'Mechanic', level: 20, permissions: MECHANIC_BASE },
@@ -248,7 +248,19 @@ export async function seedOrganizations(db: Database): Promise<OrganizationSeedR
           name: roleSeed.name,
           hierarchyLevel: roleSeed.level,
           isDefault: roleSeed.isDefault ?? false,
-          isSystem: true,
+          /**
+           * NOT system roles.
+           *
+           * `is_system` marks a role whose structure is fixed and which the API
+           * refuses to rename, re-level or archive. Marking the seeded rank
+           * structures with it made every one of them permanently uneditable —
+           * which contradicts the note above ("these are STARTING POINTS…
+           * nothing here is privileged") and would leave all six organizations
+           * unable to touch a single one of their own ranks. The flag is kept
+           * for genuinely fixed roles; an organization's rank list is not one
+           * (engineering rules 5, 6, 8).
+           */
+          isSystem: false,
         })
         .onConflictDoUpdate({
           target: [role.organizationId, role.key],

@@ -436,6 +436,28 @@ actor's membership row while their own promotion request is in flight, demotes
 them, and asserts the request is then decided on the rank they actually hold. The
 same obligations still apply to role mutations, which are not yet built.
 
+Role mutations are covered by `apps/api/test/roles.test.ts`, which adds the
+hierarchy cases specific to editing the structure itself: creating a role at or
+above the actor's own level, lifting a role the actor may edit above themselves,
+dragging a role from above the actor down, reordering as a batch (refused whole
+when any single entry reaches too far), archiving and restoring, and the full
+escalation chain walked end to end as one actor and as an accomplice pair. Its
+own TOCTOU case demotes the actor while their role edit waits on the lock.
+
+**H5b — moving a role is bounded at BOTH ends.** `canMoveRole` checks the role's
+current level and its destination. Checking only the origin lets a Lieutenant
+take the Sergeant role, which they may edit, and lift it to L90 — manufacturing a
+rank above themselves to be promoted into. Checking only the destination lets
+them reach up to the Chief role and drag it down. Reordering is the operation
+where a single-ended check is a hole, so the batch endpoint applies the same
+two-ended rule per entry and is all-or-nothing.
+
+**The subset rule is asymmetric, deliberately.** Adding a permission to a role
+requires the actor to hold it (H4). Removing one does not: removal cannot raise
+anyone's authority, and requiring the permission in order to remove it would
+strand a role that drifted above its editor. Both directions remain bounded by
+H3 and both are audited.
+
 One kernel correction came out of writing these tests. `can()` consulted only the
 actor's explicit permission set, so an Organization Lead whose nominal role was a
 low one held no permissions at all — while `canManageMember`, `canAssignRole` and

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { PermissionKey } from '@leoos/contracts';
 import {
-  can, canAssignRole, canCreateRole, canEditRole, canGrantPermissions, canManageMember,
-  effectiveLevel, effectivePermissions, UNBOUNDED_LEVEL,
+  can, canAssignRole, canChangeRolePermissions, canCreateRole, canDeleteRole, canEditRole,
+  canGrantPermissions, canManageMember, canMoveRole,
+  effectiveLevel, effectivePermissions, outranks, UNBOUNDED_LEVEL,
   type ActorContext, type RoleRef, type TargetContext,
 } from '../src/index.js';
 
@@ -291,6 +292,189 @@ describe('property: no operation ever escalates the actor', () => {
     ];
     for (const key of all) {
       expect(canGrantPermissions(a, [key]).allowed, key).toBe(held.includes(key));
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe('the rank comparison policy', () => {
+  it('requires STRICTLY higher, so equal ranks are mutually immune', () => {
+    expect(outranks(60, 50)).toBe(true);
+    expect(outranks(50, 50)).toBe(false);
+    expect(outranks(50, 60)).toBe(false);
+  });
+});
+
+describe('moving a role to a different level', () => {
+  it('REFUSES lifting a role the actor may edit ABOVE the actor', () => {
+    // The attack a single-ended check misses: a Lieutenant (60) may edit the
+    // Sergeant role (50), so an origin-only check passes — and they lift it to
+    // 90, manufacturing a rank above themselves to be promoted into.
+    expect(canMoveRole(actor({ level: 60 }), role(50), 90)).toMatchObject({
+      allowed: false, reason: 'ROLE_LEVEL_TOO_HIGH',
+    });
+  });
+
+  it('REFUSES lifting a role to the actor\'s OWN level', () => {
+    expect(canMoveRole(actor({ level: 60 }), role(50), 60).allowed).toBe(false);
+  });
+
+  it('REFUSES dragging a role from ABOVE the actor down to below', () => {
+    // The mirror attack: a destination-only check would let a Lieutenant reach
+    // up to the Chief role and demote the whole command structure.
+    expect(canMoveRole(actor({ level: 60 }), role(100), 10)).toMatchObject({
+      allowed: false, reason: 'ROLE_LEVEL_TOO_HIGH',
+    });
+  });
+
+  it('ALLOWS a move that stays strictly below the actor at both ends', () => {
+    expect(canMoveRole(actor({ level: 60 }), role(20), 50).allowed).toBe(true);
+  });
+
+  it('REFUSES a level outside the 1–100 scale', () => {
+    expect(canMoveRole(actor({ level: 100 }), role(20), 0)).toMatchObject({
+      allowed: false, reason: 'LEVEL_OUT_OF_RANGE',
+    });
+    expect(canMoveRole(actor({ level: 100 }), role(20), 101)).toMatchObject({
+      allowed: false, reason: 'LEVEL_OUT_OF_RANGE',
+    });
+  });
+
+  it('lets a global admin move any role', () => {
+    const admin = actor({ isGlobalAdmin: true, level: UNBOUNDED_LEVEL });
+    expect(canMoveRole(admin, role(100), 99).allowed).toBe(true);
+  });
+});
+
+describe('deleting a role', () => {
+  it('REFUSES a role above the actor', () => {
+    expect(canDeleteRole(actor({ level: 60 }), role(90))).toMatchObject({
+      allowed: false, reason: 'ROLE_LEVEL_TOO_HIGH',
+    });
+  });
+
+  it('REFUSES a role at the actor\'s own level', () => {
+    expect(canDeleteRole(actor({ level: 60 }), role(60)).allowed).toBe(false);
+  });
+
+  it('REFUSES a system role, whatever the rank', () => {
+    const admin = actor({ isGlobalAdmin: true, level: UNBOUNDED_LEVEL });
+    expect(canDeleteRole(admin, { ...role(10), isSystem: true })).toMatchObject({
+      allowed: false, reason: 'ROLE_IS_SYSTEM',
+    });
+  });
+
+  it('REFUSES the default role — new hires would have nothing to receive', () => {
+    const admin = actor({ isGlobalAdmin: true, level: UNBOUNDED_LEVEL });
+    expect(canDeleteRole(admin, { ...role(10), isDefault: true })).toMatchObject({
+      allowed: false, reason: 'ROLE_IS_DEFAULT',
+    });
+  });
+
+  it('ALLOWS an ordinary role below the actor', () => {
+    expect(canDeleteRole(actor({ level: 60 }), role(30)).allowed).toBe(true);
+  });
+});
+
+describe('changing a role\'s permission set', () => {
+  const held: PermissionKey[] = ['persons.view', 'persons.edit', 'dispatch.close'];
+
+  it('REFUSES adding a permission the actor does not hold', () => {
+    // Role laundering, the direct form: write the permission into a role you
+    // control, then have it assigned to you.
+    expect(canChangeRolePermissions(actor({ level: 60, permissions: new Set(held) }), role(30), ['personnel.fire']))
+      .toMatchObject({ allowed: false, reason: 'PERMISSION_NOT_HELD_BY_ACTOR' });
+  });
+
+  it('REFUSES editing a role ABOVE the actor, even adding nothing', () => {
+    expect(canChangeRolePermissions(actor({ level: 60, permissions: new Set(held) }), role(90), []))
+      .toMatchObject({ allowed: false, reason: 'ROLE_LEVEL_TOO_HIGH' });
+  });
+
+  it('REFUSES a global-scope permission on an organization role', () => {
+    const chief = actor({ level: 100, permissions: new Set<PermissionKey>(['admin.users']) });
+    expect(canChangeRolePermissions(chief, role(90), ['admin.users']))
+      .toMatchObject({ allowed: false, reason: 'GLOBAL_PERMISSION_ON_ORG_ROLE' });
+  });
+
+  it('ALLOWS adding permissions the actor holds, to a role below them', () => {
+    expect(canChangeRolePermissions(actor({ level: 60, permissions: new Set(held) }), role(30), ['persons.edit']).allowed)
+      .toBe(true);
+  });
+
+  it('ALLOWS a removal-only change without holding the permission', () => {
+    // Removal cannot raise anyone's authority, and requiring the permission to
+    // remove it would strand a role that drifted above its editor.
+    expect(canChangeRolePermissions(actor({ level: 60, permissions: new Set() }), role(30), []).allowed)
+      .toBe(true);
+  });
+});
+
+describe('property: combining roles never manufactures authority', () => {
+  it('never produces a level above the highest single role', () => {
+    const sets = [[10, 20], [30, 30], [1, 99], [50, 50, 50], [10, 20, 30, 40]];
+    for (const levels of sets) {
+      const combined = effectiveLevel(levels);
+      expect(combined, `levels ${levels.join(',')}`).toBe(Math.max(...levels));
+      // The failure mode this rules out: summing would put [50,50] at 100.
+      expect(combined).toBeLessThanOrEqual(Math.max(...levels));
+    }
+  });
+
+  it('never produces a permission that no contributing role carried', () => {
+    const roleA: PermissionKey[] = ['persons.view', 'dispatch.view'];
+    const roleB: PermissionKey[] = ['vehicles.view'];
+    const union = new Set([...roleA, ...roleB]);
+
+    const combined = effectivePermissions({
+      rolePermissions: [...roleA, ...roleB], grants: [], denies: [],
+    });
+
+    for (const key of combined) expect(union.has(key), key).toBe(true);
+    expect(combined.size).toBe(union.size);
+  });
+
+  it('is order-independent — the same roles always give the same result', () => {
+    const a: PermissionKey[] = ['persons.view', 'persons.edit'];
+    const b: PermissionKey[] = ['persons.edit', 'vehicles.view'];
+
+    const forwards = effectivePermissions({ rolePermissions: [...a, ...b], grants: [], denies: [] });
+    const backwards = effectivePermissions({ rolePermissions: [...b, ...a], grants: [], denies: [] });
+
+    expect([...forwards].sort()).toEqual([...backwards].sort());
+  });
+
+  it('lets a deny beat a grant arriving from any role', () => {
+    const result = effectivePermissions({
+      rolePermissions: ['personnel.fire', 'personnel.fire'],
+      grants: ['personnel.fire'],
+      denies: ['personnel.fire'],
+    });
+    expect(result.has('personnel.fire')).toBe(false);
+  });
+});
+
+describe('property: no role mutation ever escalates the actor', () => {
+  it('never lets an actor move a role to at-or-above their own level', () => {
+    for (let level = 2; level <= 100; level += 7) {
+      for (const nextLevel of [level - 1, level, level + 1]) {
+        if (nextLevel < 1 || nextLevel > 100) continue;
+        const allowed = canMoveRole(actor({ level }), role(1), nextLevel).allowed;
+        expect(allowed, `level ${level} moving a role to ${nextLevel}`).toBe(nextLevel < level);
+      }
+    }
+  });
+
+  it('never lets an actor edit, move or delete a role at or above their own', () => {
+    for (let level = 1; level <= 100; level += 9) {
+      for (const roleLevel of [level, level + 1]) {
+        if (roleLevel > 100) continue;
+        const a = actor({ level });
+        expect(canEditRole(a, role(roleLevel)).allowed, `edit ${roleLevel} as ${level}`).toBe(false);
+        expect(canDeleteRole(a, role(roleLevel)).allowed, `delete ${roleLevel} as ${level}`).toBe(false);
+        expect(canMoveRole(a, role(roleLevel), 1).allowed, `move ${roleLevel} as ${level}`).toBe(false);
+        expect(canCreateRole(a, roleLevel).allowed, `create ${roleLevel} as ${level}`).toBe(false);
+      }
     }
   });
 });

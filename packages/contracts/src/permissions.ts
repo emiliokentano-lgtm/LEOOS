@@ -41,6 +41,14 @@ export const PERMISSIONS = {
   'roles.delete': { category: 'roles', risk: 'high', label: 'Archive roles' },
   'roles.restore': { category: 'roles', risk: 'medium', label: 'Restore archived roles' },
   'roles.assign': { category: 'roles', risk: 'high', label: 'Assign roles' },
+  /**
+   * Separate from `roles.edit` on purpose. Renaming a role or moving it a level
+   * is an administrative change; changing WHAT IT CAN DO rewrites the authority
+   * of everyone holding it. Splitting the two lets an organization delegate the
+   * first without the second — the usual case for a personnel officer who
+   * maintains the rank list but must not be able to widen it.
+   */
+  'roles.permissions': { category: 'roles', risk: 'high', label: "Edit a role's permissions" },
 
   // ── persons ──────────────────────────────────────────────────────────────
   'persons.view': { category: 'persons', risk: 'low', label: 'View persons' },

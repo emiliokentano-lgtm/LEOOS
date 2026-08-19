@@ -15,6 +15,20 @@
       "when": 1787081323596,
       "tag": "0001_invariants",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787200000000,
+      "tag": "0002_roles_permissions",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787200001000,
+      "tag": "0003_seeded_roles_not_system",
+      "breakpoints": true
     }
   ]
 }

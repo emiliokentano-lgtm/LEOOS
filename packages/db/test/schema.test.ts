@@ -1,9 +1,14 @@
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { sql } from 'drizzle-orm';
 import {
   expectRejection, makeMember, makeUser, orgIdByKey, roleIdByKey, setupDatabase, unique,
   type Harness,
 } from './helpers.js';
+
+const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations');
 
 let h: Harness;
 
@@ -17,11 +22,19 @@ afterAll(async () => {
 
 // ═══════════════════════════════════════════════════════════════════════════
 describe('migration & seed', () => {
-  it('applies both migrations from an empty schema', async () => {
+  it('applies every migration in the folder from an empty schema', async () => {
+    // Counted from the journal rather than hard-coded: a literal here breaks on
+    // every migration added, which trains people to bump the number without
+    // reading what changed — and stops asserting anything real.
+    const journal = JSON.parse(
+      readFileSync(join(migrationsDir, 'meta', '_journal.json'), 'utf8'),
+    ) as { entries: unknown[] };
+
     const rows = await h.db.execute<{ count: number }>(
       sql`SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations`,
     );
-    expect(rows[0]?.count).toBe(2);
+    expect(Number(rows[0]?.count)).toBe(journal.entries.length);
+    expect(journal.entries.length).toBeGreaterThan(0);
   });
 
   it('seeds exactly the six initial organizations', async () => {

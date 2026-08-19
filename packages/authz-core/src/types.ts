@@ -45,6 +45,37 @@ export interface RoleRef {
   id: string;
   organizationId: string | null;
   hierarchyLevel: number;
+  /** Seeded structural roles. Renaming or archiving one is refused outright. */
+  isSystem?: boolean;
+  /** The role new hires receive. An organization must always have exactly one. */
+  isDefault?: boolean;
+}
+
+/**
+ * The hierarchy scale.
+ *
+ * 1–100, HIGHER MEANS MORE SENIOR (ADR-0007), matched by a database CHECK
+ * constraint. Seeded structures leave gaps (10, 20, 30…) so a rank can be
+ * inserted between two others without renumbering the whole organization.
+ */
+export const MIN_HIERARCHY_LEVEL = 1;
+export const MAX_HIERARCHY_LEVEL = 100;
+
+/**
+ * THE RANK COMPARISON POLICY, in one place.
+ *
+ * Authority requires a STRICTLY higher level. Equal ranks are mutually immune:
+ * two Commanders cannot manage, promote, demote or fire each other, and neither
+ * can raise anyone to their own level.
+ *
+ * The alternative — allowing action at equal rank — is what makes peer coups
+ * possible, and it has no safe reading: if a Commander may promote someone to
+ * Commander, the organization can be flooded with peers by a single actor. The
+ * comparison lives here rather than being spelled out at each call site so the
+ * policy is auditable in one read and cannot drift between decisions.
+ */
+export function outranks(actorLevel: number, otherLevel: number): boolean {
+  return actorLevel > otherLevel;
 }
 
 export type DenyReason =
@@ -57,7 +88,11 @@ export type DenyReason =
   | 'NO_ACTIVE_MEMBERSHIP'
   | 'TARGET_IS_ORG_LEAD'
   | 'TARGET_IS_GLOBAL_ADMIN'
-  | 'GLOBAL_PERMISSION_ON_ORG_ROLE';
+  | 'GLOBAL_PERMISSION_ON_ORG_ROLE'
+  | 'ROLE_IS_SYSTEM'
+  | 'ROLE_IN_USE'
+  | 'ROLE_IS_DEFAULT'
+  | 'LEVEL_OUT_OF_RANGE';
 
 export type Decision =
   | { allowed: true }

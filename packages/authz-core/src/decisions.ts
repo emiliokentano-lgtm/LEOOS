@@ -1,6 +1,7 @@
 import { isGlobalPermission, type PermissionKey } from '@leoos/contracts';
 import {
-  ALLOW, deny, NO_LEVEL, type ActorContext, type Decision, type RoleRef, type TargetContext,
+  ALLOW, deny, MAX_HIERARCHY_LEVEL, MIN_HIERARCHY_LEVEL, NO_LEVEL, outranks,
+  type ActorContext, type Decision, type RoleRef, type TargetContext,
 } from './types.js';
 
 /**
@@ -105,8 +106,8 @@ export function canManageMember(actor: ActorContext, target: TargetContext): Dec
 
   if (actor.isOrgLead) return ALLOW;
 
-  // H1 — strictly greater.
-  if (!(actor.level > target.level)) {
+  // H1 — strictly greater. See `outranks` for why equality is refused.
+  if (!outranks(actor.level, target.level)) {
     return deny('TARGET_RANK_NOT_LOWER', `actor ${actor.level} vs target ${target.level}`);
   }
   return ALLOW;
@@ -124,7 +125,7 @@ export function canAssignRole(actor: ActorContext, role: RoleRef): Decision {
 
   if (actor.isOrgLead) return ALLOW;
 
-  if (!(actor.level > role.hierarchyLevel)) {
+  if (!outranks(actor.level, role.hierarchyLevel)) {
     return deny('ROLE_LEVEL_TOO_HIGH', `actor ${actor.level} vs role ${role.hierarchyLevel}`);
   }
   return ALLOW;
@@ -144,7 +145,7 @@ export function canEditRole(actor: ActorContext, role: RoleRef): Decision {
   if (role.organizationId !== actor.organizationId) return deny('CROSS_ORGANIZATION');
   if (actor.isOrgLead) return ALLOW;
 
-  if (!(actor.level > role.hierarchyLevel)) {
+  if (!outranks(actor.level, role.hierarchyLevel)) {
     return deny('ROLE_LEVEL_TOO_HIGH', `actor ${actor.level} vs role ${role.hierarchyLevel}`);
   }
   return ALLOW;
@@ -157,6 +158,71 @@ export function canCreateRole(actor: ActorContext, hierarchyLevel: number): Deci
     organizationId: actor.organizationId,
     hierarchyLevel,
   });
+}
+
+/**
+ * H5b — moving an existing role to a different level.
+ *
+ * BOTH ENDS ARE CHECKED. Checking only the current level would let a Lieutenant
+ * (L60) take the Sergeant role (L50) — which they may edit — and lift it to L90,
+ * manufacturing a rank above themselves that they could then be assigned. And
+ * checking only the destination would let them reach up to the Chief role and
+ * drag it down, decapitating the organization. Reordering is exactly the
+ * operation where a single-ended check is a hole.
+ */
+export function canMoveRole(
+  actor: ActorContext,
+  role: RoleRef,
+  nextLevel: number,
+): Decision {
+  if (nextLevel < MIN_HIERARCHY_LEVEL || nextLevel > MAX_HIERARCHY_LEVEL) {
+    return deny('LEVEL_OUT_OF_RANGE', `${nextLevel} is outside ${MIN_HIERARCHY_LEVEL}–${MAX_HIERARCHY_LEVEL}`);
+  }
+  const current = canEditRole(actor, role);
+  if (!current.allowed) return current;
+  return canCreateRole(actor, nextLevel);
+}
+
+/**
+ * May the actor archive this role?
+ *
+ * Rank is necessary but not sufficient. A system role is structural and a
+ * default role is what new hires receive — archiving either leaves the
+ * organization in a state it cannot reach through the UI. Whether the role is
+ * still assigned is checked against the database in the service (and by a
+ * trigger), because the kernel holds no counts.
+ */
+export function canDeleteRole(actor: ActorContext, role: RoleRef): Decision {
+  if (role.isSystem) return deny('ROLE_IS_SYSTEM', role.id);
+  if (role.isDefault) return deny('ROLE_IS_DEFAULT', role.id);
+  return canEditRole(actor, role);
+}
+
+/**
+ * May the actor change this role's permission set?
+ *
+ * Two rules, and the asymmetry between them is deliberate:
+ *
+ *   - the role must be BELOW the actor (H3), or "edit a role you cannot reach"
+ *     becomes "edit the Chief role and then get promoted into it";
+ *   - every ADDED permission must be one the actor holds (H4), so authority is
+ *     never bootstrapped from nothing.
+ *
+ * REMOVALS are not held to H4. Taking a permission away cannot raise anyone's
+ * authority, and requiring the actor to hold a permission in order to remove it
+ * would mean a role that drifted above its editor could never be brought back
+ * down. Removal is still bounded by H3 and is audited — it is a destructive act,
+ * not an escalating one.
+ */
+export function canChangeRolePermissions(
+  actor: ActorContext,
+  role: RoleRef,
+  added: readonly PermissionKey[],
+): Decision {
+  const edit = canEditRole(actor, role);
+  if (!edit.allowed) return edit;
+  if (added.length === 0) return ALLOW;
+  return canGrantPermissions(actor, added);
 }
 
 /**
