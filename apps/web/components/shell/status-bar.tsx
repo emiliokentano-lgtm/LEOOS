@@ -66,12 +66,13 @@ export function StatusBar({
       </span>
 
       <div className="ml-auto flex items-center gap-4">
-        {/* Live feed state — reported honestly. No backend exists in this phase,
-            so this shows "offline", never a green light. */}
+        {/* Transport state — reported honestly, never a green light it has not
+            earned. Per-screen connection health is shown on the screen that has
+            a connection; this says which transport is carrying it. */}
         <Tooltip content={INTEGRATION_STATUS.liveFeed.detail}>
           <span className="flex items-center gap-1.5">
             <WifiOff className="size-3 text-text-disabled" aria-hidden />
-            <span>Live feed offline</span>
+            <span>Feed: polling</span>
           </span>
         </Tooltip>
 

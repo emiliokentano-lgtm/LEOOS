@@ -12,7 +12,14 @@ export const IS_DEMO_DATA = process.env.NEXT_PUBLIC_LEOOS_DEMO === '1';
  *  UI as their real state rather than as a success indicator. */
 export const INTEGRATION_STATUS = {
   api: { label: 'API', state: 'not-connected', detail: 'No backend — UI phase' },
-  liveFeed: { label: 'Live feed', state: 'not-connected', detail: 'WebSocket lands in Phase 5' },
+  /**
+   * The map delivers positions by polling today; the WebSocket transport in
+   * docs/architecture/03-realtime.md is still Phase 5. Reported as what it is —
+   * saying "offline" once a working poller shipped was inaccurate in the other
+   * direction, and an indicator that under-reports is no more trustworthy than
+   * one that over-reports.
+   */
+  liveFeed: { label: 'Feed', state: 'partial', detail: 'Positions poll at 1 Hz. The WebSocket transport lands in Phase 5.' },
   fivem: { label: 'FiveM bridge', state: 'not-connected', detail: 'Bridge lands in Phase 7' },
   mail: { label: 'Mail', state: 'not-connected', detail: 'Console transport — not delivering' },
 } as const;

@@ -42,3 +42,12 @@ apps/web/public/map/tiles/
 
 # local database state
 pgdata/
+
+# Next.js auto-generates these in apps/web on `next dev`. Not committed: an
+# apps/web/CLAUDE.md would shadow the project's own engineering rules for any
+# agent working in that directory.
+apps/web/AGENTS.md
+apps/web/CLAUDE.md
+
+# map walkthrough output
+.map/

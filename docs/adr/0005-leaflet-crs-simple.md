@@ -1,6 +1,6 @@
 # ADR-0005 — Leaflet with `CRS.Simple` rather than MapLibre GL
 
-**Status:** Accepted · 2026-08-18
+**Status:** Accepted · 2026-08-18 · timing amended by [ADR-0012](0012-defer-leaflet-until-tiles.md)
 
 ## Context
 

@@ -154,6 +154,22 @@ export const AUDIT_ACTIONS = {
   PANIC_TRIGGERED: 'panic.triggered',
   PANIC_ACKNOWLEDGED: 'panic.acknowledged',
 
+  // map
+  /**
+   * Marker lifecycle. Separate keys rather than one `map.marker_changed`,
+   * because "who removed the roadblock, and when" is a question asked after an
+   * incident and it should be filterable without reading metadata.
+   */
+  MAP_MARKER_PLACED: 'map.marker_placed',
+  MAP_MARKER_UPDATED: 'map.marker_updated',
+  MAP_MARKER_REMOVED: 'map.marker_removed',
+  /**
+   * Position playback. Reviewing where a unit was over past hours is a
+   * surveillance capability, so every query is recorded — see
+   * docs/architecture/05-map.md §5.
+   */
+  MAP_HISTORY_VIEWED: 'map.history_viewed',
+
   // integration & administration
   GAME_SERVER_REGISTERED: 'game_server.registered',
   GAME_SERVER_CREDENTIAL_ISSUED: 'game_server.credential_issued',

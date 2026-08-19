@@ -49,15 +49,20 @@ export interface FilterChipProps {
   /** Swatch shown before the label — organization colour, status colour. */
   color?: string;
   count?: number;
+  /** Native tooltip. Used for a keyboard shortcut hint that would clutter the label. */
+  title?: string;
   className?: string;
 }
 
-export function FilterChip({ label, active, onToggle, color, count, className }: FilterChipProps) {
+export function FilterChip({
+  label, active, onToggle, color, count, title, className,
+}: FilterChipProps) {
   return (
     <button
       type="button"
       onClick={onToggle}
       aria-pressed={active}
+      title={title}
       className={cn(
         'inline-flex h-6 items-center gap-1.5 rounded-xs border px-2 text-xs',
         'transition-colors duration-(--duration-fast)',

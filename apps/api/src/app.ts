@@ -4,6 +4,7 @@ import { loadConfig, type AppConfig } from './config.js';
 import contextPlugin from './plugins/context.js';
 import errorsPlugin from './plugins/errors.js';
 import authPlugin from './plugins/auth.js';
+import mapSourcePlugin from './plugins/map-source.js';
 import authRoutes from './modules/auth/auth.routes.js';
 import organizationRoutes from './modules/organizations/organization.routes.js';
 import personnelRoutes from './modules/personnel/personnel.routes.js';
@@ -11,12 +12,17 @@ import roleRoutes from './modules/roles/role.routes.js';
 import personRoutes from './modules/persons/person.routes.js';
 import vehicleRoutes from './modules/vehicles/vehicle.routes.js';
 import searchRoutes from './modules/search/search.routes.js';
+import mapRoutes from './modules/map/map.routes.js';
 import type { MailTransport } from './modules/auth/mail.js';
+import type { LivePositionStore } from './modules/map/sources/live-positions.js';
+import type { PositionSource } from './modules/map/sources/position-source.js';
 
 export interface BuildOptions {
   config?: AppConfig;
   db?: Database;
   mail?: MailTransport;
+  /** Overrides the live position feed. Tests drive positions directly. */
+  map?: { store?: LivePositionStore; source?: PositionSource };
 }
 
 export async function buildApp(options: BuildOptions = {}): Promise<FastifyInstance> {
@@ -64,6 +70,9 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
   await app.register(contextPlugin, { config, db: options.db, mail: options.mail });
   await app.register(errorsPlugin);
   await app.register(authPlugin);
+  // After the context plugin: the position source needs `app.db` to load the
+  // unit roster it simulates.
+  await app.register(mapSourcePlugin, { config, ...options.map });
 
   app.get('/health', async () => ({ status: 'ok' }));
   app.get('/health/ready', async () => {
@@ -96,6 +105,11 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
    * see modules/search/search.scope.ts.
    */
   await app.register(searchRoutes, { prefix: '/api/v1/search' });
+  /**
+   * The map spans organizations by design — a pursuit crossing a boundary is one
+   * view, not two. Visibility is decided per caller in modules/map/map.scope.ts.
+   */
+  await app.register(mapRoutes, { prefix: '/api/v1/map' });
 
   return app;
 }

@@ -83,7 +83,21 @@ export const unit = pgTable(
     posY: doublePrecision('pos_y'),
     posZ: doublePrecision('pos_z'),
     heading: doublePrecision('heading'),
+    /** Metres per second at the last sample. Drives map interpolation confidence. */
+    speed: doublePrecision('speed'),
     positionUpdatedAt: timestamp('position_updated_at', { withTimezone: true }),
+
+    /**
+     * Covert unit — excluded from every map payload except its own
+     * organization's and holders of `map.track_all_orgs`.
+     *
+     * This lives on the UNIT rather than on the organization because covertness
+     * is operational, not structural: FIB runs marked and unmarked units at the
+     * same time, and an undercover car must not appear on a PD dispatcher's map
+     * merely because FIB shares its fleet on the public map. Enforcement is in
+     * the query (docs/architecture/05-map.md §5), never in the client.
+     */
+    isCovert: boolean('is_covert').notNull().default(false),
 
     /** Denormalised for the unit board; the authority is `incident_assignment`. */
     currentIncidentId: uuid('current_incident_id'),
@@ -98,6 +112,12 @@ export const unit = pgTable(
       .on(t.organizationId, t.callsign)
       .where(sql`status = 'active'`),
     index('unit_org_status_idx').on(t.organizationId, t.status),
+    // The map's own query: every active unit that has ever reported a position.
+    // Partial, because a unit with no position is never drawn and the index has
+    // no reason to carry it.
+    index('unit_map_position_idx')
+      .on(t.organizationId, t.positionUpdatedAt)
+      .where(sql`status = 'active' AND pos_x IS NOT NULL`),
     index('unit_status_key_idx').on(t.statusKey).where(sql`status = 'active'`),
     index('unit_incident_idx').on(t.currentIncidentId),
     check(

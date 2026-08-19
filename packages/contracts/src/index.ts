@@ -2,3 +2,6 @@ export * from './permissions';
 export * from './statuses';
 export * from './geo';
 export * from './organizations';
+export * from './map';
+export * from './map-viewport';
+export * from './map-cluster';

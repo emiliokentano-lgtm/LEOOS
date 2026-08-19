@@ -189,3 +189,149 @@ FROM (VALUES
   ('PD','Shoplifting report','Suspect left on foot.',4,'closed','Rockford Hills')
 ) AS i(orgkey, title, descr, prio, status, loc)
 WHERE NOT EXISTS (SELECT 1 FROM incident x WHERE x.title = i.title);
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- Map fixtures
+--
+-- Gives the map something to render: units spread across Los Santos and Blaine
+-- County, a covert federal unit, vehicles attached to units, incidents with
+-- real coordinates, and a few operator markers.
+--
+-- Positions here are SEED values only. Once the API is running, the mock
+-- position source moves these units continuously; these coordinates are simply
+-- where each one starts, so a freshly seeded database renders a sensible map
+-- before the first simulator tick.
+--
+-- Coordinates are approximate in-game landmarks, adequate for exercising the
+-- subsystem and explicitly not survey data — see the calibration note in
+-- packages/contracts/src/geo.ts.
+-- ───────────────────────────────────────────────────────────────────────────
+
+-- A wider fleet, so clustering, filtering and the visibility rules all have
+-- something to act on. ICE runs a covert unit specifically so the covert
+-- exclusion is visible in the browser and not only in a test.
+INSERT INTO unit (organization_id, callsign, name, unit_type, status_key, is_covert)
+SELECT (SELECT id FROM organization WHERE key = u.orgkey), u.callsign, u.name,
+       u.utype, u.skey, u.covert
+FROM (VALUES
+  ('PD','1-ADAM-20','Adam Twenty','patrol','available',false),
+  ('PD','1-ADAM-30','Adam Thirty','patrol','in_operation',false),
+  ('PD','1-KILO-9','K9 Nine','k9','available',false),
+  ('MD','MEDIC-7','Rescue Seven','ems','available',false),
+  ('MD','MEDIC-9','Rescue Nine','ems','transporting',false),
+  ('FIB','SIERRA-2','Surveillance Two','investigation','in_operation',true),
+  ('ARMY','ZULU-1','Zancudo Patrol','patrol','available',false),
+  ('ICE','ECHO-1','Echo One','transport','available',false),
+  ('ICE','ECHO-2','Echo Two','investigation','busy',true),
+  ('MECHANIC','TOW-1','Recovery One','transport','available',false)
+) AS u(orgkey, callsign, name, utype, skey, covert)
+WHERE NOT EXISTS (SELECT 1 FROM unit x WHERE x.callsign = u.callsign AND x.status = 'active');
+
+-- Starting positions. Only set where a unit has none, so re-running the seed
+-- never teleports a fleet the simulator has since moved.
+UPDATE unit u SET pos_x = p.x, pos_y = p.y, heading = p.h, speed = 0,
+                  position_updated_at = now()
+FROM (VALUES
+  ('1-ADAM-12',   195.0,  -935.0,  90.0),
+  ('1-ADAM-20',   830.0, -1290.0, 210.0),
+  ('1-ADAM-30',  -1200.0,-1500.0, 315.0),
+  ('1-LINCOLN-10', 441.0, -982.0,   0.0),
+  ('1-KILO-9',     100.0,-1900.0, 180.0),
+  ('AIR-1',        298.0, -584.0,  45.0),
+  ('MEDIC-3',      300.0,  180.0, 270.0),
+  ('MEDIC-7',     -300.0,  700.0, 135.0),
+  ('MEDIC-9',     -1850.0,-1240.0, 60.0),
+  ('SIERRA-1',     270.0, 2800.0,   0.0),
+  ('SIERRA-2',     -1037.0,-2737.0,225.0),
+  ('ZULU-1',      -2100.0, 3200.0,  90.0),
+  ('ECHO-1',      1700.0, 2600.0, 180.0),
+  ('ECHO-2',      1960.0, 3740.0, 300.0),
+  ('TOW-1',        450.0, 5570.0,  15.0)
+) AS p(callsign, x, y, h)
+WHERE u.callsign = p.callsign AND u.status = 'active' AND u.pos_x IS NULL;
+
+-- Units drive something. The unit detail panel shows the vehicle and plate, so
+-- an unattached fleet leaves half that panel empty.
+UPDATE unit u SET vehicle_id = v.id
+FROM vehicle v
+WHERE v.plate = CASE u.callsign
+      WHEN '1-ADAM-12' THEN 'LSPD001'
+      WHEN '1-ADAM-20' THEN 'LSPD002'
+      WHEN 'MEDIC-3'   THEN 'EMS0001'
+      WHEN 'SIERRA-1'  THEN 'FIB0007'
+      END
+  AND u.vehicle_id IS NULL AND u.status = 'active';
+
+-- Incident coordinates. An incident with no position is deliberately excluded
+-- from the map query, so the seed gives the open ones somewhere to be.
+UPDATE incident i SET pos_x = c.x, pos_y = c.y
+FROM (VALUES
+  ('Burglary in progress',   -1200.0, -1500.0),
+  ('Traffic collision',        270.0,  2800.0),
+  ('Cardiac arrest',           300.0,   180.0),
+  ('Surveillance detail',      195.0,  -935.0)
+) AS c(title, x, y)
+WHERE i.title = c.title AND i.pos_x IS NULL AND i.deleted_at IS NULL;
+
+-- Assign a couple of units to calls so the "assigned" filter and the incident
+-- row in the unit panel are both exercisable.
+UPDATE unit u SET current_incident_id = i.id
+FROM incident i
+WHERE i.title = CASE u.callsign
+      WHEN '1-ADAM-30' THEN 'Burglary in progress'
+      WHEN 'MEDIC-3'   THEN 'Cardiac arrest'
+      END
+  AND u.current_incident_id IS NULL AND u.status = 'active' AND i.deleted_at IS NULL;
+
+INSERT INTO incident_assignment (incident_id, unit_id)
+SELECT i.id, u.id FROM unit u JOIN incident i ON i.id = u.current_incident_id
+WHERE u.status = 'active'
+  AND NOT EXISTS (
+    SELECT 1 FROM incident_assignment ia
+    WHERE ia.incident_id = i.id AND ia.unit_id = u.id AND ia.released_at IS NULL);
+
+-- Operator markers. One global, the rest organization-scoped, so the marker
+-- visibility rules have both cases present.
+INSERT INTO map_marker (organization_id, type, label, description, pos_x, pos_y)
+SELECT (SELECT id FROM organization WHERE key = m.orgkey), m.mtype::map_marker_type,
+       m.label, m.descr, m.x, m.y
+FROM (VALUES
+  ('PD','roadblock','Route 68 closure','Both directions closed for recovery.', 270.0, 2800.0),
+  ('PD','staging','Staging — Vespucci','Stage here, do not approach.', -1150.0, -1450.0),
+  ('MD','command_post','Triage point','Casualty collection point.', 320.0, 200.0),
+  (NULL,'hazard','Bridge out','Structural damage reported.', 1700.0, 4900.0)
+) AS m(orgkey, mtype, label, descr, x, y)
+WHERE NOT EXISTS (
+  SELECT 1 FROM map_marker x WHERE x.label = m.label AND x.deleted_at IS NULL);
+
+-- Public map sharing. PD and MD share; FIB, ARMY and ICE do not, which is what
+-- makes the third clause of the visibility rule observable in the browser.
+UPDATE organization
+   SET settings = settings || '{"shareOnPublicMap": true}'::jsonb
+ WHERE key IN ('PD','MD','MECHANIC') AND settings->>'shareOnPublicMap' IS NULL;
+
+UPDATE organization
+   SET settings = settings || '{"shareOnPublicMap": false}'::jsonb
+ WHERE key IN ('FIB','ARMY','ICE') AND settings->>'shareOnPublicMap' IS NULL;
+
+-- Crew. Without this every unit reads "No crew" and the detail panel's most
+-- useful row is empty — a unit is people, not a marker.
+INSERT INTO unit_member (unit_id, member_id, is_leader)
+SELECT u.id, m.id, c.leader
+FROM (VALUES
+  ('1-ADAM-12','ui.officer1',true),
+  ('1-ADAM-20','ui.officer2',true),
+  ('1-ADAM-30','ui.officer3',true),
+  ('1-LINCOLN-10','ui.sergeant',true),
+  ('1-KILO-9','ui.cadet1',true),
+  ('AIR-1','ui.lieutenant',true),
+  ('MEDIC-3','ui.medic',true)
+) AS c(callsign, username, leader)
+JOIN unit u ON u.callsign = c.callsign AND u.status = 'active'
+JOIN user_account ua ON ua.username = c.username
+JOIN organization_member m ON m.user_id = ua.id AND m.organization_id = u.organization_id
+                          AND m.status = 'active'
+WHERE NOT EXISTS (
+  -- A member is in at most one active unit (enforced by a partial unique index),
+  -- so this checks the member rather than the pairing.
+  SELECT 1 FROM unit_member x WHERE x.member_id = m.id AND x.left_at IS NULL);

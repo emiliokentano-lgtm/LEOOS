@@ -82,12 +82,29 @@ describe('query plans', () => {
     expect(p).not.toMatch(/Seq Scan on person/);
   });
 
+  /**
+   * The guard here is "the trigram index exists and the planner can use it" —
+   * i.e. dropping it degrades the person register to a full scan.
+   *
+   * Asserted WITHOUT a small LIMIT, deliberately. Postgres cannot estimate
+   * trigram selectivity well for a leading-wildcard ILIKE (it falls back to a
+   * flat 1% guess, ~2000 rows here), and a GIN index scan has a high startup
+   * cost. With `LIMIT 20` the planner therefore reckons it can stop a sequential
+   * scan early and sometimes picks it — a legitimate choice, bounded by the
+   * limit, but one that flips between runs on identical data as ANALYZE's
+   * sampling shifts the estimate. Asserting on it made this suite fail roughly
+   * one run in three for reasons that had nothing to do with the index.
+   *
+   * The unbounded form asks the question the index actually answers, and answers
+   * it the same way every time.
+   */
   it('uses the trigram index for fuzzy name search', async () => {
     const p = await plan(sql`
-      SELECT id FROM person
-      WHERE (first_name || ' ' || last_name) ILIKE '%First1234%' LIMIT 20
+      SELECT count(*) FROM person
+      WHERE (first_name || ' ' || last_name) ILIKE '%First1234%'
     `);
     expect(p).toMatch(/person_name_trgm_idx/);
+    expect(p).not.toMatch(/Seq Scan on person/);
   });
 
   it('answers "denied authorization attempts" from the partial index', async () => {
