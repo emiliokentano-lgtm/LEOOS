@@ -3,34 +3,49 @@
 import * as React from 'react';
 import { KeyRound, User } from 'lucide-react';
 import { Alert, Button, Checkbox, Field, Input } from '@/components/ui';
+import { loginAction } from '@/lib/auth-actions';
+import { IDLE } from '@/lib/auth-action-types';
 
 /**
- * Login form — presentation only.
+ * Sign-in form.
  *
- * There is NO authentication behind this in the design phase, and it does not
- * pretend otherwise: submitting shows an explicit "not implemented" notice
- * rather than a fake success (engineering rules 34, 45).
+ * Handles the five states the brief calls for: invalid credentials, disabled
+ * accounts, expired sessions, loading, and network errors. The distinction
+ * between them comes from the API's error code — the form never guesses.
  */
-export function LoginForm() {
+/**
+ * `next` and `expired` arrive as props from the server component rather than
+ * from `useSearchParams`. Reading the query on the client would force this
+ * subtree to render only after hydration, so the sign-in form would flash in
+ * late on the one screen where it must be there immediately.
+ */
+export function LoginForm({ next = '', expired = false }: { next?: string; expired?: boolean }) {
+  const [state, formAction, pending] = React.useActionState(loginAction, IDLE);
   const [identifier, setIdentifier] = React.useState('');
-  const [password, setPassword] = React.useState('');
-  const [notice, setNotice] = React.useState(false);
-  const [submitting, setSubmitting] = React.useState(false);
-
-  function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setSubmitting(true);
-    setTimeout(() => { setSubmitting(false); setNotice(true); }, 350);
-  }
 
   return (
-    <form onSubmit={onSubmit} className="flex flex-col gap-3.5">
-      {notice ? (
-        <Alert tone="info" title="Authentication is not implemented yet" onDismiss={() => setNotice(false)}>
-          This is the design-system phase. Sign-in lands in Phase 1 together with the
-          API. No credentials were sent anywhere.
+    <form action={formAction} className="flex flex-col gap-3.5">
+      {expired && state.status === 'idle' ? (
+        <Alert tone="info" title="Your session expired">
+          Sign in again to continue where you left off.
         </Alert>
       ) : null}
+
+      {state.status === 'error' ? (
+        <Alert
+          tone={state.message?.includes('reach') ? 'warning' : 'danger'}
+          title={state.message?.includes('reach') ? 'Service unreachable' : 'Sign-in failed'}
+        >
+          {state.message}
+          {state.requestId ? (
+            <span className="mt-1 block font-mono text-2xs text-text-tertiary">
+              Request {state.requestId}
+            </span>
+          ) : null}
+        </Alert>
+      ) : null}
+
+      <input type="hidden" name="next" value={next} />
 
       <Field label="Username or email" htmlFor="identifier" required>
         <Input
@@ -38,6 +53,8 @@ export function LoginForm() {
           name="identifier"
           autoComplete="username"
           required
+          autoFocus
+          disabled={pending}
           value={identifier}
           onChange={(e) => setIdentifier(e.target.value)}
           icon={<User aria-hidden />}
@@ -52,16 +69,15 @@ export function LoginForm() {
           type="password"
           autoComplete="current-password"
           required
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
+          disabled={pending}
           icon={<KeyRound aria-hidden />}
           placeholder="••••••••••••"
         />
       </Field>
 
-      <Checkbox label="Keep me signed in on this station" />
+      <Checkbox label="Keep me signed in on this station" name="remember" disabled={pending} />
 
-      <Button type="submit" variant="primary" size="lg" loading={submitting} className="mt-1 w-full">
+      <Button type="submit" variant="primary" size="lg" loading={pending} className="mt-1 w-full">
         Sign in
       </Button>
     </form>

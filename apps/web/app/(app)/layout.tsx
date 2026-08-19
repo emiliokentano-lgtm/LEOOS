@@ -1,6 +1,7 @@
+import { redirect } from 'next/navigation';
 import { AppShell } from '@/components/shell/app-shell';
 import { NAVIGATION, type NavSection } from '@/lib/navigation';
-import { getSession, getActiveOrganization, getUserOrganizations, hasPermission } from '@/lib/session';
+import { getSessionOrNull, hasPermission } from '@/lib/session';
 
 /**
  * Authenticated shell layout.
@@ -12,11 +13,17 @@ import { getSession, getActiveOrganization, getUserOrganizations, hasPermission 
  * what exists).
  */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  const session = await getSession();
-  const [organization, organizations] = await Promise.all([
-    getActiveOrganization(),
-    getUserOrganizations(),
-  ]);
+  // The real guard. Middleware only checks that a cookie exists; this is where
+  // the session is actually validated, by the API.
+  const session = await getSessionOrNull();
+  if (!session) redirect('/login');
+
+  const organizations = session.memberships.map((m) => m.organization);
+  const organization = organizations.find((o) => o.id === session.organizationId);
+
+  // A verified account with no membership is expected — registration grants
+  // nothing. Send them to the holding screen rather than an empty shell.
+  if (!organization) redirect('/no-organization');
 
   const sections: NavSection[] = NAVIGATION
     .map((section) => ({
@@ -33,6 +40,17 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       session={session}
       organization={organization}
       organizations={organizations}
+      authState={{
+        userId: session.userId,
+        username: session.username,
+        displayName: session.displayName,
+        email: session.email,
+        memberships: session.memberships,
+        activeOrganizationId: session.organizationId,
+        isGlobalAdmin: session.isGlobalAdmin,
+        globalCapabilities: session.globalCapabilities,
+        permissionVersion: session.permissionVersion,
+      }}
     >
       {children}
     </AppShell>

@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { Building2 } from 'lucide-react';
-import { getActiveOrganization, getSession } from '@/lib/session';
+import { requireActiveOrganization } from '@/lib/session';
 import { ORGANIZATION_CATEGORIES } from '@leoos/contracts';
 import { Badge, Panel, PanelHeader, StatTile } from '@/components/ui';
 import { PageContainer } from '@/components/shell/page-container';
@@ -9,7 +9,7 @@ import { MOCK_MEMBERS, MOCK_ROLES } from '@/mocks/operations';
 export const metadata: Metadata = { title: 'Organization' };
 
 export default async function OrganizationPage() {
-  const [org, session] = await Promise.all([getActiveOrganization(), getSession()]);
+  const { session, organization: org } = await requireActiveOrganization();
   const category = ORGANIZATION_CATEGORIES[org.category];
 
   return (

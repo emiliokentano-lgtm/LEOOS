@@ -1,11 +1,14 @@
 'use client';
 
+import * as React from 'react';
+import { useRouter } from 'next/navigation';
 import { Check, ChevronsUpDown } from 'lucide-react';
 import type { OrganizationSummary } from '@leoos/contracts';
 import {
   Dropdown, DropdownTrigger, DropdownContent, DropdownItem, DropdownLabel, DropdownSeparator,
 } from '@/components/ui';
 import { cn } from '@/lib/utils';
+import { switchOrganizationAction } from '@/lib/auth-actions';
 
 /**
  * Switches the active organization context.
@@ -20,6 +23,18 @@ export function OrgSwitcher({
   active: OrganizationSummary;
   organizations: OrganizationSummary[];
 }) {
+  const router = useRouter();
+  const [, startTransition] = React.useTransition();
+
+  function switchTo(id: string) {
+    if (id === active.id) return;
+    startTransition(async () => {
+      await switchOrganizationAction(id);
+      // Permissions are re-derived server-side for the new context.
+      router.refresh();
+    });
+  }
+
   if (organizations.length <= 1) {
     return (
       <div className="flex h-8 items-center gap-2 rounded-xs border border-border-subtle px-2">
@@ -45,7 +60,7 @@ export function OrgSwitcher({
         <DropdownLabel>Active organization</DropdownLabel>
         <DropdownSeparator />
         {organizations.map((org) => (
-          <DropdownItem key={org.id} className="gap-2">
+          <DropdownItem key={org.id} className="gap-2" onSelect={() => switchTo(org.id)}>
             <span
               className="size-2 shrink-0 rounded-[1px]"
               style={{ backgroundColor: org.color }}

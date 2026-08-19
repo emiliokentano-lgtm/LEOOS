@@ -9,6 +9,7 @@ import {
 } from '@/components/ui';
 import { Icon } from '@/components/icon';
 import { cn } from '@/lib/utils';
+import { logoutAction } from '@/lib/auth-actions';
 import type { Session } from '@/lib/session';
 import { useDutyStatus } from './duty-status-context';
 
@@ -110,7 +111,9 @@ export function UserCard({
         <DropdownItem>Account settings</DropdownItem>
         <DropdownItem>Active sessions</DropdownItem>
         <DropdownSeparator />
-        <DropdownItem destructive>Sign out</DropdownItem>
+        <DropdownItem destructive onSelect={() => { void logoutAction(); }}>
+          Sign out
+        </DropdownItem>
       </DropdownContent>
     </Dropdown>
   );

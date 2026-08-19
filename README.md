@@ -7,20 +7,39 @@ dashboard.
 
 ## Status
 
-**Phase 3 (design system & application shell): complete.** The visual foundation,
-component library, application shell and screen layouts exist and run. There is
-**no backend**: every screen renders fixture data from `apps/web/mocks`, no
-mutation is performed, and authentication is not implemented. Screens say so
-explicitly rather than faking success.
+**Phases 1 and 3 complete; database layer of Phase 0 complete.**
 
-Phases 0–2 (foundation, auth, authorization kernel) are still outstanding.
+- **Authentication is real.** Registration, verification, login, logout, sessions,
+  password reset and account status all work end to end against PostgreSQL.
+- **The domain schema is real.** 42 tables with constraints, triggers and seeds.
+- **The design system is real.** Component library and application shell.
+
+Still fixtures: operational screens (persons, vehicles, dispatch, map) render
+demo data from `apps/web/mocks`, badged as such in the top bar. Mail is behind a
+console transport that **delivers nothing** and says so. The FiveM bridge and the
+real-time layer do not exist yet.
+
+Outstanding: Phase 2 (personnel and role mutation endpoints on top of the
+authorization kernel), Phases 4–9.
 
 ## Running it
 
 ```bash
+docker compose up -d                  # Postgres + Redis
 pnpm install
-NEXT_PUBLIC_LEOOS_DEMO=1 pnpm dev     # http://localhost:3000
+pnpm db:migrate && pnpm db:seed       # schema + reference data
+
+cp apps/api/.env.example apps/api/.env    # set INTERNAL_API_TOKEN
+cp apps/web/.env.example apps/web/.env    # same token
+
+pnpm dev:api                          # http://localhost:3001
+pnpm dev:web                          # http://localhost:3000
 ```
+
+Register an account at `/register`. The console transport prints the verification
+link to the API log — it does not send email. A verified account has **no
+organization membership**, which is deliberate: registration grants nothing, and
+you land on a holding screen until an administrator assigns you.
 
 `NEXT_PUBLIC_LEOOS_DEMO=1` enables the fixture data and the "Demo data" badge in
 the top bar. Without it the screens render empty — there is nothing else to show
@@ -30,7 +49,7 @@ Useful routes: `/dashboard`, `/dispatch`, `/map`, `/design` (the living design
 system reference), `/login`.
 
 ```bash
-pnpm --filter @leoos/web typecheck
+pnpm typecheck
 pnpm --filter @leoos/web lint
 pnpm --filter @leoos/web visual-check   # needs a running server
 ```
@@ -38,10 +57,22 @@ pnpm --filter @leoos/web visual-check   # needs a running server
 ## Workspace
 
 ```
-apps/web            Next.js 16 — UI, shell, screens
+apps/web            Next.js 16 — UI, shell, screens; holds the session cookie
+apps/api            Fastify 5 — auth, domain logic; the only DB access
 packages/contracts  permissions, status catalogues, coordinate transform
+packages/authz-core pure hierarchy and permission decision functions
+packages/db         Drizzle schema, migrations, seeds
 docs/               architecture and ADRs
 ```
+
+## Tests
+
+```bash
+pnpm test    # 114 tests: 31 authz kernel, 41 schema, 42 auth/API
+```
+
+The schema suite drops and recreates the database, so run it against a
+disposable instance and not while the API is running.
 
 ## Supported organizations (data-driven, not hardcoded)
 

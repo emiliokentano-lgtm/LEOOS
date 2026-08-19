@@ -18,3 +18,4 @@ the old one.
 | [0007](0007-hierarchy-as-integer-level.md) | Integer rank levels rather than a role tree | Accepted |
 | [0008](0008-soft-deletion.md) | Soft deletion for operational records | Accepted |
 | [0009](0009-uuid-v7-primary-keys.md) | UUID v7 primary keys | Accepted |
+| [0010](0010-web-tier-holds-cookie-api-holds-truth.md) | Web tier holds the cookie; the API holds the truth | Accepted |

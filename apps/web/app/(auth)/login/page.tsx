@@ -5,7 +5,13 @@ import { LoginForm } from './login-form';
 
 export const metadata: Metadata = { title: 'Sign in' };
 
-export default function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string; reason?: string }>;
+}) {
+  const { next = '', reason } = await searchParams;
+
   return (
     <AuthCard
       title="Sign in"
@@ -22,7 +28,7 @@ export default function LoginPage() {
         </div>
       }
     >
-      <LoginForm />
+      <LoginForm next={next} expired={reason === 'expired'} />
     </AuthCard>
   );
 }

@@ -15,3 +15,8 @@ Per engineering rules 34, 35 and 45:
   and demo seeds there are suffixed `_demo`.
 
 When the API lands, these modules are deleted, not adapted.
+
+**Progress:** `session.ts` has been DELETED — authentication is real now, and
+`apps/web/lib/session.ts` reads the live session from the API. The remaining
+files back screens whose modules are not built yet (persons, vehicles, dispatch,
+map); each goes the same way as its module lands.

@@ -4,6 +4,7 @@ import type { OrganizationSummary } from '@leoos/contracts';
 import type { NavSection } from '@/lib/navigation';
 import type { Session } from '@/lib/session';
 import { ToastProvider, TooltipProvider } from '@/components/ui';
+import { AuthProvider, type AuthState } from './auth-context';
 import { Sidebar } from './sidebar';
 import { TopBar } from './top-bar';
 import { StatusBar } from './status-bar';
@@ -26,15 +27,18 @@ import { CommandPaletteProvider } from './command-palette';
  * dense tables and the map usable without the whole page moving.
  */
 export function AppShell({
-  sections, session, organization, organizations, children,
+  sections, session, organization, organizations, authState, children,
 }: {
   sections: NavSection[];
   session: Session;
   organization: OrganizationSummary;
   organizations: OrganizationSummary[];
+  /** Cosmetic client-side view of who is signed in — never authoritative. */
+  authState: AuthState;
   children: React.ReactNode;
 }) {
   return (
+    <AuthProvider state={authState}>
     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
       <DutyStatusProvider initialStatus="available">
         <CommandPaletteProvider sections={sections}>
@@ -56,5 +60,6 @@ export function AppShell({
         </CommandPaletteProvider>
       </DutyStatusProvider>
     </TooltipProvider>
+    </AuthProvider>
   );
 }

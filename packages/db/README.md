@@ -31,6 +31,11 @@ pnpm test        # 41 tests against a real database
 | `pnpm seed:demo` | Baseline + demo fixtures; refuses to run in production |
 | `pnpm test` | Schema, constraint and query-plan tests |
 
+> **Run these against a disposable database, and not while the API is running.**
+> The suite drops and recreates the schema on every run — that is deliberate, so
+> it exercises the migration process rather than only the end state — which will
+> break any process holding a connection.
+
 ## Layout
 
 ```

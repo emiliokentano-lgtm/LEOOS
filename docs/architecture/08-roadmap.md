@@ -38,8 +38,13 @@ forward.
 
 ---
 
-## Phase 1 — Authentication & accounts
+## Phase 1 — Authentication & accounts ✅ **COMPLETE**
 *Estimate: 1–1.5 weeks*
+
+Delivered in `apps/api` (Fastify) plus the wiring in `apps/web`. The mock session
+accessor is deleted; `apps/web/lib/session.ts` now reads the live session from the
+API with its signature unchanged, so every screen built in Phase 3 kept working.
+Mail is still behind the console transport and is reported as not delivering.
 
 - `user_account`, `session`, `auth_token`, `user_global_role`, `audit_log` tables
 - Argon2id hashing; registration, login, logout
@@ -246,7 +251,7 @@ Independently of each phase's own exit criteria, no phase is finished until:
 | Phase | Focus | Estimate | Blocking dependency |
 | --- | --- | --- | --- |
 | 0 | Foundation | 3–5 d | — |
-| 1 | Auth & accounts | 1–1.5 w | 0 |
+| 1 | Auth & accounts ✅ | 1–1.5 w | 0 |
 | 2 | **Orgs, roles, permissions** | 2–2.5 w | 1 |
 | 3 | Shell & design system ✅ | 1–1.5 w | — (built first) |
 | 4 | Persons & vehicles | 1.5–2 w | 3 |

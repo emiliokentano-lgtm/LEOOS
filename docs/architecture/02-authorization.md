@@ -1,5 +1,14 @@
 # 02 — Authentication & Authorization
 
+> **Status: Part A implemented, Part B partially implemented.**
+> Authentication (`apps/api/src/modules/auth`) is complete. The authorization
+> KERNEL exists as pure functions in `packages/authz-core` with 31 tests
+> including an exhaustive rank matrix, and context resolution is implemented in
+> `apps/api/src/modules/auth/context.service.ts` with both the cached and the
+> `FOR UPDATE` loaders. What is NOT yet built: the personnel and role mutation
+> endpoints that consume it, and the version-keyed permission cache (§B.6) —
+> every request currently re-resolves memberships. Those land in Phase 2.
+
 This is the highest-risk area of the system. It is specified here in more detail
 than anything else because a subtle mistake here is a privilege-escalation
 vulnerability, not a cosmetic bug.
