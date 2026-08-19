@@ -2,15 +2,15 @@
 
 import { ChevronsUpDown } from 'lucide-react';
 import type { OrganizationSummary } from '@leoos/contracts';
-import { DUTY_STATUS_LIST, DUTY_STATUSES, type DutyStatusKey } from '@leoos/contracts';
 import {
-  Avatar, DutyStatusBadge, Dropdown, DropdownTrigger, DropdownContent,
-  DropdownItem, DropdownLabel, DropdownSeparator, Tooltip,
+  Avatar, Dropdown, DropdownTrigger, DropdownContent,
+  DropdownItem, DropdownLabel, DropdownSeparator, Tooltip, useToast,
 } from '@/components/ui';
 import { Icon } from '@/components/icon';
 import { cn } from '@/lib/utils';
 import { logoutAction } from '@/lib/auth-actions';
 import type { Session } from '@/lib/session';
+import { StatusChip } from '@/components/domain/status-chip';
 import { useDutyStatus } from './duty-status-context';
 
 /**
@@ -28,8 +28,23 @@ export function UserCard({
   organization: OrganizationSummary;
   collapsed: boolean;
 }) {
-  const { status, setStatus } = useDutyStatus();
-  const meta = DUTY_STATUSES[status];
+  const { currentStatus, statuses, setStatus, self } = useDutyStatus();
+  const toast = useToast();
+
+  const dot = currentStatus === null
+    ? 'var(--status-offline)'
+    : `var(${currentStatus.colorToken})`;
+
+  async function pick(statusKey: string) {
+    const result = await setStatus(statusKey);
+    if (!result.ok) {
+      toast.push({
+        tone: 'danger',
+        title: 'Status not changed',
+        description: result.error,
+      });
+    }
+  }
 
   if (collapsed) {
     return (
@@ -38,7 +53,9 @@ export function UserCard({
         content={
           <div className="flex flex-col gap-0.5">
             <span className="font-medium">{session.displayName}</span>
-            <span className="text-text-tertiary">{session.roleName} · {meta.label}</span>
+            <span className="text-text-tertiary">
+              {session.roleName} · {currentStatus?.label ?? 'Off duty'}
+            </span>
           </div>
         }
       >
@@ -48,9 +65,9 @@ export function UserCard({
             <span
               className={cn(
                 'absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-surface',
-                status === 'panic' && 'animate-panic',
+                currentStatus?.isPanic && 'animate-panic',
               )}
-              style={{ backgroundColor: `var(${meta.token})` }}
+              style={{ backgroundColor: dot }}
               aria-hidden
             />
           </span>
@@ -84,29 +101,39 @@ export function UserCard({
           <p className="text-xs font-medium text-text-primary">{session.displayName}</p>
           <p className="text-2xs text-text-tertiary">{session.email}</p>
           <div className="mt-1.5 flex items-center gap-1.5">
-            <DutyStatusBadge status={status} size="sm" />
+            <StatusChip status={currentStatus} />
             <span className="font-mono text-2xs text-text-tertiary">
               Badge {session.badgeNumber}
             </span>
           </div>
         </div>
-        <DropdownSeparator />
-        <DropdownLabel>Set operational status</DropdownLabel>
-        {DUTY_STATUS_LIST.filter((s) => s.key !== 'panic').map((s) => (
-          <DropdownItem
-            key={s.key}
-            onSelect={() => setStatus(s.key as DutyStatusKey)}
-            className="gap-2"
-          >
-            <span style={{ color: `var(${s.token})` }} className="flex">
-              <Icon name={s.icon} className="size-3.5" />
-            </span>
-            <span>{s.label}</span>
-            {s.key === status ? (
-              <span className="ml-auto font-mono text-2xs text-accent">ACTIVE</span>
-            ) : null}
-          </DropdownItem>
-        ))}
+        {/*
+          * The status list comes from the CATALOGUE the server returned, not from
+          * a constant: `operational_status` is a table so an organization can add
+          * its own (engineering rules 5-7). Panic is excluded — it is a separate
+          * action with its own confirmation, not a status you pick from a menu.
+          */}
+        {self?.canOperate && statuses.length > 0 ? (
+          <>
+            <DropdownSeparator />
+            <DropdownLabel>Set operational status</DropdownLabel>
+            {statuses.filter((s) => !s.isPanic).map((s) => (
+              <DropdownItem
+                key={s.key}
+                onSelect={() => { void pick(s.key); }}
+                className="gap-2"
+              >
+                <span style={{ color: `var(${s.colorToken})` }} className="flex">
+                  <Icon name={s.icon} className="size-3.5" />
+                </span>
+                <span>{s.label}</span>
+                {s.key === self?.statusKey ? (
+                  <span className="ml-auto font-mono text-2xs text-accent">ACTIVE</span>
+                ) : null}
+              </DropdownItem>
+            ))}
+          </>
+        ) : null}
         <DropdownSeparator />
         <DropdownItem>Account settings</DropdownItem>
         <DropdownItem>Active sessions</DropdownItem>

@@ -3,7 +3,6 @@
 import * as React from 'react';
 import { Radio, Wifi, WifiOff } from 'lucide-react';
 import type { OrganizationSummary } from '@leoos/contracts';
-import { DUTY_STATUSES } from '@leoos/contracts';
 import { cn, formatTime } from '@/lib/utils';
 import { Tooltip } from '@/components/ui';
 import { INTEGRATION_STATUS } from '@/lib/mock-flag';
@@ -23,8 +22,7 @@ export function StatusBar({
   session: Session;
   organization: OrganizationSummary;
 }) {
-  const { status } = useDutyStatus();
-  const meta = DUTY_STATUSES[status];
+  const { currentStatus } = useDutyStatus();
   const [clock, setClock] = React.useState<string | null>(null);
 
   // Rendered client-side only: a server-rendered clock would hydrate stale.
@@ -58,11 +56,15 @@ export function StatusBar({
 
       <span className="flex items-center gap-1.5">
         <span
-          className={cn('size-2 rounded-full', status === 'panic' && 'animate-panic')}
-          style={{ backgroundColor: `var(${meta.token})` }}
+          className={cn('size-2 rounded-full', currentStatus?.isPanic && 'animate-panic')}
+          style={{
+            backgroundColor: currentStatus === null
+              ? 'var(--status-offline)'
+              : `var(${currentStatus.colorToken})`,
+          }}
           aria-hidden
         />
-        <span className="text-text-secondary">{meta.label}</span>
+        <span className="text-text-secondary">{currentStatus?.label ?? 'Off duty'}</span>
       </span>
 
       <div className="ml-auto flex items-center gap-4">

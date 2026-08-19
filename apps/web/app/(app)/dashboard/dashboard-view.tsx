@@ -5,10 +5,11 @@ import { Activity, ArrowUpRight, Clock, Radio, TriangleAlert, Users } from 'luci
 import type { OrganizationSummary } from '@leoos/contracts';
 import { DUTY_STATUSES, DUTY_STATUS_LIST } from '@leoos/contracts';
 import {
-  Alert, Badge, Button, DutyStatusBadge, Panel, PanelHeader, StatTile,
+  Alert, Badge, Button, Panel, PanelHeader, StatTile,
   EmptyState, Tooltip,
 } from '@/components/ui';
 import { PageContainer } from '@/components/shell/page-container';
+import { StatusChip } from '@/components/domain/status-chip';
 import { useDutyStatus } from '@/components/shell/duty-status-context';
 import { IncidentRow } from '@/components/domain/incident-row';
 import { UnitRow } from '@/components/domain/unit-row';
@@ -33,7 +34,7 @@ export function DashboardView({
   session: Session;
   organization: OrganizationSummary;
 }) {
-  const { status } = useDutyStatus();
+  const { currentStatus } = useDutyStatus();
 
   const openIncidents = MOCK_INCIDENTS.filter((i) => i.status !== 'closed' && i.status !== 'cancelled');
   const unassigned = openIncidents.filter((i) => i.assignedUnitIds.length === 0);
@@ -166,7 +167,7 @@ export function DashboardView({
               <div className="flex flex-col gap-2.5 p-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs text-text-tertiary">Operational status</span>
-                  <DutyStatusBadge status={status} />
+                  <StatusChip status={currentStatus} />
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs text-text-tertiary">Organization</span>

@@ -1,5 +1,5 @@
-import { sql } from 'drizzle-orm';
-import type { Database } from '@leoos/db';
+import { and, asc, eq, inArray } from 'drizzle-orm';
+import { organizationMember, type Database } from '@leoos/db';
 
 /**
  * Row locking for personnel mutations.
@@ -31,12 +31,25 @@ export async function lockMemberships(
   const ids = [...new Set(memberIds.filter(Boolean))];
   if (ids.length === 0) return;
 
-  await tx.execute(sql`
-    SELECT id FROM organization_member
-    WHERE id = ANY(${sql.raw(`ARRAY[${ids.map((id) => `'${id}'::uuid`).join(',')}]`)})
-    ORDER BY id
-    FOR UPDATE
-  `);
+  /**
+   * Built with the query builder rather than raw SQL.
+   *
+   * The ids come from internal state today, which is exactly the reasoning that
+   * turns into an injection the first time someone reuses this helper with a
+   * value off a request body. Interpolating them was the original form; binding
+   * them into a raw `= ANY(...)` was the obvious fix and is WRONG — Drizzle's
+   * `sql` template expands a JS array into one placeholder per element, so a
+   * single-element array binds as a scalar and Postgres rejects the literal.
+   *
+   * `inArray` handles it, is typechecked, and keeps the ORDER BY ... FOR UPDATE
+   * that the deadlock note above depends on.
+   */
+  await tx
+    .select({ id: organizationMember.id })
+    .from(organizationMember)
+    .where(inArray(organizationMember.id, ids))
+    .orderBy(asc(organizationMember.id))
+    .for('update');
 }
 
 /**
@@ -51,11 +64,14 @@ export async function lockMembershipsByUser(
   const ids = [...new Set(userIds.filter(Boolean))];
   if (ids.length === 0) return;
 
-  await tx.execute(sql`
-    SELECT id FROM organization_member
-    WHERE organization_id = ${organizationId}
-      AND user_id = ANY(${sql.raw(`ARRAY[${ids.map((id) => `'${id}'::uuid`).join(',')}]`)})
-    ORDER BY id
-    FOR UPDATE
-  `);
+  // Same reasoning as above: query builder, bound ids, ordered lock.
+  await tx
+    .select({ id: organizationMember.id })
+    .from(organizationMember)
+    .where(and(
+      eq(organizationMember.organizationId, organizationId),
+      inArray(organizationMember.userId, ids),
+    ))
+    .orderBy(asc(organizationMember.id))
+    .for('update');
 }

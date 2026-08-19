@@ -13,6 +13,7 @@ import personRoutes from './modules/persons/person.routes.js';
 import vehicleRoutes from './modules/vehicles/vehicle.routes.js';
 import searchRoutes from './modules/search/search.routes.js';
 import mapRoutes from './modules/map/map.routes.js';
+import dispatchRoutes from './modules/dispatch/dispatch.routes.js';
 import type { MailTransport } from './modules/auth/mail.js';
 import type { LivePositionStore } from './modules/map/sources/live-positions.js';
 import type { PositionSource } from './modules/map/sources/position-source.js';
@@ -67,6 +68,36 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
     disableRequestLogging: config.NODE_ENV === 'test',
   });
 
+  /**
+   * An empty body with a JSON content-type parses as `{}`, not as an error.
+   *
+   * Fastify's default rejects it outright with FST_ERR_CTP_EMPTY_JSON_BODY. That
+   * is defensible in the abstract and a nuisance in practice: every bodyless
+   * action — leave unit, join unit, acknowledge panic, restore role — breaks the
+   * moment a client sets a default JSON content-type, which most HTTP clients do.
+   * It has already caused one round of bugs here (restore-role, set-default-role),
+   * fixed by teaching one client to omit the header. This fixes it at the source
+   * instead, so the next client does not have to know.
+   *
+   * Routes that genuinely require fields still reject `{}` — through their own
+   * Zod schema, with a message naming the missing field rather than a transport
+   * error code.
+   */
+  app.addContentTypeParser(
+    'application/json', { parseAs: 'string' },
+    (_request, body: string, done) => {
+      if (body === undefined || body === null || body.trim() === '') {
+        done(null, {});
+        return;
+      }
+      try {
+        done(null, JSON.parse(body) as unknown);
+      } catch {
+        done(new SyntaxError('The request body is not valid JSON.'), undefined);
+      }
+    },
+  );
+
   await app.register(contextPlugin, { config, db: options.db, mail: options.mail });
   await app.register(errorsPlugin);
   await app.register(authPlugin);
@@ -110,6 +141,12 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
    * view, not two. Visibility is decided per caller in modules/map/map.scope.ts.
    */
   await app.register(mapRoutes, { prefix: '/api/v1/map' });
+  /**
+   * Dispatch spans organizations for the same reason the map does — a joint call
+   * is one board, not two. Visibility and authority are resolved per caller in
+   * modules/dispatch/dispatch.scope.ts.
+   */
+  await app.register(dispatchRoutes, { prefix: '/api/v1/dispatch' });
 
   return app;
 }

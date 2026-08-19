@@ -4,13 +4,14 @@ import * as React from 'react';
 import { usePathname } from 'next/navigation';
 import { Bell, FlaskConical, Search, TriangleAlert } from 'lucide-react';
 import {
-  Badge, Breadcrumb, Button, DutyStatusBadge, IconButton, Tooltip,
+  Badge, Breadcrumb, Button, IconButton, Tooltip,
   Dropdown, DropdownTrigger, DropdownContent, DropdownItem, DropdownLabel, DropdownSeparator,
-  ConfirmationDialog, type Crumb,
+  ConfirmationDialog, useToast, type Crumb,
 } from '@/components/ui';
 import { PAGE_META } from '@/lib/navigation';
 import { IS_DEMO_DATA } from '@/lib/mock-flag';
 import { cn, timeAgo } from '@/lib/utils';
+import { StatusChip } from '@/components/domain/status-chip';
 import { useDutyStatus } from './duty-status-context';
 import { useCommandPalette } from './command-palette';
 import { MOCK_NOW } from '@/mocks/operations';
@@ -31,9 +32,30 @@ const MOCK_NOTIFICATIONS: Notification[] = [
 
 export function TopBar() {
   const pathname = usePathname();
-  const { status, panic, triggerPanic, clearPanic } = useDutyStatus();
+  const { currentStatus, panic, triggerPanic, clearPanic, self } = useDutyStatus();
   const { open: openPalette } = useCommandPalette();
   const [panicOpen, setPanicOpen] = React.useState(false);
+  const [panicPending, setPanicPending] = React.useState(false);
+  const toast = useToast();
+
+  /**
+   * Runs a panic action and surfaces a refusal.
+   *
+   * A silent failure here is the worst possible outcome: the operator believes
+   * an alert went out and it did not.
+   */
+  async function runPanic(fn: () => Promise<{ ok: boolean; error?: string }>) {
+    setPanicPending(true);
+    const result = await fn();
+    setPanicPending(false);
+    if (!result.ok) {
+      toast.push({
+        tone: 'danger',
+        title: 'The alert was not sent',
+        description: result.error,
+      });
+    }
+  }
 
   const segments = pathname.split('/').filter(Boolean);
   const root = segments[0] ?? 'dashboard';
@@ -88,21 +110,33 @@ export function TopBar() {
           </Tooltip>
         ) : null}
 
-        {/* Operational status */}
-        <DutyStatusBadge status={status} />
+        {/* Operational status — from the server, not from a click. */}
+        {self !== null ? <StatusChip status={currentStatus} /> : null}
 
-        {/* Panic — always reachable, never behind a menu. */}
-        {panic ? (
-          <Button variant="danger" size="sm" className="animate-panic" onClick={clearPanic}>
-            <TriangleAlert aria-hidden />
-            Clear panic
-          </Button>
-        ) : (
-          <Button variant="danger-outline" size="sm" onClick={() => setPanicOpen(true)}>
-            <TriangleAlert aria-hidden />
-            Panic
-          </Button>
-        )}
+        {/*
+          * Panic — always reachable, never behind a menu.
+          *
+          * Rendered only for an account that can actually operate: a decorative
+          * panic button is worse than none, because somebody will press it in an
+          * emergency and believe help is coming.
+          */}
+        {self?.canOperate ? (
+          panic ? (
+            <Button
+              variant="danger" size="sm" className="animate-panic"
+              disabled={panicPending}
+              onClick={() => { void runPanic(clearPanic); }}
+            >
+              <TriangleAlert aria-hidden />
+              Stand down
+            </Button>
+          ) : (
+            <Button variant="danger-outline" size="sm" onClick={() => setPanicOpen(true)}>
+              <TriangleAlert aria-hidden />
+              Panic
+            </Button>
+          )
+        ) : null}
 
         {/* Notifications */}
         <Dropdown>
@@ -149,21 +183,27 @@ export function TopBar() {
         </Dropdown>
       </div>
 
+      {/*
+        * The consequences listed are exactly what the server does — no more.
+        * An earlier version of this dialog promised a priority-1 incident, which
+        * the panic service does not create. A confirmation that overstates what
+        * will happen is a confirmation nobody can rely on.
+        */}
       <ConfirmationDialog
         open={panicOpen}
         onOpenChange={setPanicOpen}
-        title="Trigger panic alert?"
+        title="Raise a panic alert?"
         tone="danger"
-        confirmLabel="Trigger panic"
-        description="This broadcasts your position and identity to every dispatcher and unit in your organization."
+        confirmLabel="Raise panic"
+        description="This broadcasts your identity and last known position to every dispatcher who can see your organization."
         consequences={
           <ul className="list-inside list-disc space-y-0.5">
-            <li>Set your status to Panic</li>
-            <li>Alert all on-duty units with your last known position</li>
-            <li>Create a priority-1 incident</li>
+            <li>Set your status to Panic, on every board</li>
+            <li>Raise a standing alert until a dispatcher stands it down</li>
+            <li>Record the alert against your name</li>
           </ul>
         }
-        onConfirm={() => triggerPanic()}
+        onConfirm={() => { void runPanic(triggerPanic); }}
       />
     </header>
   );

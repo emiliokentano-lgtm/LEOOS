@@ -40,7 +40,7 @@ export function AppShell({
   return (
     <AuthProvider state={authState}>
     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
-      <DutyStatusProvider initialStatus="available">
+      <DutyStatusProvider>
         <CommandPaletteProvider sections={sections}>
           <ToastProvider>
             <div className="flex h-dvh w-full overflow-hidden bg-base">

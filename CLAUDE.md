@@ -119,6 +119,16 @@ is actually held.
 | 42, 47, 48 | ADRs for non-obvious decisions; forward-only reviewed migrations; `/api/v1` versioned surface. | [docs/adr](docs/adr/) |
 | 43, 44, 49, 50 | Design principles; no decorative animation; security review as a Phase 8 exit gate. | [design §1](docs/architecture/06-design-system.md), [risks](docs/architecture/07-risks.md) |
 
+### Dispatch-specific
+
+| Rules | Mechanism | Location |
+| --- | --- | --- |
+| 3, 4 | One duty-status truth: the shell reads the server, it does not hold a local status. Requested incident vocabulary is presented over the stored enum rather than duplicated into new columns. | [dispatch §2](docs/architecture/09-dispatch.md) |
+| 5, 6, 7 | `operational_status` is a table; the status catalogue reaches the UI as data and no component branches on a key. | [dispatch §2](docs/architecture/09-dispatch.md) |
+| 9, 10, 11 | Self-actions need only an active membership; everything touching another person needs a permission, checked after scope, inside the transaction. | [dispatch §1, §8](docs/architecture/09-dispatch.md) |
+| 23 | Every dispatch state change writes an append-only `incident_log` entry AND an audit row in the same transaction. | [dispatch §5](docs/architecture/09-dispatch.md) |
+| 45 | Panic is a `panic_event` row with a lifecycle, not a client flag; the confirmation dialog lists only what the server actually does. | [dispatch §6](docs/architecture/09-dispatch.md) |
+
 ---
 
 ## Standing conventions

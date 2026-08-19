@@ -1,25 +1,48 @@
 'use client';
 
 import * as React from 'react';
-import type { DutyStatusKey } from '@leoos/contracts';
+import type { DispatchSelfState, OperationalStatusMeta } from '@leoos/contracts';
+import {
+  resolvePanic, setOwnStatus, triggerPanic as triggerPanicAction,
+} from '@/lib/dispatch-actions';
 
 /**
- * Holds the operator's current duty status for the shell.
+ * The operator's duty status, for the shell.
  *
- * UI-local state only, for this phase. From Phase 5 the setter calls the API and
- * the value arrives back over the WebSocket — the consumer contract stays the
- * same, so the sidebar, top bar and status bar do not change.
+ * SERVER STATE, not UI state. This used to hold a local `useState` that every
+ * screen read — which was fine while nothing was persisted, and became a
+ * parallel truth the moment dispatch shipped (engineering rule 3). A top bar
+ * showing "Available" because of a click, while the server and every other
+ * operator's board say "Busy", is precisely the failure this system exists to
+ * avoid.
  *
- * This is NOT an authorization boundary and it is NOT authoritative: the server
- * owns duty status.
+ * So: it loads from the API, every mutation goes through the API, and the value
+ * is re-read afterwards. Nothing here decides anything — it reflects.
+ *
+ * It polls slowly. The dispatch screen has its own 4-second feed; the shell only
+ * needs to notice that someone else stood down your panic, or that you changed
+ * status in another tab. Screens that mutate call `refresh()` directly, so the
+ * poll is a backstop rather than the mechanism.
  */
 
 interface DutyStatusContextValue {
-  status: DutyStatusKey;
-  setStatus: (status: DutyStatusKey) => void;
+  /** Null while loading, or when the account has no dispatch access. */
+  self: DispatchSelfState | null;
+  statuses: OperationalStatusMeta[];
+  loading: boolean;
+  /** True when the caller has an unresolved panic of their own. */
   panic: boolean;
-  triggerPanic: () => void;
-  clearPanic: () => void;
+  /**
+   * The catalogue entry for the current status, resolved here rather than by
+   * each consumer looking up a hardcoded map. Statuses are database rows
+   * (engineering rules 5-7), so an organization's own status has to render the
+   * same way the seeded ones do.
+   */
+  currentStatus: OperationalStatusMeta | null;
+  setStatus: (statusKey: string) => Promise<{ ok: boolean; error?: string }>;
+  triggerPanic: () => Promise<{ ok: boolean; error?: string }>;
+  clearPanic: () => Promise<{ ok: boolean; error?: string }>;
+  refresh: () => void;
 }
 
 const DutyStatusContext = React.createContext<DutyStatusContextValue | null>(null);
@@ -30,38 +53,90 @@ export function useDutyStatus(): DutyStatusContextValue {
   return ctx;
 }
 
-export function DutyStatusProvider({
-  initialStatus = 'available',
-  children,
-}: {
-  initialStatus?: DutyStatusKey;
-  children: React.ReactNode;
-}) {
-  const [status, setStatusInternal] = React.useState<DutyStatusKey>(initialStatus);
-  const [previous, setPrevious] = React.useState<DutyStatusKey>(initialStatus);
+/** Backstop poll. The dispatch screen refreshes far faster on its own. */
+const SHELL_POLL_MS = 15_000;
 
-  const setStatus = React.useCallback((next: DutyStatusKey) => {
-    setStatusInternal((current) => {
-      if (current !== 'panic') setPrevious(current);
-      return next;
-    });
-  }, []);
+export function DutyStatusProvider({ children }: { children: React.ReactNode }) {
+  const [self, setSelf] = React.useState<DispatchSelfState | null>(null);
+  const [statuses, setStatuses] = React.useState<OperationalStatusMeta[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [token, setToken] = React.useState(0);
 
-  const triggerPanic = React.useCallback(() => {
-    setStatusInternal((current) => {
-      if (current !== 'panic') setPrevious(current);
-      return 'panic';
-    });
-  }, []);
+  const refresh = React.useCallback(() => setToken((t) => t + 1), []);
 
-  const clearPanic = React.useCallback(() => {
-    setStatusInternal(previous === 'panic' ? 'available' : previous);
-  }, [previous]);
+  React.useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
 
-  const value = React.useMemo(
-    () => ({ status, setStatus, panic: status === 'panic', triggerPanic, clearPanic }),
-    [status, setStatus, triggerPanic, clearPanic],
+    const load = () => {
+      fetch('/api/dispatch/self', { cache: 'no-store', signal: controller.signal })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((data: { self: DispatchSelfState; statuses: OperationalStatusMeta[] } | null) => {
+          if (cancelled) return;
+          setSelf(data?.self ?? null);
+          setStatuses(data?.statuses ?? []);
+          setLoading(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setLoading(false);
+        });
+    };
+
+    load();
+    const timer = setInterval(() => {
+      // A hidden tab does not poll. Nothing here is urgent enough to burn a
+      // request behind someone's back.
+      if (document.visibilityState === 'visible') load();
+    }, SHELL_POLL_MS);
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      clearInterval(timer);
+    };
+  }, [token]);
+
+  const setStatus = React.useCallback(async (statusKey: string) => {
+    const result = await setOwnStatus(statusKey);
+    if (result.ok) refresh();
+    return result;
+  }, [refresh]);
+
+  const trigger = React.useCallback(async () => {
+    const result = await triggerPanicAction();
+    if (result.ok) refresh();
+    return result;
+  }, [refresh]);
+
+  const clear = React.useCallback(async () => {
+    const panicId = self?.ownPanicId ?? null;
+    if (panicId === null) {
+      // Nothing to stand down. Reported rather than silently succeeding, because
+      // "I pressed clear and nothing happened" is worse than a message.
+      return { ok: false, error: 'You have no active panic alert.' };
+    }
+    const result = await resolvePanic(panicId);
+    if (result.ok) refresh();
+    return result;
+  }, [self?.ownPanicId, refresh]);
+
+  const currentStatus = React.useMemo(
+    () => statuses.find((s) => s.key === self?.statusKey) ?? null,
+    [statuses, self?.statusKey],
   );
+
+  const value = React.useMemo<DutyStatusContextValue>(() => ({
+    self,
+    statuses,
+    loading,
+    currentStatus,
+    panic: self?.ownPanicId != null || self?.statusKey === 'panic',
+    setStatus,
+    triggerPanic: trigger,
+    clearPanic: clear,
+    refresh,
+  }), [self, statuses, loading, currentStatus, setStatus, trigger, clear, refresh]);
 
   return <DutyStatusContext.Provider value={value}>{children}</DutyStatusContext.Provider>;
 }

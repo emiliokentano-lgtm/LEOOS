@@ -74,6 +74,12 @@ connection's visible unit set from that user's organizations and whether they ho
 to a PD subscriber. Filtering on the server means covert positions never reach a
 browser that could inspect them.
 
+**Until the socket lands**, the map and dispatch both poll and carry a
+monotonic marker the server compares before serialising anything — `revision` for
+dispatch, the tick's unit set for the map. Both are shaped so that moving to the
+topics above changes the transport and nothing else; see
+[05-map §8](05-map.md) and [09-dispatch §7](09-dispatch.md).
+
 ---
 
 ## 4. Message protocol

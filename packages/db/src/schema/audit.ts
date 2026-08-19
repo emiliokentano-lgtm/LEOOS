@@ -153,6 +153,12 @@ export const AUDIT_ACTIONS = {
   STATUS_CHANGED: 'status.changed',
   PANIC_TRIGGERED: 'panic.triggered',
   PANIC_ACKNOWLEDGED: 'panic.acknowledged',
+  /**
+   * Distinct from acknowledgement. Acknowledging means somebody has SEEN the
+   * alert; resolving means the situation is over. Conflating them would lose the
+   * gap between the two, which is the number anyone reviewing a panic asks for.
+   */
+  PANIC_RESOLVED: 'panic.resolved',
 
   // map
   /**

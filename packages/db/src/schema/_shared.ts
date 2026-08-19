@@ -183,10 +183,23 @@ export const vehicleInsuranceEnum = pgEnum('vehicle_insurance_status', [
 
 export const unitStatusEnum = pgEnum('unit_status', ['active', 'disbanded']);
 
+/**
+ * Incident lifecycle.
+ *
+ * Stored keys, not display labels — the UI reads `pending` as "Open" and
+ * `on_scene` as "Active" (see INCIDENT_STATUSES in @leoos/contracts). Renaming
+ * the stored values to match the labels would be a migration and a data rewrite
+ * buying nothing, and it would break every index and CHECK that names them.
+ *
+ * `contained` was added in migration 0006: the situation is under control but
+ * the call is not finished. It is genuinely distinct from `on_hold` (parked,
+ * waiting on something) and from `closed` (over).
+ */
 export const incidentStatusEnum = pgEnum('incident_status', [
   'pending',
   'dispatched',
   'on_scene',
+  'contained',
   'on_hold',
   'closed',
   'cancelled',

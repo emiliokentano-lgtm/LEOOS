@@ -1,68 +1,162 @@
 'use client';
 
 import * as React from 'react';
-import { Plus, Radio, TriangleAlert } from 'lucide-react';
-import { DUTY_STATUSES, PRIORITY_LIST } from '@leoos/contracts';
+import { Plus, Radio, RefreshCw, TriangleAlert } from 'lucide-react';
 import {
-  Badge, Button, EmptyState, FilterBar, FilterChip, OrgBadge,
-  Panel, PanelHeader, PriorityBadge, IncidentStatusBadge, Tabs, TabsList, TabsTrigger,
-  Tooltip,
+  EMPTY_DISPATCH_FILTER, INCIDENT_STATUSES, PRIORITY_LIST, compareIncidentsForQueue,
+  countActiveDispatchFilters, matchesDispatchIncident,
+  type DispatchBoard, type DispatchFilterState, type DispatchIncidentSummary,
+} from '@leoos/contracts';
+import {
+  Alert, Badge, Button, EmptyState, FilterBar, FilterChip, Panel, PanelHeader,
+  SearchInput, Tabs, TabsList, TabsTrigger, useToast,
 } from '@/components/ui';
-import { IncidentRow } from '@/components/domain/incident-row';
-import { UnitRow } from '@/components/domain/unit-row';
-import { formatDateTime, formatElapsed } from '@/lib/utils';
-import {
-  MOCK_INCIDENTS, MOCK_NOW, MOCK_UNITS, type MockIncident,
-} from '@/mocks/operations';
-import { mockOrg } from '@/mocks/organizations';
+import { HttpDispatchSource, type DispatchConnectionState } from '@/lib/dispatch/dispatch-source';
+import { useNow } from '@/lib/map/use-now';
+import { cn, formatElapsed } from '@/lib/utils';
+import { StatusControl } from './status-control';
+import { PanicBanner } from './panic-banner';
+import { IncidentDetailPanel } from './incident-detail';
+import { UnitBoard } from './unit-board';
+import { NewIncidentDialog } from './new-incident-dialog';
 
 /**
  * The Leitstelle — the densest screen in the product.
  *
  * Three columns on one 1920×1080 display without scrolling the page:
- *   queue (left) · selected incident + timeline (centre) · unit board (right)
+ *   queue (left) · selected incident and its timeline (centre) · units (right)
  *
- * Each column scrolls independently. Nothing here performs a mutation in this
- * phase; the controls are present so the layout and affordances are settled.
+ * Each column scrolls independently. Everything on it is server state arriving
+ * through `DispatchDataSource`; nothing here is a local toggle that another
+ * operator cannot see.
  */
-export function DispatchView() {
-  const [selectedId, setSelectedId] = React.useState<string | null>(MOCK_INCIDENTS[0]?.id ?? null);
-  const [priorityFilter, setPriorityFilter] = React.useState<Set<number>>(new Set());
+export function DispatchView({ initialBoard }: { initialBoard: DispatchBoard | null }) {
+  const [board, setBoard] = React.useState<DispatchBoard | null>(initialBoard);
+  const [connection, setConnection] = React.useState<DispatchConnectionState>('connecting');
+  const [connectionDetail, setConnectionDetail] = React.useState<string | null>(null);
+
+  const [filter, setFilter] = React.useState<DispatchFilterState>(EMPTY_DISPATCH_FILTER);
   const [tab, setTab] = React.useState('open');
+  const [selectedId, setSelectedId] = React.useState<string | null>(null);
+  const [creating, setCreating] = React.useState(false);
 
-  const incidents = React.useMemo(() => {
-    return MOCK_INCIDENTS.filter((i) => {
-      const isOpen = i.status !== 'closed' && i.status !== 'cancelled';
-      if (tab === 'open' && !isOpen) return false;
-      if (tab === 'unassigned' && (!isOpen || i.assignedUnitIds.length > 0)) return false;
-      if (tab === 'closed' && isOpen) return false;
-      if (priorityFilter.size > 0 && !priorityFilter.has(i.priority)) return false;
-      return true;
-    }).sort((a, b) => a.priority - b.priority || a.createdAt.getTime() - b.createdAt.getTime());
-  }, [tab, priorityFilter]);
+  const sourceRef = React.useRef<HttpDispatchSource | null>(null);
+  const now = useNow();
+  const toast = useToast();
 
-  const selected = MOCK_INCIDENTS.find((i) => i.id === selectedId) ?? null;
-  const assignedUnits = selected
-    ? MOCK_UNITS.filter((u) => selected.assignedUnitIds.includes(u.id))
-    : [];
-  const availableUnits = MOCK_UNITS.filter((u) => DUTY_STATUSES[u.status].isAvailable);
+  // ── Feed ────────────────────────────────────────────────────────────────
+  React.useEffect(() => {
+    const feed = new HttpDispatchSource();
+    sourceRef.current = feed;
+    feed.start({
+      onBoard: setBoard,
+      onStateChange(state, detail) {
+        setConnection(state);
+        setConnectionDetail(detail);
+      },
+    });
+    return () => feed.stop();
+  }, []);
 
-  const openCount = MOCK_INCIDENTS.filter((i) => i.status !== 'closed' && i.status !== 'cancelled').length;
-  const unassignedCount = MOCK_INCIDENTS.filter(
-    (i) => i.status !== 'closed' && i.status !== 'cancelled' && i.assignedUnitIds.length === 0,
-  ).length;
+  React.useEffect(() => {
+    sourceRef.current?.setIncludeClosed(tab === 'closed');
+  }, [tab]);
+
+  const refresh = React.useCallback(() => sourceRef.current?.refresh(), []);
+
+  // ── Derived ─────────────────────────────────────────────────────────────
+  // Memoised: a fresh array identity every render would re-run the queue memo
+  // and re-bind effects on every poll, which is every four seconds.
+  const incidents = React.useMemo(() => board?.incidents ?? [], [board]);
+  const units = React.useMemo(() => board?.units ?? [], [board]);
+  const panics = React.useMemo(() => board?.panics ?? [], [board]);
+  const capabilities = board?.capabilities ?? null;
+  const self = board?.self ?? null;
+
+  const queue = React.useMemo(() => {
+    return incidents
+      .filter((i) => {
+        const open = INCIDENT_STATUSES[i.status].isOpen;
+        if (tab === 'open' && !open) return false;
+        if (tab === 'unassigned' && (!open || i.assignedUnitIds.length > 0)) return false;
+        if (tab === 'closed' && open) return false;
+        return matchesDispatchIncident(i, filter, self?.unitId ?? null);
+      })
+      .sort(compareIncidentsForQueue);
+  }, [incidents, tab, filter, self?.unitId]);
+
+  /**
+   * The selection is DERIVED, not synchronised.
+   *
+   * A call that leaves the board — closed while the queue shows only open ones —
+   * simply resolves to null and the panel returns to its empty state. An effect
+   * clearing `selectedId` would do the same thing a render later, and would
+   * fight the operator if they switch to the Closed tab to keep reading it.
+   */
+  const selected = incidents.find((i) => i.id === selectedId) ?? null;
+
+  const counts = board?.counts ?? null;
+  const activeFilters = countActiveDispatchFilters(filter);
+
+  function toggleIn<T>(list: T[], value: T): T[] {
+    return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+  }
+
+  if (board === null) {
+    return (
+      <div className="flex h-full items-center justify-center p-6">
+        <Alert tone="danger" title="Dispatch is unavailable" className="max-w-lg">
+          The dispatch service could not be reached. Nothing shown elsewhere should be
+          treated as current.
+        </Alert>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {/* Panic is the first thing on the screen, above the filters. It is the
+          only thing here that can outrank whatever the operator is doing. */}
+      {panics.length > 0 ? (
+        <PanicBanner
+          panics={panics}
+          canAcknowledge={capabilities?.canAcknowledgePanic ?? false}
+          onChanged={refresh}
+        />
+      ) : null}
+
+      {connection === 'reconnecting' || connection === 'failed' ? (
+        <div className="px-3 pt-3">
+          <Alert
+            tone={connection === 'failed' ? 'danger' : 'warning'}
+            title={connection === 'failed' ? 'Dispatch feed stopped' : 'Reconnecting'}
+          >
+            {connectionDetail ?? 'The board may be out of date.'}
+          </Alert>
+        </div>
+      ) : null}
+
       <FilterBar
-        activeCount={priorityFilter.size}
-        onClearAll={() => setPriorityFilter(new Set())}
+        activeCount={activeFilters}
+        onClearAll={() => setFilter(EMPTY_DISPATCH_FILTER)}
         trailing={
-          <Tooltip content="Incident creation lands with the dispatch module (Phase 5)">
-            <Button variant="primary" size="sm" disabled>
-              <Plus aria-hidden /> New incident
+          <>
+            <SearchInput
+              value={filter.query}
+              onValueChange={(query) => setFilter((f) => ({ ...f, query }))}
+              placeholder="Find a call…"
+              inputSize="sm"
+              className="w-[190px]"
+            />
+            <Button variant="secondary" size="sm" onClick={refresh}>
+              <RefreshCw aria-hidden /> Refresh
             </Button>
-          </Tooltip>
+            {capabilities?.canCreateIncident ? (
+              <Button size="sm" onClick={() => setCreating(true)}>
+                <Plus aria-hidden /> New call
+              </Button>
+            ) : null}
+          </>
         }
       >
         <span className="mr-1 text-2xs uppercase tracking-wide text-text-disabled">Priority</span>
@@ -70,193 +164,228 @@ export function DispatchView() {
           <FilterChip
             key={p.value}
             label={p.label}
+            title={`${p.name} — ${p.description}`}
             color={`var(${p.token})`}
-            active={priorityFilter.has(p.value)}
-            onToggle={() => {
-              const next = new Set(priorityFilter);
-              if (next.has(p.value)) next.delete(p.value); else next.add(p.value);
-              setPriorityFilter(next);
-            }}
+            active={filter.priorities.includes(p.value)}
+            count={incidents.filter((i) => i.priority === p.value
+              && INCIDENT_STATUSES[i.status].isOpen).length}
+            onToggle={() => setFilter((f) => ({
+              ...f, priorities: toggleIn(f.priorities, p.value),
+            }))}
           />
         ))}
+        <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+        <FilterChip
+          label="My unit's calls"
+          active={filter.onlyMine}
+          onToggle={() => setFilter((f) => ({ ...f, onlyMine: !f.onlyMine }))}
+        />
       </FilterBar>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 lg:grid-cols-[minmax(300px,1fr)_minmax(0,1.5fr)] xl:grid-cols-[minmax(320px,1fr)_minmax(0,1.6fr)_minmax(280px,1fr)]">
+      {counts !== null ? <CountsStrip counts={counts} /> : null}
+
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(280px,340px)_minmax(0,1fr)_minmax(300px,360px)] gap-3 p-3">
         {/* Queue */}
         <Panel flush className="min-h-0">
-          <div className="shrink-0 border-b border-border-subtle px-1">
+          <PanelHeader
+            title="Call queue"
+            actions={<Badge variant="neutral" mono>{queue.length}</Badge>}
+          />
+          <div className="border-b border-border-subtle px-2 pb-2">
             <Tabs value={tab} onValueChange={setTab}>
-              <TabsList className="border-b-0">
-                <TabsTrigger value="open" count={openCount}>Open</TabsTrigger>
-                <TabsTrigger value="unassigned" count={unassignedCount}>Unassigned</TabsTrigger>
+              <TabsList>
+                <TabsTrigger value="open">Open</TabsTrigger>
+                <TabsTrigger value="unassigned">Unassigned</TabsTrigger>
                 <TabsTrigger value="closed">Closed</TabsTrigger>
               </TabsList>
             </Tabs>
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
-            {incidents.length === 0 ? (
+            {queue.length === 0 ? (
               <EmptyState
-                variant="filtered"
-                title="No incidents in this view"
-                description="Adjust the tab or priority filters."
+                variant={activeFilters > 0 ? 'filtered' : 'empty'}
+                title={activeFilters > 0 ? 'No calls match' : 'No calls'}
+                description={activeFilters > 0
+                  ? 'Adjust the filters above.'
+                  : tab === 'closed' ? 'No closed calls in the recent window.' : 'The board is clear.'}
               />
             ) : (
-              incidents.map((incident) => (
-                <IncidentRow
+              queue.map((incident) => (
+                <QueueRow
                   key={incident.id}
                   incident={incident}
+                  now={now}
                   selected={incident.id === selectedId}
-                  onSelect={(i) => setSelectedId(i.id)}
+                  isMine={self?.unitId !== null && self?.unitId !== undefined
+                    && incident.assignedUnitIds.includes(self.unitId)}
+                  onSelect={() => setSelectedId(incident.id)}
                 />
               ))
             )}
           </div>
         </Panel>
 
-        {/* Selected incident */}
-        <Panel flush className="min-h-0">
-          {selected ? (
-            <IncidentDetailPanel incident={selected} />
+        {/* Detail */}
+        <div className="flex min-h-0 flex-col">
+          {selected === null ? (
+            <Panel className="min-h-0 flex-1">
+              <EmptyState
+                icon={<Radio aria-hidden />}
+                title="No call selected"
+                description="Choose a call from the queue to see its detail and timeline."
+              />
+            </Panel>
           ) : (
-            <EmptyState title="No incident selected" description="Choose a call from the queue." />
+            <IncidentDetailPanel
+              key={selected.id}
+              summary={selected}
+              units={units}
+              capabilities={capabilities}
+              onChanged={refresh}
+              onClose={() => setSelectedId(null)}
+            />
           )}
-        </Panel>
+        </div>
 
-        {/* Unit board */}
-        <Panel flush className="hidden min-h-0 xl:flex">
-          <PanelHeader
-            title="Unit board"
-            icon={<Radio />}
-            actions={<Badge variant="neutral" mono>{availableUnits.length} avail</Badge>}
+        {/* Right column: self, then units */}
+        <div className="flex min-h-0 flex-col gap-3 overflow-auto">
+          {self !== null ? (
+            <StatusControl
+              self={self}
+              statuses={board.statuses}
+              units={units}
+              onChanged={refresh}
+            />
+          ) : null}
+          <UnitBoard
+            units={units}
+            selfUnitId={self?.unitId ?? null}
+            canManage={capabilities?.canManageUnits ?? false}
+            onChanged={refresh}
+            onSelectIncident={setSelectedId}
           />
-          <div className="min-h-0 flex-1 overflow-auto">
-            {assignedUnits.length > 0 ? (
-              <>
-                <p className="bg-raised px-3 py-1 text-2xs font-semibold uppercase tracking-wide text-text-tertiary">
-                  Assigned to this call
-                </p>
-                {assignedUnits.map((u) => <UnitRow key={u.id} unit={u} />)}
-              </>
-            ) : null}
-            <p className="bg-raised px-3 py-1 text-2xs font-semibold uppercase tracking-wide text-text-tertiary">
-              Available
-            </p>
-            {availableUnits.length === 0 ? (
-              <EmptyState title="No available units" description="Every unit is currently engaged." />
-            ) : (
-              availableUnits.map((u) => <UnitRow key={u.id} unit={u} />)
-            )}
-          </div>
-        </Panel>
+        </div>
       </div>
+
+      {creating ? (
+        <NewIncidentDialog
+          incidentTypes={board.incidentTypes}
+          onClose={() => setCreating(false)}
+          onCreated={() => {
+            setCreating(false);
+            refresh();
+            toast.push({ tone: 'success', title: 'Call created' });
+          }}
+        />
+      ) : null}
     </div>
   );
 }
 
-function IncidentDetailPanel({ incident }: { incident: MockIncident }) {
-  const org = mockOrg(incident.organizationId);
-  const units = MOCK_UNITS.filter((u) => incident.assignedUnitIds.includes(u.id));
-
-  // Illustrative timeline — the real one is the append-only incident_log.
-  const timeline = [
-    { at: incident.createdAt, actor: 'System', text: `Incident created from ${incident.callerName ? 'caller report' : 'dispatch'}` },
-    ...(units.length > 0
-      ? [{ at: new Date(incident.createdAt.getTime() + 45_000), actor: 'Dispatch', text: `Assigned ${units.map((u) => u.callsign).join(', ')}` }]
-      : []),
-    ...(incident.status === 'on_scene'
-      ? [{ at: new Date(incident.createdAt.getTime() + 180_000), actor: units[0]?.callsign ?? 'Unit', text: 'Arrived on scene' }]
-      : []),
+/**
+ * The board header.
+ *
+ * Exactly the figures the brief asks for, computed server-side over the rows
+ * this caller may see. Counts are shown next to the lists they describe, so a
+ * count that disagreed with its list would be visible immediately — which is
+ * why they are derived from the same payload rather than queried separately.
+ */
+function CountsStrip({ counts }: { counts: NonNullable<DispatchBoard['counts']> }) {
+  const items: { label: string; value: number; tone?: 'danger' | 'warning' }[] = [
+    { label: 'Open', value: counts.openIncidents },
+    { label: 'Unassigned', value: counts.unassignedIncidents, tone: counts.unassignedIncidents > 0 ? 'warning' : undefined },
+    { label: 'Critical', value: counts.criticalIncidents, tone: counts.criticalIncidents > 0 ? 'danger' : undefined },
+    { label: 'Available', value: counts.unitsAvailable },
+    { label: 'Busy', value: counts.unitsBusy },
+    { label: 'In operation', value: counts.unitsInOperation },
+    { label: 'At HQ', value: counts.unitsAtHq },
+    { label: 'Panic', value: counts.unitsPanic, tone: counts.unitsPanic > 0 ? 'danger' : undefined },
   ];
 
   return (
-    <>
-      <PanelHeader
-        title={<span className="font-mono">{incident.number}</span>}
-        icon={<TriangleAlert />}
-        actions={
-          <>
-            <PriorityBadge priority={incident.priority} />
-            <IncidentStatusBadge status={incident.status} />
-          </>
-        }
-      />
-
-      <div className="min-h-0 flex-1 overflow-auto">
-        <div className="border-b border-border-subtle p-3">
-          <div className="flex items-center gap-2">
-            <h3 className="text-sm font-semibold text-text-primary">{incident.type}</h3>
-            <OrgBadge shortName={org.shortName} color={org.color} />
-          </div>
-          <p className="mt-1 text-sm text-text-secondary">{incident.title}</p>
-
-          <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-3">
-            <Field label="Location" value={incident.locationText} />
-            <Field label="Coordinates" value={`${incident.x.toFixed(0)}, ${incident.y.toFixed(0)}`} mono />
-            <Field label="Elapsed" value={formatElapsed(incident.createdAt, MOCK_NOW)} mono />
-            <Field label="Received" value={formatDateTime(incident.createdAt)} />
-            <Field label="Caller" value={incident.callerName ?? '—'} />
-            <Field label="Units" value={String(incident.assignedUnitIds.length)} mono />
-          </dl>
-        </div>
-
-        <div className="border-b border-border-subtle">
-          <p className="bg-raised px-3 py-1 text-2xs font-semibold uppercase tracking-wide text-text-tertiary">
-            Assigned units
-          </p>
-          {units.length === 0 ? (
-            <EmptyState title="No units assigned" description="This call is waiting for a unit." />
-          ) : (
-            units.map((u) => <UnitRow key={u.id} unit={u} />)
-          )}
-        </div>
-
-        <div>
-          <p className="bg-raised px-3 py-1 text-2xs font-semibold uppercase tracking-wide text-text-tertiary">
-            Timeline
-          </p>
-          <ol className="p-3">
-            {timeline.map((entry, i) => (
-              <li key={i} className="relative flex gap-3 pb-3 last:pb-0">
-                <div className="flex flex-col items-center">
-                  <span className="mt-1 size-1.5 shrink-0 rounded-full bg-border-strong" aria-hidden />
-                  {i < timeline.length - 1 ? (
-                    <span className="w-px flex-1 bg-border-subtle" aria-hidden />
-                  ) : null}
-                </div>
-                <div className="min-w-0 flex-1 pb-1">
-                  <p className="text-xs text-text-primary">{entry.text}</p>
-                  <p className="mt-0.5 font-mono text-2xs text-text-tertiary">
-                    {formatDateTime(entry.at)} · {entry.actor}
-                  </p>
-                </div>
-              </li>
-            ))}
-          </ol>
-        </div>
-      </div>
-
-      <div className="flex shrink-0 gap-1.5 border-t border-border-subtle p-2">
-        <Tooltip content="Dispatch actions land in Phase 5">
-          <Button variant="secondary" size="sm" disabled className="flex-1">Assign unit</Button>
-        </Tooltip>
-        <Tooltip content="Dispatch actions land in Phase 5">
-          <Button variant="secondary" size="sm" disabled className="flex-1">Add note</Button>
-        </Tooltip>
-        <Tooltip content="Dispatch actions land in Phase 5">
-          <Button variant="danger-outline" size="sm" disabled className="flex-1">Close call</Button>
-        </Tooltip>
-      </div>
-    </>
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-border-subtle px-3 py-1.5">
+      {items.map((item) => (
+        <span key={item.label} className="flex items-baseline gap-1.5 text-xs">
+          <span
+            className={cn(
+              'font-mono text-sm font-semibold tabular',
+              item.tone === 'danger' ? 'text-danger'
+                : item.tone === 'warning' ? 'text-warning' : 'text-text-primary',
+            )}
+          >
+            {item.value}
+          </span>
+          <span className="text-text-tertiary">{item.label}</span>
+        </span>
+      ))}
+    </div>
   );
 }
 
-function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function QueueRow({
+  incident, now, selected, isMine, onSelect,
+}: {
+  incident: DispatchIncidentSummary;
+  now: number;
+  selected: boolean;
+  isMine: boolean;
+  onSelect: () => void;
+}) {
+  const status = INCIDENT_STATUSES[incident.status];
+  const priority = PRIORITY_LIST[incident.priority - 1]!;
+  const unassigned = incident.assignedUnitIds.length === 0 && status.isOpen;
+
   return (
-    <div className="min-w-0">
-      <dt className="text-2xs uppercase tracking-wide text-text-tertiary">{label}</dt>
-      <dd className={`truncate text-xs text-text-primary ${mono ? 'font-mono tabular' : ''}`}>
-        {value}
-      </dd>
-    </div>
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={selected ? 'true' : undefined}
+      className={cn(
+        'flex w-full items-start gap-2 border-b border-border-subtle px-3 py-2 text-left',
+        'transition-colors duration-(--duration-fast)',
+        selected ? 'bg-active' : 'hover:bg-hover',
+      )}
+    >
+      {/* A priority stripe, so the queue is scannable by shape before colour. */}
+      <span
+        className="mt-0.5 w-1 shrink-0 self-stretch rounded-full"
+        style={{ backgroundColor: `var(${priority.token})` }}
+        aria-hidden
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span className="font-mono text-2xs text-text-tertiary">{incident.number}</span>
+          <span
+            className="rounded-[2px] px-1 text-[10px] font-semibold"
+            style={{ color: `var(${priority.token})` }}
+          >
+            {priority.label}
+          </span>
+          {isMine ? (
+            <span className="text-[9px] uppercase tracking-wide text-accent">mine</span>
+          ) : null}
+          <span className="ml-auto font-mono text-2xs text-text-tertiary">
+            {now === 0 ? '—' : formatElapsed(new Date(incident.createdAt), new Date(now))}
+          </span>
+        </div>
+        <p className="truncate text-xs font-medium text-text-primary">{incident.title}</p>
+        <div className="flex items-center gap-1.5 text-2xs text-text-tertiary">
+          <span style={{ color: `var(${status.token})` }}>{status.label}</span>
+          {incident.locationText ? (
+            <>
+              <span aria-hidden>·</span>
+              <span className="truncate">{incident.locationText}</span>
+            </>
+          ) : null}
+          <span aria-hidden>·</span>
+          <span className={cn(unassigned && 'text-warning')}>
+            {unassigned ? 'no units' : `${incident.assignedUnitIds.length} unit(s)`}
+          </span>
+        </div>
+      </div>
+      {incident.priority === 1 && status.isOpen ? (
+        <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-danger" aria-hidden />
+      ) : null}
+    </button>
   );
 }
