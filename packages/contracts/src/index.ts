@@ -7,3 +7,4 @@ export * from './map-viewport';
 export * from './map-cluster';
 export * from './dispatch';
 export * from './dashboard';
+export * from './realtime';

@@ -7,7 +7,23 @@ import { cn, formatTime } from '@/lib/utils';
 import { Tooltip } from '@/components/ui';
 import { INTEGRATION_STATUS } from '@/lib/mock-flag';
 import type { Session } from '@/lib/session';
+import { useRealtimeStatus } from '@/lib/realtime/realtime-context';
+import type { RealtimeState } from '@/lib/realtime/realtime-client';
 import { useDutyStatus } from './duty-status-context';
+
+/**
+ * How each connection state is named to an operator.
+ *
+ * Plain words rather than protocol states: "reconnecting" and "polling" mean
+ * something to the person on the console; "idle" and "failed" do not.
+ */
+const FEED_LABELS: Record<RealtimeState, { label: string; tone: string }> = {
+  idle: { label: 'Feed: polling', tone: 'text-text-disabled' },
+  connecting: { label: 'Feed: connecting', tone: 'text-text-disabled' },
+  live: { label: 'Feed: live', tone: 'text-status-available' },
+  reconnecting: { label: 'Feed: polling', tone: 'text-status-busy' },
+  failed: { label: 'Feed: polling only', tone: 'text-status-panic' },
+};
 
 /**
  * Always-visible bottom status bar.
@@ -23,7 +39,18 @@ export function StatusBar({
   organization: OrganizationSummary;
 }) {
   const { currentStatus } = useDutyStatus();
+  const realtime = useRealtimeStatus();
   const [clock, setClock] = React.useState<string | null>(null);
+
+  /**
+   * The feed indicator reports the CONNECTION, not an aspiration.
+   *
+   * "Polling" is a truthful state, not a failure: every screen keeps working on
+   * the revision poll when the socket is down. What must never happen is a green
+   * light while nothing is arriving — an operator deciding whether to trust a
+   * board needs this to be accurate more than they need it to be reassuring.
+   */
+  const feed = FEED_LABELS[realtime.state];
 
   // Rendered client-side only: a server-rendered clock would hydrate stale.
   React.useEffect(() => {
@@ -71,10 +98,12 @@ export function StatusBar({
         {/* Transport state — reported honestly, never a green light it has not
             earned. Per-screen connection health is shown on the screen that has
             a connection; this says which transport is carrying it. */}
-        <Tooltip content={INTEGRATION_STATUS.liveFeed.detail}>
+        <Tooltip content={realtime.detail ?? INTEGRATION_STATUS.liveFeed.detail}>
           <span className="flex items-center gap-1.5">
-            <WifiOff className="size-3 text-text-disabled" aria-hidden />
-            <span>Feed: polling</span>
+            {realtime.state === 'live'
+              ? <Wifi className="size-3 text-status-available" aria-hidden />
+              : <WifiOff className={cn('size-3', feed.tone)} aria-hidden />}
+            <span>{feed.label}</span>
           </span>
         </Tooltip>
 

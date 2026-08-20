@@ -102,9 +102,18 @@ An attacker with application-level access covering their tracks.
 monthly partitions, and no delete path in the API. **Phase 1.**
 
 ### A13 · WebSocket resource exhaustion — **Medium**
-*Mitigations:* authentication at upgrade, connection cap per user and per IP,
-subscription cap per connection, message size limits, backpressure with slow-client
-disconnect, heartbeat timeouts. **Phase 5.**
+*Mitigations, as actually built* (`apps/api/src/realtime/`):
+
+| Mitigation | State |
+| --- | --- |
+| Authentication before anything else | **Done** — single-use ticket as the first message, 10 s grace, then closed ([ADR-0013](../adr/0013-websocket-ticket-handshake.md)) |
+| Subscription cap per connection | **Done** — 32 topics per `subscribe` message |
+| Message size limits | **Done** — 8 KB per message, 16 KB socket payload cap |
+| Slow-client disconnect | **Partial** — a socket that throws on send is dropped; there is no send-queue depth check |
+| Heartbeat timeouts | **Done** — closed after 60 s of silence |
+| Connection cap per user and per IP | **Not done.** An authenticated account can still open many sockets. Each is cheap and each is fully authorized, so this is a resource concern rather than a security one — but it is a real gap and is stated as one. |
+
+**Phase 5, carrying one open item into Phase 8.**
 
 ### A14 · XSS through user-supplied content — **Medium**
 Incident notes, person notes, and callsigns are all free text rendered to other

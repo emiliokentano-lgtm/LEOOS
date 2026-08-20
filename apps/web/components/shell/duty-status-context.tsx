@@ -5,6 +5,8 @@ import type { DispatchSelfState, OperationalStatusMeta } from '@leoos/contracts'
 import {
   resolvePanic, setOwnStatus, triggerPanic as triggerPanicAction,
 } from '@/lib/dispatch-actions';
+import { useRealtimeRefresh } from '@/lib/realtime/realtime-context';
+import { useAuth } from './auth-context';
 
 /**
  * The operator's duty status, for the shell.
@@ -19,10 +21,10 @@ import {
  * So: it loads from the API, every mutation goes through the API, and the value
  * is re-read afterwards. Nothing here decides anything — it reflects.
  *
- * It polls slowly. The dispatch screen has its own 4-second feed; the shell only
- * needs to notice that someone else stood down your panic, or that you changed
- * status in another tab. Screens that mutate call `refresh()` directly, so the
- * poll is a backstop rather than the mechanism.
+ * It polls slowly, and subscribes to the panic and unit topics for the cases
+ * where waiting fifteen seconds is not acceptable — someone else standing down
+ * your alert, or a status change made in another tab. Screens that mutate call
+ * `refresh()` directly, so the poll is a backstop rather than the mechanism.
  */
 
 interface DutyStatusContextValue {
@@ -63,6 +65,29 @@ export function DutyStatusProvider({ children }: { children: React.ReactNode }) 
   const [token, setToken] = React.useState(0);
 
   const refresh = React.useCallback(() => setToken((t) => t + 1), []);
+  const auth = useAuth();
+
+  /**
+   * The shell watches only what is about the OPERATOR.
+   *
+   * Panic and unit topics, not incidents: the top bar shows a status, a unit and
+   * a panic button, and refetching it every time an unrelated call is updated
+   * would put the whole board's event rate onto a request the shell makes on
+   * every screen.
+   */
+  const topics = React.useMemo(() => {
+    const orgId = auth.activeOrganizationId;
+    if (orgId === null) return [] as string[];
+    return [`org:${orgId}:panic`, `org:${orgId}:units`, `org:${orgId}:personnel`];
+  }, [auth.activeOrganizationId]);
+
+  useRealtimeRefresh(topics, refresh, {
+    interestingTypes: [
+      'panic.triggered', 'panic.resolved',
+      'unit.status.updated', 'unit.member.joined', 'unit.member.left',
+      'personnel.updated',
+    ],
+  });
 
   React.useEffect(() => {
     let cancelled = false;

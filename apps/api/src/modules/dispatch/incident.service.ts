@@ -10,6 +10,7 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '.
 import { writeAudit } from '../../lib/audit.js';
 import type { RequestMeta } from '../auth/auth.service.js';
 import type { DispatchScope } from './dispatch.scope.js';
+import { incidentTopics, type DispatchOutcome } from './dispatch.events.js';
 
 /**
  * Incident mutations.
@@ -30,6 +31,12 @@ import type { DispatchScope } from './dispatch.scope.js';
  * and is the legal record of the call. Every state change writes to it inside the
  * same transaction, so a committed change always has a timeline entry and a
  * rolled-back one leaves none.
+ *
+ * REAL-TIME EVENTS ARE RETURNED, NOT PUBLISHED. Every mutation here answers with
+ * a `DispatchOutcome` — the value the route replies with, plus a description of
+ * what changed. The route publishes it, which it can only do after this promise
+ * resolves, which is after the transaction commits. See dispatch.events.ts for
+ * why that is a shape rather than a convention.
  */
 
 /** Locks one incident and returns its current state, or null if out of scope. */
@@ -103,7 +110,7 @@ export async function createIncident(
   scope: DispatchScope,
   input: CreateIncidentInput,
   meta: RequestMeta,
-): Promise<{ id: string; number: string }> {
+): Promise<DispatchOutcome<{ id: string; number: string }>> {
   if (!scope.canCreateIncident) throw new ForbiddenError('You cannot create incidents.');
   if (!scope.membershipActive) {
     throw new ForbiddenError('An inactive membership cannot create incidents.');
@@ -171,7 +178,24 @@ export async function createIncident(
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
 
-    return created;
+    return {
+      result: created,
+      events: [{
+        kind: 'incident.created',
+        organizationId,
+        // A brand new call has no assignments yet, so this resolves to the
+        // owning board — or, for a multi-agency call, to no board at all until
+        // the first unit is attached. That is correct: nobody is on it.
+        topics: await incidentTopics(tx, created.id, organizationId),
+        payload: {
+          incidentId: created.id,
+          number: created.number,
+          priority: input.priority,
+          status: 'pending',
+          title: input.title,
+        },
+      }],
+    };
   });
 }
 
@@ -193,8 +217,8 @@ export async function updateIncident(
   incidentId: string,
   changes: UpdateIncidentInput,
   meta: RequestMeta,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<DispatchOutcome> {
+  return db.transaction(async (tx) => {
     const current = await lockIncident(tx, scope, incidentId);
     if (!current) throw new NotFoundError('incident');
     if (!scope.canManageIncident) throw new ForbiddenError('You cannot edit incidents.');
@@ -231,6 +255,22 @@ export async function updateIncident(
       metadata: { changed: Object.keys(changes) },
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
+
+    return {
+      result: null,
+      events: [{
+        kind: 'incident.updated',
+        organizationId: current.organization_id,
+        topics: await incidentTopics(tx, incidentId, current.organization_id),
+        payload: {
+          incidentId,
+          number: current.number,
+          priority: current.priority as IncidentPriority,
+          status: current.status,
+          title: changes.title ?? current.title,
+        },
+      }],
+    };
   });
 }
 
@@ -243,15 +283,17 @@ export async function changeIncidentPriority(
   priority: IncidentPriority,
   reason: string | null,
   meta: RequestMeta,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<DispatchOutcome> {
+  return db.transaction(async (tx) => {
     const current = await lockIncident(tx, scope, incidentId);
     if (!current) throw new NotFoundError('incident');
     if (!scope.canManageIncident) throw new ForbiddenError('You cannot change incident priority.');
     if (isTerminalIncidentStatus(current.status)) {
       throw new ConflictError('INCIDENT_CLOSED', 'A closed incident cannot be re-prioritised.');
     }
-    if (current.priority === priority) return;
+    // No change is no event. A board that redraws because someone re-selected
+    // the priority it already had is a board people stop trusting.
+    if (current.priority === priority) return { result: null, events: [] };
 
     await tx.update(incident).set({ priority }).where(eq(incident.id, incidentId));
 
@@ -278,6 +320,22 @@ export async function changeIncidentPriority(
       metadata: { field: 'priority', reason },
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
+
+    return {
+      result: null,
+      events: [{
+        kind: 'incident.updated',
+        organizationId: current.organization_id,
+        topics: await incidentTopics(tx, incidentId, current.organization_id),
+        payload: {
+          incidentId,
+          number: current.number,
+          priority,
+          status: current.status,
+          title: current.title,
+        },
+      }],
+    };
   });
 }
 
@@ -289,8 +347,8 @@ export async function changeIncidentStatus(
   incidentId: string,
   status: IncidentStatusKey,
   meta: RequestMeta,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<DispatchOutcome> {
+  return db.transaction(async (tx) => {
     const current = await lockIncident(tx, scope, incidentId);
     if (!current) throw new NotFoundError('incident');
 
@@ -331,6 +389,22 @@ export async function changeIncidentStatus(
       metadata: { field: 'status' },
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
+
+    return {
+      result: null,
+      events: [{
+        kind: 'incident.updated',
+        organizationId: current.organization_id,
+        topics: await incidentTopics(tx, incidentId, current.organization_id),
+        payload: {
+          incidentId,
+          number: current.number,
+          priority: current.priority as IncidentPriority,
+          status,
+          title: current.title,
+        },
+      }],
+    };
   });
 }
 
@@ -342,14 +416,23 @@ export async function closeIncident(
   incidentId: string,
   input: { cancelled: boolean; notes: string | null },
   meta: RequestMeta,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<DispatchOutcome> {
+  return db.transaction(async (tx) => {
     const current = await lockIncident(tx, scope, incidentId);
     if (!current) throw new NotFoundError('incident');
     if (!scope.canCloseIncident) throw new ForbiddenError('You cannot close incidents.');
     if (isTerminalIncidentStatus(current.status)) {
       throw new ConflictError('INCIDENT_CLOSED', 'That incident is already closed.');
     }
+
+    /**
+     * Topics are resolved BEFORE the units are released.
+     *
+     * Closing detaches every unit, so asking afterwards which organizations were
+     * involved answers "none" — and the agencies that were actually running the
+     * call would be the only ones not told it had ended.
+     */
+    const topics = await incidentTopics(tx, incidentId, current.organization_id);
 
     const status: IncidentStatusKey = input.cancelled ? 'cancelled' : 'closed';
     const closedAt = new Date();
@@ -404,6 +487,24 @@ export async function closeIncident(
       metadata: { cancelled: input.cancelled, unitsReleased: released.length },
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
+
+    return {
+      result: null,
+      events: [{
+        kind: 'incident.closed',
+        organizationId: current.organization_id,
+        topics,
+        payload: {
+          incidentId,
+          number: current.number,
+          priority: current.priority as IncidentPriority,
+          status,
+          title: current.title,
+          cancelled: input.cancelled,
+          unitsReleased: released.length,
+        },
+      }],
+    };
   });
 }
 
@@ -413,8 +514,8 @@ export async function reopenIncident(
   incidentId: string,
   reason: string,
   meta: RequestMeta,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<DispatchOutcome> {
+  return db.transaction(async (tx) => {
     const current = await lockIncident(tx, scope, incidentId);
     if (!current) throw new NotFoundError('incident');
     // Reopening is gated on the CLOSE permission: whoever may finish a call is
@@ -450,6 +551,22 @@ export async function reopenIncident(
       metadata: { reason },
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
+
+    return {
+      result: null,
+      events: [{
+        kind: 'incident.updated',
+        organizationId: current.organization_id,
+        topics: await incidentTopics(tx, incidentId, current.organization_id),
+        payload: {
+          incidentId,
+          number: current.number,
+          priority: current.priority as IncidentPriority,
+          status: 'pending',
+          title: current.title,
+        },
+      }],
+    };
   });
 }
 
@@ -462,8 +579,8 @@ export async function assignUnit(
   unitId: string,
   role: string | null,
   meta: RequestMeta,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<DispatchOutcome> {
+  return db.transaction(async (tx) => {
     const current = await lockIncident(tx, scope, incidentId);
     if (!current) throw new NotFoundError('incident');
     if (!scope.canAssignUnits) throw new ForbiddenError('You cannot assign units.');
@@ -513,8 +630,9 @@ export async function assignUnit(
 
     // A call with a unit on it is dispatched. Advancing the status here saves a
     // dispatcher a second click during the exact moment they have least time.
-    if (current.status === 'pending') {
-      await tx.update(incident).set({ status: 'dispatched' }).where(eq(incident.id, incidentId));
+    const status: IncidentStatusKey = current.status === 'pending' ? 'dispatched' : current.status;
+    if (status !== current.status) {
+      await tx.update(incident).set({ status }).where(eq(incident.id, incidentId));
     }
 
     await appendTimeline(tx, {
@@ -533,6 +651,28 @@ export async function assignUnit(
       metadata: { unitId, callsign: target.callsign, role },
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
+
+    return {
+      result: null,
+      events: [{
+        kind: 'incident.assigned',
+        organizationId: current.organization_id,
+        // Resolved AFTER the insert, so the newly attached unit's agency is in
+        // the set. On a joint call this is what puts the assignment on the
+        // responding service's board as well as the owning one.
+        topics: await incidentTopics(tx, incidentId, current.organization_id),
+        payload: {
+          incidentId,
+          number: current.number,
+          priority: current.priority as IncidentPriority,
+          status,
+          title: current.title,
+          unitId,
+          callsign: target.callsign,
+          released: false,
+        },
+      }],
+    };
   });
 }
 
@@ -542,11 +682,16 @@ export async function releaseUnit(
   incidentId: string,
   unitId: string,
   meta: RequestMeta,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<DispatchOutcome> {
+  return db.transaction(async (tx) => {
     const current = await lockIncident(tx, scope, incidentId);
     if (!current) throw new NotFoundError('incident');
     if (!scope.canAssignUnits) throw new ForbiddenError('You cannot release units.');
+
+    // Before the release, for the same reason as in `closeIncident`: afterwards
+    // the departing unit's agency is no longer on the call and would be the one
+    // agency not told its unit had been stood down.
+    const topics = await incidentTopics(tx, incidentId, current.organization_id);
 
     const released = await tx
       .update(incidentAssignment)
@@ -586,6 +731,25 @@ export async function releaseUnit(
       metadata: { unitId, callsign },
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
+
+    return {
+      result: null,
+      events: [{
+        kind: 'incident.assigned',
+        organizationId: current.organization_id,
+        topics,
+        payload: {
+          incidentId,
+          number: current.number,
+          priority: current.priority as IncidentPriority,
+          status: current.status,
+          title: current.title,
+          unitId,
+          callsign,
+          released: true,
+        },
+      }],
+    };
   });
 }
 
@@ -605,8 +769,8 @@ export async function addIncidentNote(
   incidentId: string,
   body: string,
   meta: RequestMeta,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<DispatchOutcome> {
+  return db.transaction(async (tx) => {
     const current = await lockIncident(tx, scope, incidentId);
     if (!current) throw new NotFoundError('incident');
     if (!scope.canView) throw new NotFoundError('incident');
@@ -626,5 +790,24 @@ export async function addIncidentNote(
       metadata: { field: 'note' },
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
+
+    return {
+      result: null,
+      events: [{
+        kind: 'incident.updated',
+        organizationId: current.organization_id,
+        topics: await incidentTopics(tx, incidentId, current.organization_id),
+        payload: {
+          incidentId,
+          number: current.number,
+          priority: current.priority as IncidentPriority,
+          status: current.status,
+          // The note itself is NOT in the payload. A timeline entry can name a
+          // suspect, an address or a medical detail; it belongs behind the
+          // authorized read that already knows what this caller may see, not in
+          // a broadcast whose only filter is the topic.
+        },
+      }],
+    };
   });
 }

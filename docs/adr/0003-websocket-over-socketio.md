@@ -1,6 +1,6 @@
 # ADR-0003 — Native WebSocket rather than Socket.IO
 
-**Status:** Accepted · 2026-08-18
+**Status:** Accepted · implemented in `apps/api/src/realtime/`; handshake amended by [ADR-0013](0013-websocket-ticket-handshake.md) · 2026-08-18
 
 ## Context
 

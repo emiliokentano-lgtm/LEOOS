@@ -46,11 +46,13 @@ export class PollingSource<TSnapshot extends { revision: string }> {
   private failures = 0;
   private stopped = true;
   private extra: Record<string, unknown>;
+  private intervalMs: number;
 
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: PollingSourceOptions) {
     this.extra = options.body ?? {};
+    this.intervalMs = options.intervalMs;
     this.fetchImpl = options.fetchImpl ?? ((...args) => fetch(...args));
   }
 
@@ -82,6 +84,18 @@ export class PollingSource<TSnapshot extends { revision: string }> {
   refresh(): void {
     this.revision = null;
     this.schedule(0);
+  }
+
+  /**
+   * Changes the poll interval.
+   *
+   * Used to drop to a slow backstop once the WebSocket is live, and to return to
+   * the working rate when it is not. Applied on the NEXT poll rather than by
+   * rescheduling the pending one, so flapping between the two rates cannot
+   * produce a burst of requests.
+   */
+  setIntervalMs(intervalMs: number): void {
+    this.intervalMs = intervalMs;
   }
 
   /** Changes what is sent with each poll; refreshes if it actually differs. */
@@ -145,7 +159,7 @@ export class PollingSource<TSnapshot extends { revision: string }> {
         this.events?.onSnapshot(snapshot);
       }
 
-      this.schedule(this.options.intervalMs);
+      this.schedule(this.intervalMs);
     } catch (error) {
       if (controller.signal.aborted) return;
       void error;
@@ -166,7 +180,7 @@ export class PollingSource<TSnapshot extends { revision: string }> {
     }
 
     this.events?.onStateChange('reconnecting', this.options.lostMessage);
-    this.schedule(backoffDelay(this.failures, this.options.intervalMs));
+    this.schedule(backoffDelay(this.failures, this.intervalMs));
   }
 }
 

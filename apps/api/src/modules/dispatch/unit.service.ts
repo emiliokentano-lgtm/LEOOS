@@ -6,6 +6,7 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '.
 import { writeAudit } from '../../lib/audit.js';
 import type { RequestMeta } from '../auth/auth.service.js';
 import type { DispatchScope } from './dispatch.scope.js';
+import type { DispatchEmission, DispatchOutcome } from './dispatch.events.js';
 
 /**
  * Units and operational status.
@@ -26,6 +27,9 @@ import type { DispatchScope } from './dispatch.scope.js';
  * `FOR UPDATE`, because two people joining the last seat of the same unit, or a
  * dispatcher disbanding a unit as someone joins it, are races that happen on a
  * real shift rather than only in a test.
+ *
+ * Every mutation RETURNS its real-time events rather than publishing them; the
+ * route publishes once the transaction has committed. See dispatch.events.ts.
  */
 
 /** The actor's own membership, locked. Null when they are not in the organization. */
@@ -45,13 +49,31 @@ async function lockOwnMembership(tx: Database, scope: DispatchScope) {
 
 async function lockUnit(tx: Database, unitId: string) {
   const rows = await tx.execute<{
-    id: string; organization_id: string; callsign: string; status: string;
+    id: string; organization_id: string; callsign: string; status: string; unit_type: string;
   }>(sql`
-    SELECT id, organization_id, callsign, status FROM unit
+    SELECT id, organization_id, callsign, status, unit_type FROM unit
      WHERE id = ${unitId}
      FOR UPDATE
   `);
   return rows[0] ?? null;
+}
+
+/**
+ * The display name to put on a crewing event.
+ *
+ * A DISPLAY NAME AND NOTHING ELSE. The payload travels to every console
+ * subscribed to the organization's unit topic, so it carries what a board needs
+ * to print — never an email, an employee number or a rank, all of which are on
+ * the same row and none of which the recipient asked for.
+ */
+async function memberDisplayName(tx: Database, memberId: string): Promise<string> {
+  const rows = await tx.execute<{ display_name: string }>(sql`
+    SELECT ua.display_name
+      FROM organization_member om
+      JOIN user_account ua ON ua.id = om.user_id
+     WHERE om.id = ${memberId}
+  `);
+  return rows[0]?.display_name ?? 'Unknown';
 }
 
 /**
@@ -104,11 +126,14 @@ export async function createUnit(
   scope: DispatchScope,
   input: CreateUnitInput,
   meta: RequestMeta,
-): Promise<{ id: string }> {
+): Promise<DispatchOutcome<{ id: string }>> {
   if (!scope.canManageUnits) throw new ForbiddenError('You cannot create units.');
   if (scope.organizationId === null) {
     throw new ForbiddenError('Select an organization before creating a unit.');
   }
+  // Narrowed here rather than re-asserted inside the closure: the check above is
+  // the one that matters, and `!` inside a callback hides whether it still holds.
+  const organizationId = scope.organizationId;
 
   return db.transaction(async (tx) => {
     const membership = await lockOwnMembership(tx, scope);
@@ -126,7 +151,7 @@ export async function createUnit(
      */
     const clash = await tx.execute<{ id: string }>(sql`
       SELECT id FROM unit
-       WHERE organization_id = ${scope.organizationId}
+       WHERE organization_id = ${organizationId}
          AND callsign = ${input.callsign} AND status = 'active'
     `);
     if (clash.length > 0) {
@@ -134,7 +159,7 @@ export async function createUnit(
     }
 
     const [created] = await tx.insert(unit).values({
-      organizationId: scope.organizationId!,
+      organizationId,
       callsign: input.callsign,
       name: input.name,
       unitType: input.unitType,
@@ -146,20 +171,41 @@ export async function createUnit(
 
     if (!created) throw new ValidationError('The unit could not be created.');
 
+    const events: DispatchEmission[] = [{
+      kind: 'unit.created',
+      organizationId,
+      payload: {
+        unitId: created.id,
+        callsign: input.callsign,
+        unitType: input.unitType,
+      },
+    }];
+
     if (input.joinSelf) {
-      await joinUnitWithin(tx, scope, membership.id, created.id, true);
+      const isLeader = await joinUnitWithin(tx, scope, membership.id, created.id, true);
+      events.push({
+        kind: 'unit.member.joined',
+        organizationId,
+        payload: {
+          unitId: created.id,
+          callsign: input.callsign,
+          memberId: membership.id,
+          memberName: await memberDisplayName(tx, membership.id),
+          isLeader,
+        },
+      });
     }
 
     await writeAudit(tx, {
       action: AUDIT_ACTIONS.UNIT_CREATED,
       actorUserId: scope.actorUserId,
-      organizationId: scope.organizationId,
+      organizationId,
       entityType: 'unit', entityId: created.id,
       after: { callsign: input.callsign, unitType: input.unitType, isCovert: input.isCovert },
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
 
-    return created;
+    return { result: created, events };
   });
 }
 
@@ -168,8 +214,8 @@ export async function disbandUnit(
   scope: DispatchScope,
   unitId: string,
   meta: RequestMeta,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<DispatchOutcome> {
+  return db.transaction(async (tx) => {
     const target = await lockUnit(tx, unitId);
     if (!target) throw new NotFoundError('unit');
 
@@ -217,6 +263,19 @@ export async function disbandUnit(
       before: { callsign: target.callsign },
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
+
+    return {
+      result: null,
+      events: [{
+        kind: 'unit.updated',
+        organizationId: target.organization_id,
+        payload: {
+          unitId,
+          callsign: target.callsign,
+          unitType: target.unit_type,
+        },
+      }],
+    };
   });
 }
 
@@ -234,7 +293,7 @@ async function joinUnitWithin(
   memberId: string,
   unitId: string,
   asLeader: boolean,
-): Promise<void> {
+): Promise<boolean> {
   /**
    * A member is in at most one active unit — enforced by a partial unique index.
    * Leaving the previous unit first turns "you are already in a car" from a
@@ -266,6 +325,10 @@ async function joinUnitWithin(
     });
 
   void scope;
+  // Returned rather than echoed back from the caller's request: leadership is
+  // decided here, and a claim that was refused because the seat was taken must
+  // not be broadcast as if it succeeded.
+  return leader;
 }
 
 export async function joinUnit(
@@ -273,8 +336,8 @@ export async function joinUnit(
   scope: DispatchScope,
   unitId: string,
   meta: RequestMeta,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<DispatchOutcome> {
+  return db.transaction(async (tx) => {
     const membership = await lockOwnMembership(tx, scope);
     const target = await lockUnit(tx, unitId);
 
@@ -294,7 +357,9 @@ export async function joinUnit(
       SELECT count(*)::int AS n FROM unit_member
        WHERE unit_id = ${unitId} AND left_at IS NULL
     `);
-    await joinUnitWithin(tx, scope, membership.id, unitId, (crew[0]?.n ?? 0) === 0);
+    const isLeader = await joinUnitWithin(
+      tx, scope, membership.id, unitId, (crew[0]?.n ?? 0) === 0,
+    );
 
     await writeAudit(tx, {
       action: AUDIT_ACTIONS.UNIT_JOINED,
@@ -304,6 +369,21 @@ export async function joinUnit(
       metadata: { memberId: membership.id, callsign: target!.callsign, self: true },
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
+
+    return {
+      result: null,
+      events: [{
+        kind: 'unit.member.joined',
+        organizationId: membership.organization_id,
+        payload: {
+          unitId,
+          callsign: target!.callsign,
+          memberId: membership.id,
+          memberName: await memberDisplayName(tx, membership.id),
+          isLeader,
+        },
+      }],
+    };
   });
 }
 
@@ -311,8 +391,8 @@ export async function leaveUnit(
   db: Database,
   scope: DispatchScope,
   meta: RequestMeta,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<DispatchOutcome> {
+  return db.transaction(async (tx) => {
     const membership = await lockOwnMembership(tx, scope);
     if (membership === null) throw new ForbiddenError('You are not a member of this organization.');
 
@@ -324,6 +404,7 @@ export async function leaveUnit(
     const crewing = current[0];
     if (!crewing) throw new ConflictError('NOT_CREWED', 'You are not currently in a unit.');
 
+    const left = await lockUnit(tx, crewing.unit_id);
     const now = new Date();
     await tx.update(unitMember).set({ leftAt: now }).where(eq(unitMember.id, crewing.id));
     await tx.update(memberStatus)
@@ -338,6 +419,21 @@ export async function leaveUnit(
       metadata: { memberId: membership.id, self: true },
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
+
+    return {
+      result: null,
+      events: [{
+        kind: 'unit.member.left',
+        organizationId: membership.organization_id,
+        payload: {
+          unitId: crewing.unit_id,
+          callsign: left?.callsign ?? '',
+          memberId: membership.id,
+          memberName: await memberDisplayName(tx, membership.id),
+          isLeader: false,
+        },
+      }],
+    };
   });
 }
 
@@ -360,8 +456,8 @@ export async function setOwnStatus(
   scope: DispatchScope,
   statusKey: string,
   meta: RequestMeta,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<DispatchOutcome> {
+  return db.transaction(async (tx) => {
     const membership = await lockOwnMembership(tx, scope);
     if (membership === null) throw new ForbiddenError('You are not a member of this organization.');
     if (membership.status !== 'active') {
@@ -393,7 +489,9 @@ export async function setOwnStatus(
       SELECT status_key, unit_id FROM member_status WHERE member_id = ${membership.id}
     `);
     const previous = before[0]?.status_key ?? null;
-    if (previous === statusKey) return;
+    // Setting the status you already hold is not a change, and a board that
+    // redraws for it is a board flickering for no reason.
+    if (previous === statusKey) return { result: null, events: [] };
 
     await tx.insert(memberStatus)
       .values({ memberId: membership.id, statusKey, unitId: before[0]?.unit_id ?? null })
@@ -418,10 +516,12 @@ export async function setOwnStatus(
      * The board shows unit status, and a car whose whole crew has gone busy is
      * busy. Only the crewed unit is touched, and only when the actor is in one.
      */
-    if (before[0]?.unit_id) {
-      await tx.update(unit)
-        .set({ statusKey })
-        .where(eq(unit.id, before[0].unit_id));
+    const crewedUnitId = before[0]?.unit_id ?? null;
+    let crewedCallsign: string | null = null;
+    if (crewedUnitId !== null) {
+      const crewed = await lockUnit(tx, crewedUnitId);
+      crewedCallsign = crewed?.callsign ?? null;
+      await tx.update(unit).set({ statusKey }).where(eq(unit.id, crewedUnitId));
     }
 
     await writeAudit(tx, {
@@ -431,9 +531,44 @@ export async function setOwnStatus(
       entityType: 'organization_member', entityId: membership.id,
       before: { statusKey: previous },
       after: { statusKey },
-      metadata: { self: true, unitId: before[0]?.unit_id ?? null },
+      metadata: { self: true, unitId: crewedUnitId },
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
+
+    /**
+     * TWO events, because two different things changed and two different
+     * audiences care.
+     *
+     * `personnel.updated` says a person's duty status moved — the roster view,
+     * gated on `personnel.view`. `unit.status.updated` says a car's status moved
+     * — the dispatch board, gated on `dispatch.view`. Collapsing them into one
+     * would force the weaker of the two permissions onto both feeds.
+     */
+    const events: DispatchEmission[] = [{
+      kind: 'personnel.updated',
+      organizationId: membership.organization_id,
+      payload: {
+        memberId: membership.id,
+        memberName: await memberDisplayName(tx, membership.id),
+        statusKey,
+        unitId: crewedUnitId,
+      },
+    }];
+
+    if (crewedUnitId !== null && crewedCallsign !== null) {
+      events.push({
+        kind: 'unit.status.updated',
+        organizationId: membership.organization_id,
+        payload: {
+          unitId: crewedUnitId,
+          callsign: crewedCallsign,
+          statusKey,
+          previousStatusKey: previous,
+        },
+      });
+    }
+
+    return { result: null, events };
   });
 }
 
@@ -450,8 +585,8 @@ export async function setUnitStatus(
   unitId: string,
   statusKey: string,
   meta: RequestMeta,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<DispatchOutcome> {
+  return db.transaction(async (tx) => {
     const target = await lockUnit(tx, unitId);
     if (!target) throw new NotFoundError('unit');
     if (!scope.canViewAllOrganizations
@@ -470,6 +605,11 @@ export async function setUnitStatus(
     `);
     if (allowed.length === 0) throw new ValidationError('That status is not available.');
 
+    const previousRows = await tx.execute<{ status_key: string }>(sql`
+      SELECT status_key FROM unit WHERE id = ${unitId}
+    `);
+    const previousStatusKey = previousRows[0]?.status_key ?? null;
+
     await tx.update(unit).set({ statusKey }).where(eq(unit.id, unitId));
 
     await writeAudit(tx, {
@@ -481,5 +621,19 @@ export async function setUnitStatus(
       metadata: { callsign: target.callsign, self: false },
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
+
+    return {
+      result: null,
+      events: [{
+        kind: 'unit.status.updated',
+        organizationId: target.organization_id,
+        payload: {
+          unitId,
+          callsign: target.callsign,
+          statusKey,
+          previousStatusKey,
+        },
+      }],
+    };
   });
 }

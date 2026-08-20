@@ -256,8 +256,8 @@ subsystem is built around a seam rather than around what is behind it today.
                                               │
                                               ▼
                                    ┌─────────────────────┐
-                                   │  MapDataSource      │  HttpMapSource today,
-                                   │  (browser)          │  SocketMapSource later
+                                   │  MapDataSource      │  RealtimeMapSource,
+                                   │  (browser)          │  HttpMapSource fallback
                                    └──────────┬──────────┘
                                               ▼
                                    MapView → MapCanvas
@@ -284,18 +284,32 @@ than discovered later, along with what it costs (no restart survival, single
 node).
 
 **Client side.** `MapDataSource` (`apps/web/lib/map/map-source.ts`) is the
-browser-side seam, shaped for the WebSocket rather than for the poller that
-implements it today — `subscribe`-with-callbacks, not `getPositions()`. Building
-it around polling and adapting later is how you end up with a socket
-implementation faking a request/response cycle. Moving to the `map:units` topic
-(§3 of [03-realtime](03-realtime.md)) means writing a second implementation of
-this interface; the renderer, the filters, the detail panel and the follow-mode
-camera do not change.
+browser-side seam, shaped for the WebSocket rather than for the poller that first
+implemented it — `subscribe`-with-callbacks, not `getPositions()`.
 
-The wire shapes (`MapSnapshot`, `MapTick`, `UnitPositionDelta`) are already the
-ones the socket will carry. Both transports recompute visibility per delivery
-rather than caching it per connection, which is what makes a mid-session
-permission change take effect immediately with no revocation machinery.
+**That seam has now been used, which is the test it was built for.**
+`RealtimeMapSource` (`apps/web/lib/map/realtime-map-source.ts`) takes batched
+positions off the `map:units` topic (§3 of
+[03-realtime](03-realtime.md)) and is a second implementation of the same
+interface. The renderer, the filters, the detail panel and the follow-mode camera
+were not touched.
+
+It COMPOSES with `HttpMapSource` rather than replacing it. Snapshots still come
+over HTTP — a snapshot is a large authorized read the socket has no business
+carrying — and the tick poll resumes automatically if the socket drops, so a
+console on a network that blocks WebSockets keeps working with no special case
+anywhere in the UI.
+
+A position batch deliberately does not repeat a unit's status or assignment,
+which would otherwise be resent for every unit every second. The source keeps a
+small metadata cache from the last snapshot and refetches on `unit.status.updated`
+and the incident events. A unit it has never seen sets `resyncRequired` — it never
+draws a marker with a guessed status.
+
+The wire shapes (`MapSnapshot`, `MapTick`, `UnitPositionDelta`) were already the
+ones the socket carries. Both transports recompute visibility per delivery rather
+than caching it per connection, which is what makes a mid-session permission
+change take effect immediately with no revocation machinery.
 
 **What the client is told about the units it holds.** The tick accepts a
 `knownUnitIds` list, used only to compute removals and to detect that a resync is

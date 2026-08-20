@@ -43,4 +43,7 @@ export class HttpDashboardSource {
 
   stop(): void { this.source.stop(); }
   refresh(): void { this.source.refresh(); }
+
+  /** Drops to a slow backstop while the WebSocket carries the dashboard. */
+  setPollMs(intervalMs: number): void { this.source.setIntervalMs(intervalMs); }
 }

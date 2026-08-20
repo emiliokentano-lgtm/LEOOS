@@ -72,6 +72,7 @@ export class HttpMapSource implements MapDataSource {
   private stopped = true;
   private inFlight: AbortController | null = null;
   private hiddenSince: number | null = null;
+  private ticksPaused = false;
 
   constructor(options: HttpMapSourceOptions = {}) {
     this.tickMs = options.tickMs ?? MAP_TICK_MS;
@@ -110,6 +111,29 @@ export class HttpMapSource implements MapDataSource {
     void this.loadSnapshot();
   }
 
+  /**
+   * Stops polling for ticks while something faster is delivering them.
+   *
+   * `refresh()` still works — a snapshot is still how the map recovers — so the
+   * WebSocket source can pause the tick loop and keep the snapshot path. Not
+   * `stop()`, because that also tears down the visibility handling and reports
+   * the feed as stopped, neither of which is true.
+   */
+  pauseTicks(): void {
+    this.ticksPaused = true;
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    this.inFlight?.abort();
+    this.inFlight = null;
+  }
+
+  resumeTicks(): void {
+    if (!this.ticksPaused) return;
+    this.ticksPaused = false;
+    this.failures = 0;
+    this.schedule(0);
+  }
+
   private readonly handleVisibility = (): void => {
     if (document.visibilityState === 'hidden') {
       this.hiddenSince = Date.now();
@@ -132,7 +156,7 @@ export class HttpMapSource implements MapDataSource {
   };
 
   private schedule(delayMs: number): void {
-    if (this.stopped) return;
+    if (this.stopped || this.ticksPaused) return;
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = setTimeout(() => { void this.poll(); }, delayMs);
   }
@@ -153,7 +177,7 @@ export class HttpMapSource implements MapDataSource {
   }
 
   private async poll(): Promise<void> {
-    if (this.stopped) return;
+    if (this.stopped || this.ticksPaused) return;
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
 
     // One request at a time. Overlapping polls on a slow connection deliver

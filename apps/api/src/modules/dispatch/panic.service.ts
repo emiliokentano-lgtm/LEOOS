@@ -6,6 +6,7 @@ import { ConflictError, ForbiddenError, NotFoundError } from '../../lib/errors.j
 import { writeAudit } from '../../lib/audit.js';
 import type { RequestMeta } from '../auth/auth.service.js';
 import type { DispatchScope } from './dispatch.scope.js';
+import type { DispatchOutcome } from './dispatch.events.js';
 
 /**
  * Panic.
@@ -26,6 +27,12 @@ import type { DispatchScope } from './dispatch.scope.js';
  *
  * None of that is reversible by a browser. A client that never renders the alert
  * changes nothing about the fact that it happened.
+ *
+ * The WebSocket now carries point 4 as well: a `panic.triggered` event goes to
+ * `org:<id>:panic`, a topic gated on `dispatch.view` in the subscriber's own
+ * organization. The revision bump remains, and is what a client that has lost
+ * its socket still recovers from — the feed is an accelerator, not the only
+ * path.
  *
  * WHO CAN RAISE ONE. `dispatch.panic` is seeded to essentially everyone, and the
  * check here is deliberately the weakest in the module: the moment someone needs
@@ -59,7 +66,7 @@ export async function triggerPanic(
   scope: DispatchScope,
   input: TriggerPanicInput,
   meta: RequestMeta,
-): Promise<{ id: string }> {
+): Promise<DispatchOutcome<{ id: string }>> {
   if (!scope.canTriggerPanic) throw new ForbiddenError('You cannot raise a panic alert.');
 
   return db.transaction(async (tx) => {
@@ -81,7 +88,10 @@ export async function triggerPanic(
        WHERE member_id = ${membership.id} AND resolved_at IS NULL
        ORDER BY created_at DESC LIMIT 1
     `);
-    if (existing[0]) return { id: existing[0].id };
+    // A repeat press is answered with the live alert and emits nothing: the
+    // board already shows it, and a second toast for the same emergency is noise
+    // at the moment noise costs most.
+    if (existing[0]) return { result: { id: existing[0].id }, events: [] };
 
     const crewing = await tx.execute<{ unit_id: string | null }>(sql`
       SELECT unit_id FROM unit_member
@@ -152,9 +162,21 @@ export async function triggerPanic(
       changedBy: scope.actorUserId,
     });
 
+    let unitCallsign: string | null = null;
     if (unitId !== null) {
+      const crewed = await tx.execute<{ callsign: string }>(sql`
+        SELECT callsign FROM unit WHERE id = ${unitId}
+      `);
+      unitCallsign = crewed[0]?.callsign ?? null;
       await tx.update(unit).set({ statusKey: 'panic' }).where(eq(unit.id, unitId));
     }
+
+    const who = await tx.execute<{ display_name: string; callsign: string | null }>(sql`
+      SELECT ua.display_name, om.callsign
+        FROM organization_member om
+        JOIN user_account ua ON ua.id = om.user_id
+       WHERE om.id = ${membership.id}
+    `);
 
     await writeAudit(tx, {
       action: AUDIT_ACTIONS.PANIC_TRIGGERED,
@@ -169,7 +191,25 @@ export async function triggerPanic(
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
 
-    return created;
+    return {
+      result: created,
+      events: [{
+        kind: 'panic.triggered',
+        organizationId: membership.organization_id,
+        payload: {
+          panicId: created.id,
+          memberId: membership.id,
+          memberName: who[0]?.display_name ?? 'Unknown',
+          callsign: who[0]?.callsign ?? null,
+          unitId,
+          unitCallsign,
+          // The position is sent because a dispatcher needs to know WHERE, and
+          // it is null rather than guessed when nothing is known. A panic marker
+          // at a made-up coordinate is worse than no marker.
+          position: posX === null || posY === null ? null : { x: posX, y: posY },
+        },
+      }],
+    };
   });
 }
 
@@ -186,8 +226,8 @@ export async function acknowledgePanic(
   scope: DispatchScope,
   panicId: string,
   meta: RequestMeta,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<DispatchOutcome> {
+  return db.transaction(async (tx) => {
     const rows = await tx.execute<{
       id: string; organization_id: string; acknowledged_at: Date | null; resolved_at: Date | null;
     }>(sql`
@@ -210,7 +250,7 @@ export async function acknowledgePanic(
     }
     // First acknowledgement wins. A second one would overwrite who actually
     // responded first, which is the fact the record exists to hold.
-    if (event.acknowledged_at !== null) return;
+    if (event.acknowledged_at !== null) return { result: null, events: [] };
 
     await tx.update(panicEvent).set({
       acknowledgedBy: scope.actorUserId,
@@ -224,6 +264,17 @@ export async function acknowledgePanic(
       entityType: 'panic_event', entityId: panicId,
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
+
+    /**
+     * Acknowledgement emits nothing on the panic topic.
+     *
+     * It is not a change to the emergency — the officer is exactly as much in
+     * trouble as they were a second ago — and firing an event for it would put a
+     * second alert-shaped message on every console for a fact that is only
+     * interesting inside the alert's own detail. The dispatch revision carries
+     * it, which is where a board reads it from.
+     */
+    return { result: null, events: [] };
   });
 }
 
@@ -241,8 +292,8 @@ export async function resolvePanic(
   panicId: string,
   restoreStatusKey: string | null,
   meta: RequestMeta,
-): Promise<void> {
-  await db.transaction(async (tx) => {
+): Promise<DispatchOutcome> {
+  return db.transaction(async (tx) => {
     const rows = await tx.execute<{
       id: string; organization_id: string; member_id: string;
       unit_id: string | null; resolved_at: Date | null;
@@ -258,7 +309,7 @@ export async function resolvePanic(
       && !scope.organizationIds.includes(event.organization_id)) {
       throw new NotFoundError('panic alert');
     }
-    if (event.resolved_at !== null) return;
+    if (event.resolved_at !== null) return { result: null, events: [] };
 
     const own = await tx.execute<{ id: string }>(sql`
       SELECT id FROM organization_member
@@ -314,5 +365,26 @@ export async function resolvePanic(
       metadata: { selfResolved: isOwnAlert, restoredStatus: restored },
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
+
+    const who = await tx.execute<{ display_name: string }>(sql`
+      SELECT ua.display_name
+        FROM organization_member om
+        JOIN user_account ua ON ua.id = om.user_id
+       WHERE om.id = ${event.member_id}
+    `);
+
+    return {
+      result: null,
+      events: [{
+        kind: 'panic.resolved',
+        organizationId: event.organization_id,
+        payload: {
+          panicId,
+          memberId: event.member_id,
+          memberName: who[0]?.display_name ?? 'Unknown',
+          selfResolved: isOwnAlert,
+        },
+      }],
+    };
   });
 }

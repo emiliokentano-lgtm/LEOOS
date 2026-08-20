@@ -104,7 +104,7 @@ is actually held.
 | 17 | `.env*` gitignored; secret scanning in CI; FiveM secret read from a convar, never a file. | `.gitignore`, CI |
 | 18, 19 | Zod schema on every route and every ingest payload; unvalidated `request.body` access is a lint error. | [overview §7](docs/architecture/00-overview.md) |
 | 20 | All FiveM coordinates come from server-side natives. Org, rank, callsign, and permissions always resolve from the LEOOS database. | [fivem §1](docs/architecture/04-fivem-integration.md) |
-| 21, 22 | Redis holds live state; Postgres receives a downsample, and only if playback is in scope. Fan-out coalesced to 1 msg/s per subscriber. | [realtime §7](docs/architecture/03-realtime.md), [data-model §9](docs/architecture/01-data-model.md) |
+| 21, 22 | Live state is held out of Postgres (in-process today, Redis when provisioned); Postgres receives a downsample. Position fan-out is throttled by one server-side clock, coalesced to the latest state per unit, and batched to 1 msg/s per subscriber. | [realtime §7](docs/architecture/03-realtime.md), [data-model §9](docs/architecture/01-data-model.md) |
 | 23 | Single audit helper, written in the same transaction as the change; audit table is append-only by DB privilege. | [data-model §7](docs/architecture/01-data-model.md) |
 | 24, 25 | Soft deletion across operational records. | [ADR-0008](docs/adr/0008-soft-deletion.md) |
 | 26, 27 | `AsyncBoundary` convention; shared component inventory built before screens. | [design §4](docs/architecture/06-design-system.md) |
@@ -118,6 +118,21 @@ is actually held.
 | 41 | Conflicts are raised in writing before code is written. | this file |
 | 42, 47, 48 | ADRs for non-obvious decisions; forward-only reviewed migrations; `/api/v1` versioned surface. | [docs/adr](docs/adr/) |
 | 43, 44, 49, 50 | Design principles; no decorative animation; security review as a Phase 8 exit gate. | [design §1](docs/architecture/06-design-system.md), [risks](docs/architecture/07-risks.md) |
+
+### Real-time
+
+| Rules | Mechanism | Location |
+| --- | --- | --- |
+| 9, 10, 11 | Topic authorization is decided from the SUBSCRIBER'S own live context and **re-evaluated on every delivery**, not cached at subscribe time. A demoted operator stops receiving on the next event, with no revocation machinery — there is nothing cached to revoke. | [realtime §5](docs/architecture/03-realtime.md), `apps/api/src/realtime/topics.ts` |
+| 12 | A topic naming another organization or another user is a denial, not a subscription. A topic that will not parse is refused. | `packages/contracts/src/realtime.ts`, `apps/api/src/realtime/topics.ts` |
+| 16 | Event payloads carry identifiers and the handful of fields a screen needs to know something moved — never a description, a caller's phone number, a note body, an email or a rank. Asserted by a test that searches the whole serialised frame. | [realtime §4](docs/architecture/03-realtime.md), `apps/api/test/realtime.test.ts` |
+| 18 | The socket is read-mostly: it carries `auth`, `subscribe`, `unsubscribe`, `resync`, `ping` and nothing else. Every mutation goes through REST, so there is one validation path and one audit path. | [realtime §4](docs/architecture/03-realtime.md) |
+| 21, 22 | Throttling, batching, latest-state coalescing and per-subscriber visibility caching, each at its own layer, with exactly one clock. | [realtime §7](docs/architecture/03-realtime.md), `apps/api/src/realtime/location-broadcaster.ts` |
+| 23 | Events are emitted only for changes that were already audited: services return a `DispatchOutcome` and the route publishes it, so an event cannot exist for a change that has no audit row. | `apps/api/src/modules/dispatch/dispatch.events.ts` |
+| 31, 32 | Topic authorization, ticket single-use, mid-connection demotion and payload leakage are release-gate tests. | `apps/api/test/realtime.test.ts` |
+| 41 | The cookie could not cross the origin boundary the socket needs; raised and resolved in writing rather than worked around. | [ADR-0013](docs/adr/0013-websocket-ticket-handshake.md) |
+| 42 | The transport document records where the implementation diverged from the design, rather than quietly editing the plan to match. | [realtime](docs/architecture/03-realtime.md) |
+| 45 | The status bar reports the connection's ACTUAL state — "Feed: live" or "Feed: polling" — never a green light it has not earned. | `apps/web/components/shell/status-bar.tsx` |
 
 ### Dispatch-specific
 

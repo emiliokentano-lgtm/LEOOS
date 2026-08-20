@@ -5,6 +5,7 @@ import contextPlugin from './plugins/context.js';
 import errorsPlugin from './plugins/errors.js';
 import authPlugin from './plugins/auth.js';
 import mapSourcePlugin from './plugins/map-source.js';
+import realtimePlugin from './plugins/realtime.js';
 import authRoutes from './modules/auth/auth.routes.js';
 import organizationRoutes from './modules/organizations/organization.routes.js';
 import personnelRoutes from './modules/personnel/personnel.routes.js';
@@ -15,6 +16,8 @@ import searchRoutes from './modules/search/search.routes.js';
 import mapRoutes from './modules/map/map.routes.js';
 import dispatchRoutes from './modules/dispatch/dispatch.routes.js';
 import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
+import realtimeTicketRoutes from './realtime/ticket.routes.js';
+import websocketRoutes from './realtime/ws.routes.js';
 import type { MailTransport } from './modules/auth/mail.js';
 import type { LivePositionStore } from './modules/map/sources/live-positions.js';
 import type { PositionSource } from './modules/map/sources/position-source.js';
@@ -105,6 +108,12 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
   // After the context plugin: the position source needs `app.db` to load the
   // unit roster it simulates.
   await app.register(mapSourcePlugin, { config, ...options.map });
+  /**
+   * After the map source: the location broadcaster reads `app.mapPositions`, and
+   * the hub's visibility resolver reads `app.db`. Registering it earlier would
+   * capture undefined decorators.
+   */
+  await app.register(realtimePlugin, { config });
 
   app.get('/health', async () => ({ status: 'ok' }));
   app.get('/health/ready', async () => {
@@ -153,6 +162,17 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
    * reads and gated on the same permission — see modules/dashboard.
    */
   await app.register(dashboardRoutes, { prefix: '/api/v1/dashboard' });
+  /**
+   * Real-time is TWO surfaces, deliberately separate.
+   *
+   * `/api/v1/realtime/ticket` is an ordinary authenticated POST — it is where the
+   * session cookie is read and a short-lived, single-use ticket is issued
+   * (ADR-0013). `/ws` is the socket itself, and it is NOT under `/api/v1`: it is
+   * not a versioned REST resource, it carries no cookie, and it authenticates
+   * from its first message rather than from a header.
+   */
+  await app.register(realtimeTicketRoutes, { prefix: '/api/v1/realtime' });
+  await app.register(websocketRoutes);
 
   return app;
 }

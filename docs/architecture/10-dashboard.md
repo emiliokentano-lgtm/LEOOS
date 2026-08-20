@@ -91,16 +91,23 @@ The brief asks the dashboard to update on six events: incident created, incident
 updated, unit status changed, unit joined or left, panic, and personnel status
 changed.
 
-All six move the shared revision, so all six are covered by **one mechanism**
-rather than six subscriptions, and none requires a manual refresh. The poll sends
-the last revision it saw; the server answers `{ changed: false }` cheaply when
-nothing has moved. `apps/api/test/dashboard.test.ts` fires each of the six and
-asserts the revision moves.
+All six now arrive on the WebSocket, on the `org:{id}:incidents`, `:units`,
+`:panic` and `:personnel` topics, and each triggers a refetch of the dashboard —
+never a patch of its counts from an event payload, which would reintroduce exactly
+the drift §3 exists to prevent.
+
+All six ALSO move the shared revision, which is what the backstop poll compares.
+That redundancy is deliberate rather than accidental: the socket makes the
+dashboard fast, the revision makes it correct when the socket is not there. The
+poll drops to 30 seconds while the socket is live.
+`apps/api/test/dashboard.test.ts` fires each of the six and asserts the revision
+moves; `apps/api/test/realtime.test.ts` asserts the events reach a socket.
 
 The client sits behind `PollingSource` (`apps/web/lib/polling-source.ts`),
-extracted at its second real use — dispatch and the dashboard. It is push-shaped
-(`start(events)` with callbacks, not `getState()`) so the WebSocket that replaces
-it is a second implementation rather than a redesign.
+extracted at its second real use — dispatch and the dashboard — and
+`useRealtimeRefresh` (`apps/web/lib/realtime/`). `PollingSource` is push-shaped
+(`start(events)` with callbacks, not `getState()`), which is why adding the socket
+beside it needed no redesign of the screen.
 
 ---
 

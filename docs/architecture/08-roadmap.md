@@ -167,7 +167,7 @@ explicit opt-in.
 ---
 
 ## Phase 5 — Dispatch & real-time
-*Estimate: 2–2.5 weeks*
+*Estimate: 2–2.5 weeks · **delivered**, with two deviations recorded below*
 
 - `duty_status`, `duty_status_type`, `unit`, `unit_member`, `incident`,
   `incident_type`, `incident_assignment`, `incident_log`, `incident_link`,
@@ -176,15 +176,30 @@ explicit opt-in.
   database constraint
 - Incident lifecycle, assignment, timeline, closure
 - Panic activation, broadcast, acknowledgement
-- WebSocket hub: topic authorization, snapshot+delta, heartbeats, reconnect
-- Redis pub/sub fan-out; post-commit publishing
+- WebSocket hub: topic authorization, heartbeats, reconnect
+- Post-commit publishing
 - Permission-change re-evaluation of live subscriptions
 - Dispatch console and dashboard screens
 
-**Exit:** two browsers see each other's status, unit, and incident changes within
-one second without reload; a revoked session's socket closes; a demoted user loses
-the topics they no longer qualify for while connected; the dispatch console is
-usable end to end on one 1080p display.
+**Exit — met.** Two browsers see each other's changes without reload (measured at
+~0.7 s for a panic, `apps/web/scripts/realtime-check.mjs`); `closeSession` closes a
+revoked session's sockets; a demoted user stops receiving on the next event, with
+32 tests covering it; the dispatch console is usable end to end on one 1080p
+display.
+
+**Deviation 1 — snapshot+delta became HTTP snapshot + socket delta.** A snapshot is
+a large authorized read that already had an endpoint; carrying it over the socket
+would have duplicated that read path for no gain.
+
+**Deviation 2 — Redis pub/sub fan-out is NOT done.** Redis is not provisioned, so
+the hub, the ticket store and the live position store are all in-process. That
+makes this **single-node**, which is stated in
+[03-realtime §6](03-realtime.md) rather than left to be discovered on the second
+instance. Nothing above the hub would change when it lands: services already return
+their events rather than publishing them.
+
+Authentication also changed shape ([ADR-0013](../adr/0013-websocket-ticket-handshake.md)) —
+the cookie cannot cross the origin boundary the socket needs.
 
 ---
 

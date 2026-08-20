@@ -4,10 +4,14 @@ import { PollingSource, type ConnectionState, type PollingEvents } from '../poll
 /**
  * The dispatch board's feed.
  *
- * A thin binding of the shared `PollingSource` to the dispatch endpoint. The
- * screen depends on this module, so replacing polling with the
- * `org:{id}:incidents` / `:units` / `:panic` topics
- * (docs/architecture/03-realtime.md §3) is a change here and nowhere else.
+ * A thin binding of the shared `PollingSource` to the dispatch endpoint.
+ *
+ * The WebSocket did NOT replace this — it demoted it. Live updates arrive on the
+ * `org:{id}:incidents` / `:units` / `:panic` topics and trigger a refresh here,
+ * and the poll drops to `BACKSTOP_POLL_MS`. Keeping the poll is deliberate: it
+ * is the only thing that would notice a socket that believes it is healthy while
+ * delivering nothing, and it is what the board runs on for a caller whose socket
+ * cannot connect at all.
  */
 
 export type DispatchConnectionState = ConnectionState;
@@ -41,6 +45,9 @@ export class HttpDispatchSource {
 
   stop(): void { this.source.stop(); }
   refresh(): void { this.source.refresh(); }
+
+  /** Drops to a slow backstop while the WebSocket carries the board. */
+  setPollMs(intervalMs: number): void { this.source.setIntervalMs(intervalMs); }
 
   setIncludeClosed(includeClosed: boolean): void {
     if (this.includeClosed === includeClosed) return;

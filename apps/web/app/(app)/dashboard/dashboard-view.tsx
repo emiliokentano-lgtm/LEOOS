@@ -4,7 +4,7 @@ import * as React from 'react';
 import Link from 'next/link';
 import { ArrowUpRight, Radio, TriangleAlert } from 'lucide-react';
 import {
-  INCIDENT_STATUSES, PRIORITY_LIST,
+  BACKSTOP_POLL_MS, DASHBOARD_POLL_MS, INCIDENT_STATUSES, PRIORITY_LIST,
   type DashboardAlert, type DashboardSnapshot, type DispatchIncidentSummary,
   type DispatchUnit, type OperationalStatusMeta,
 } from '@leoos/contracts';
@@ -19,6 +19,9 @@ import {
   HttpDashboardSource, type DashboardConnectionState,
 } from '@/lib/dashboard/dashboard-source';
 import { useNow } from '@/lib/map/use-now';
+import { useAuth } from '@/components/shell/auth-context';
+import { useRealtimeRefresh, useRealtimeStatus } from '@/lib/realtime/realtime-context';
+import { BOARD_EVENTS, dashboardTopics } from '@/lib/realtime/topics';
 import { cn, formatElapsed } from '@/lib/utils';
 import { CountTile, MetricTile } from './metric-tile';
 
@@ -49,14 +52,17 @@ export function DashboardView({
   const sourceRef = React.useRef<HttpDashboardSource | null>(null);
   const duty = useDutyStatus();
   const now = useNow();
+  const auth = useAuth();
+  const realtime = useRealtimeStatus();
 
   /**
-   * The live feed.
+   * The backstop feed.
    *
    * Covers every event the brief lists — incident created, incident updated,
    * unit status changed, unit joined or left, panic, personnel status changed —
-   * because all six move the shared dispatch revision. One mechanism, not six
-   * subscriptions, and no manual refresh.
+   * because all six move the shared dispatch revision. The WebSocket below
+   * delivers the same six in under a second; this is what keeps the figures
+   * moving for a console whose socket cannot connect.
    */
   React.useEffect(() => {
     const feed = new HttpDashboardSource();
@@ -72,6 +78,24 @@ export function DashboardView({
   }, []);
 
   const refresh = React.useCallback(() => sourceRef.current?.refresh(), []);
+
+  // ── Live updates ────────────────────────────────────────────────────────
+  //
+  // The dashboard is composed from the dispatch reads and shares its revision
+  // (docs/architecture/10-dashboard.md §3), so refetching on an event is what
+  // keeps its counts from drifting away from the board it links to. Patching
+  // them from payloads would reintroduce exactly that drift.
+  const topics = React.useMemo(
+    () => dashboardTopics({ userId: auth.userId, organizationId: auth.activeOrganizationId }),
+    [auth.userId, auth.activeOrganizationId],
+  );
+  useRealtimeRefresh(topics, refresh, { interestingTypes: BOARD_EVENTS });
+
+  React.useEffect(() => {
+    sourceRef.current?.setPollMs(
+      realtime.state === 'live' ? BACKSTOP_POLL_MS : DASHBOARD_POLL_MS,
+    );
+  }, [realtime.state]);
 
   // ── Loading and error states ────────────────────────────────────────────
   if (snapshot === null && connection === 'connecting') {

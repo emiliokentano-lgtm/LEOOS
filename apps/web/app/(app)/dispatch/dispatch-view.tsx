@@ -3,8 +3,8 @@
 import * as React from 'react';
 import { Plus, Radio, RefreshCw, TriangleAlert } from 'lucide-react';
 import {
-  EMPTY_DISPATCH_FILTER, INCIDENT_STATUSES, PRIORITY_LIST, compareIncidentsForQueue,
-  countActiveDispatchFilters, matchesDispatchIncident,
+  BACKSTOP_POLL_MS, DISPATCH_POLL_MS, EMPTY_DISPATCH_FILTER, INCIDENT_STATUSES, PRIORITY_LIST,
+  compareIncidentsForQueue, countActiveDispatchFilters, matchesDispatchIncident,
   type DispatchBoard, type DispatchFilterState, type DispatchIncidentSummary,
 } from '@leoos/contracts';
 import {
@@ -12,6 +12,9 @@ import {
   SearchInput, Tabs, TabsList, TabsTrigger, useToast,
 } from '@/components/ui';
 import { HttpDispatchSource, type DispatchConnectionState } from '@/lib/dispatch/dispatch-source';
+import { useRealtimeRefresh, useRealtimeStatus } from '@/lib/realtime/realtime-context';
+import { BOARD_EVENTS, dispatchTopics } from '@/lib/realtime/topics';
+import { useAuth } from '@/components/shell/auth-context';
 import { useNow } from '@/lib/map/use-now';
 import { cn, formatElapsed } from '@/lib/utils';
 import { StatusControl } from './status-control';
@@ -43,6 +46,8 @@ export function DispatchView({ initialBoard }: { initialBoard: DispatchBoard | n
   const sourceRef = React.useRef<HttpDispatchSource | null>(null);
   const now = useNow();
   const toast = useToast();
+  const auth = useAuth();
+  const realtime = useRealtimeStatus();
 
   // ── Feed ────────────────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -63,6 +68,26 @@ export function DispatchView({ initialBoard }: { initialBoard: DispatchBoard | n
   }, [tab]);
 
   const refresh = React.useCallback(() => sourceRef.current?.refresh(), []);
+
+  // ── Live updates ────────────────────────────────────────────────────────
+  //
+  // An event says the board moved; the authorized read says what it moved to.
+  // The board is NOT patched from event payloads — a payload rich enough to
+  // patch it would have to carry a caller's phone number and an incident
+  // description to every console subscribed to the topic.
+  const topics = React.useMemo(
+    () => dispatchTopics({ userId: auth.userId, organizationId: auth.activeOrganizationId }),
+    [auth.userId, auth.activeOrganizationId],
+  );
+  useRealtimeRefresh(topics, refresh, { interestingTypes: BOARD_EVENTS });
+
+  // While the socket carries the board, the poll becomes a slow backstop rather
+  // than the mechanism — see dispatch-source.ts for why it is not switched off.
+  React.useEffect(() => {
+    sourceRef.current?.setPollMs(
+      realtime.state === 'live' ? BACKSTOP_POLL_MS : DISPATCH_POLL_MS,
+    );
+  }, [realtime.state]);
 
   // ── Derived ─────────────────────────────────────────────────────────────
   // Memoised: a fresh array identity every render would re-run the queue memo

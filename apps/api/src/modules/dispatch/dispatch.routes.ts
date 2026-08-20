@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { MAP } from '@leoos/contracts';
+import { MAP, type RealtimeActor } from '@leoos/contracts';
 import { NotFoundError } from '../../lib/errors.js';
 import type { RequestMeta } from '../auth/auth.service.js';
 import { resolveDispatchScope, type DispatchScope } from './dispatch.scope.js';
@@ -15,6 +15,7 @@ import {
   createUnit, disbandUnit, joinUnit, leaveUnit, setOwnStatus, setUnitStatus,
 } from './unit.service.js';
 import { acknowledgePanic, resolvePanic, triggerPanic } from './panic.service.js';
+import { publishDispatchEvents, type DispatchEmission } from './dispatch.events.js';
 
 /**
  * Dispatch routes.
@@ -28,6 +29,12 @@ import { acknowledgePanic, resolvePanic, triggerPanic } from './panic.service.js
  * the set of endpoints that act on the caller and therefore need no management
  * permission, and keeping them together makes it obvious when something has been
  * added there that should not be.
+ *
+ * THIS LAYER IS ALSO WHERE REAL-TIME EVENTS ARE PUBLISHED. Every mutation
+ * returns a `DispatchOutcome` — its reply value plus what changed — and the
+ * handler publishes the second half after awaiting the first. That ordering is
+ * the point: the await is the commit, so nothing can be broadcast for a
+ * transaction that rolled back (see dispatch.events.ts).
  */
 
 const incidentIdParam = z.object({ incidentId: z.uuid() });
@@ -115,6 +122,21 @@ const deltaSchema = z.object({
   includeClosed: z.boolean().default(false),
 }).strict();
 
+/**
+ * Who to attribute an event to.
+ *
+ * A display name and a user id, and nothing else — the actor travels to every
+ * subscribed console, and an event envelope is the easiest place in the system
+ * to leak a detail nobody asked for (rule 16).
+ */
+function realtimeActor(request: FastifyRequest): RealtimeActor {
+  return {
+    kind: 'user',
+    userId: request.auth?.userId ?? null,
+    label: request.auth?.identity.account.displayName ?? null,
+  };
+}
+
 function meta(request: FastifyRequest): RequestMeta {
   return {
     ip: request.ip,
@@ -135,6 +157,11 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
     const scope = resolveDispatchScope(actor, request.auth!.userId);
     if (!scope.canView) throw new NotFoundError('dispatch');
     return scope;
+  }
+
+  /** Publishes what a mutation reported. Never awaited — see publisher.ts. */
+  function publish(request: FastifyRequest, events: readonly DispatchEmission[]): void {
+    publishDispatchEvents(app.events, realtimeActor(request), events);
   }
 
   // ── Board ────────────────────────────────────────────────────────────────
@@ -195,7 +222,7 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
     const scope = requireDispatch(request);
     const body = createIncidentSchema.parse(request.body);
 
-    const result = await createIncident(app.db, scope, {
+    const { result, events } = await createIncident(app.db, scope, {
       title: body.title,
       description: body.description ?? null,
       typeKey: body.typeKey ?? null,
@@ -207,6 +234,7 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
       organizationId: body.organizationId ?? null,
     }, meta(request));
 
+    publish(request, events);
     return reply.status(201).send(result);
   });
 
@@ -215,7 +243,7 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
     const { incidentId } = incidentIdParam.parse(request.params);
     const body = updateIncidentSchema.parse(request.body);
 
-    await updateIncident(app.db, scope, incidentId, {
+    const { events } = await updateIncident(app.db, scope, incidentId, {
       ...(body.title === undefined ? {} : { title: body.title }),
       ...(body.description === undefined ? {} : { description: body.description ?? null }),
       ...(body.typeKey === undefined ? {} : { typeKey: body.typeKey ?? null }),
@@ -225,6 +253,7 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
       ...(body.callerPhone === undefined ? {} : { callerPhone: body.callerPhone ?? null }),
     }, meta(request));
 
+    publish(request, events);
     return reply.send({ updated: true });
   });
 
@@ -232,7 +261,10 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
     const scope = requireDispatch(request);
     const { incidentId } = incidentIdParam.parse(request.params);
     const { status } = statusSchema.parse(request.body);
-    await changeIncidentStatus(app.db, scope, incidentId, status, meta(request));
+    const { events } = await changeIncidentStatus(
+      app.db, scope, incidentId, status, meta(request),
+    );
+    publish(request, events);
     return reply.send({ updated: true });
   });
 
@@ -240,9 +272,10 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
     const scope = requireDispatch(request);
     const { incidentId } = incidentIdParam.parse(request.params);
     const body = prioritySchema.parse(request.body);
-    await changeIncidentPriority(
+    const { events } = await changeIncidentPriority(
       app.db, scope, incidentId, body.priority, body.reason ?? null, meta(request),
     );
+    publish(request, events);
     return reply.send({ updated: true });
   });
 
@@ -250,10 +283,11 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
     const scope = requireDispatch(request);
     const { incidentId } = incidentIdParam.parse(request.params);
     const body = closeSchema.parse(request.body ?? {});
-    await closeIncident(
+    const { events } = await closeIncident(
       app.db, scope, incidentId, { cancelled: body.cancelled, notes: body.notes ?? null },
       meta(request),
     );
+    publish(request, events);
     return reply.send({ closed: true });
   });
 
@@ -261,7 +295,8 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
     const scope = requireDispatch(request);
     const { incidentId } = incidentIdParam.parse(request.params);
     const { reason } = reopenSchema.parse(request.body);
-    await reopenIncident(app.db, scope, incidentId, reason, meta(request));
+    const { events } = await reopenIncident(app.db, scope, incidentId, reason, meta(request));
+    publish(request, events);
     return reply.send({ reopened: true });
   });
 
@@ -269,7 +304,8 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
     const scope = requireDispatch(request);
     const { incidentId } = incidentIdParam.parse(request.params);
     const { body } = noteSchema.parse(request.body);
-    await addIncidentNote(app.db, scope, incidentId, body, meta(request));
+    const { events } = await addIncidentNote(app.db, scope, incidentId, body, meta(request));
+    publish(request, events);
     return reply.status(201).send({ added: true });
   });
 
@@ -278,14 +314,20 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
     const scope = requireDispatch(request);
     const { incidentId } = incidentIdParam.parse(request.params);
     const body = assignSchema.parse(request.body);
-    await assignUnit(app.db, scope, incidentId, body.unitId, body.role ?? null, meta(request));
+    const { events } = await assignUnit(
+      app.db, scope, incidentId, body.unitId, body.role ?? null, meta(request),
+    );
+    publish(request, events);
     return reply.status(201).send({ assigned: true });
   });
 
   app.delete('/incidents/:incidentId/units/:unitId', async (request, reply) => {
     const scope = requireDispatch(request);
     const params = z.object({ incidentId: z.uuid(), unitId: z.uuid() }).parse(request.params);
-    await releaseUnit(app.db, scope, params.incidentId, params.unitId, meta(request));
+    const { events } = await releaseUnit(
+      app.db, scope, params.incidentId, params.unitId, meta(request),
+    );
+    publish(request, events);
     return reply.send({ released: true });
   });
 
@@ -293,7 +335,7 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
   app.post('/units', async (request, reply) => {
     const scope = requireDispatch(request);
     const body = createUnitSchema.parse(request.body);
-    const result = await createUnit(app.db, scope, {
+    const { result, events } = await createUnit(app.db, scope, {
       callsign: body.callsign,
       name: body.name ?? null,
       unitType: body.unitType,
@@ -301,13 +343,15 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
       isCovert: body.isCovert,
       joinSelf: body.joinSelf,
     }, meta(request));
+    publish(request, events);
     return reply.status(201).send(result);
   });
 
   app.delete('/units/:unitId', async (request, reply) => {
     const scope = requireDispatch(request);
     const { unitId } = unitIdParam.parse(request.params);
-    await disbandUnit(app.db, scope, unitId, meta(request));
+    const { events } = await disbandUnit(app.db, scope, unitId, meta(request));
+    publish(request, events);
     return reply.send({ disbanded: true });
   });
 
@@ -315,7 +359,8 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
     const scope = requireDispatch(request);
     const { unitId } = unitIdParam.parse(request.params);
     const { statusKey } = unitStatusSchema.parse(request.body);
-    await setUnitStatus(app.db, scope, unitId, statusKey, meta(request));
+    const { events } = await setUnitStatus(app.db, scope, unitId, statusKey, meta(request));
+    publish(request, events);
     return reply.send({ updated: true });
   });
 
@@ -328,29 +373,33 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
   app.post('/self/status', async (request, reply) => {
     const scope = requireDispatch(request);
     const { statusKey } = ownStatusSchema.parse(request.body);
-    await setOwnStatus(app.db, scope, statusKey, meta(request));
+    const { events } = await setOwnStatus(app.db, scope, statusKey, meta(request));
+    publish(request, events);
     return reply.send({ updated: true });
   });
 
   app.post('/self/unit/:unitId', async (request, reply) => {
     const scope = requireDispatch(request);
     const { unitId } = unitIdParam.parse(request.params);
-    await joinUnit(app.db, scope, unitId, meta(request));
+    const { events } = await joinUnit(app.db, scope, unitId, meta(request));
+    publish(request, events);
     return reply.send({ joined: true });
   });
 
   app.delete('/self/unit', async (request, reply) => {
     const scope = requireDispatch(request);
-    await leaveUnit(app.db, scope, meta(request));
+    const { events } = await leaveUnit(app.db, scope, meta(request));
+    publish(request, events);
     return reply.send({ left: true });
   });
 
   app.post('/self/panic', async (request, reply) => {
     const scope = requireDispatch(request);
     const body = panicSchema.parse(request.body ?? {});
-    const result = await triggerPanic(
+    const { result, events } = await triggerPanic(
       app.db, scope, { x: body.x ?? null, y: body.y ?? null, source: 'web' }, meta(request),
     );
+    publish(request, events);
     return reply.status(201).send(result);
   });
 
@@ -358,7 +407,8 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
   app.post('/panics/:panicId/acknowledge', async (request, reply) => {
     const scope = requireDispatch(request);
     const { panicId } = panicIdParam.parse(request.params);
-    await acknowledgePanic(app.db, scope, panicId, meta(request));
+    const { events } = await acknowledgePanic(app.db, scope, panicId, meta(request));
+    publish(request, events);
     return reply.send({ acknowledged: true });
   });
 
@@ -366,7 +416,10 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
     const scope = requireDispatch(request);
     const { panicId } = panicIdParam.parse(request.params);
     const body = resolvePanicSchema.parse(request.body ?? {});
-    await resolvePanic(app.db, scope, panicId, body.restoreStatusKey ?? null, meta(request));
+    const { events } = await resolvePanic(
+      app.db, scope, panicId, body.restoreStatusKey ?? null, meta(request),
+    );
+    publish(request, events);
     return reply.send({ resolved: true });
   });
 }

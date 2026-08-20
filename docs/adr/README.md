@@ -21,3 +21,4 @@ the old one.
 | [0010](0010-web-tier-holds-cookie-api-holds-truth.md) | Web tier holds the cookie; the API holds the truth | Accepted |
 | [0011](0011-organization-lead-is-not-delegable.md) | Organization Lead is a capability, and it is not delegable | Accepted |
 | [0012](0012-defer-leaflet-until-tiles.md) | Defer Leaflet until the licensed tile set exists | Accepted, amends 0005 |
+| [0013](0013-websocket-ticket-handshake.md) | WebSocket authentication by single-use ticket | Accepted, amends 03-realtime §2 |

@@ -17,8 +17,12 @@ import {
 } from '@/components/ui';
 import { Icon } from '@/components/icon';
 import { MapCanvas, type MapCanvasHandle } from '@/components/domain/map-canvas';
-import { HttpMapSource, applyTick, type MapConnectionState } from '@/lib/map/map-source';
+import { applyTick, type MapDataSource, type MapConnectionState } from '@/lib/map/map-source';
+import { RealtimeMapSource } from '@/lib/map/realtime-map-source';
 import { useNow } from '@/lib/map/use-now';
+import { useRealtimeClient } from '@/lib/realtime/realtime-context';
+import { mapTopics } from '@/lib/realtime/topics';
+import { useAuth } from '@/components/shell/auth-context';
 import { cn, timeAgo } from '@/lib/utils';
 import { MarkerDialog } from './marker-dialog';
 import { UnitDetail, IncidentDetail, MarkerDetail } from './map-details';
@@ -37,9 +41,10 @@ import { UnitDetail, IncidentDetail, MarkerDetail } from './map-details';
  *                             ├─▶ units/incidents/markers state ─▶ canvas
  *   MapDataSource ticks ──────┘
  *
- * Nothing in this file knows how positions arrive. `HttpMapSource` polls today;
- * a `SocketMapSource` will push tomorrow. Swapping them is one constructor call
- * — see lib/map/map-source.ts.
+ * Nothing in this file knows how positions arrive. `RealtimeMapSource` takes
+ * batched positions off the `map:units` topic and falls back to polling when the
+ * socket is down; the swap was one constructor call, exactly as the interface
+ * was designed for — see lib/map/map-source.ts and lib/map/realtime-map-source.ts.
  */
 
 export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | null }) {
@@ -60,14 +65,29 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
 
   const canvasRef = React.useRef<MapCanvasHandle>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
-  const sourceRef = React.useRef<HttpMapSource | null>(null);
+  const sourceRef = React.useRef<MapDataSource | null>(null);
+  const auth = useAuth();
+  const realtimeClient = useRealtimeClient();
 
   const capabilities = snapshot?.capabilities ?? null;
   const source = snapshot?.source ?? null;
 
   // ── Live feed ───────────────────────────────────────────────────────────
+  //
+  // The topic list is derived once from the operator's own identity. The server
+  // authorizes each topic against their live permissions and silently drops the
+  // ones they may not have, so nothing here is a permission check.
+  const topics = React.useMemo(
+    () => mapTopics({ userId: auth.userId, organizationId: auth.activeOrganizationId }),
+    [auth.userId, auth.activeOrganizationId],
+  );
+  const topicKey = topics.join(' ');
+
   React.useEffect(() => {
-    const feed = new HttpMapSource();
+    const feed = new RealtimeMapSource({
+      client: realtimeClient,
+      topics: topicKey === '' ? [] : topicKey.split(' '),
+    });
     sourceRef.current = feed;
 
     feed.start({
@@ -94,7 +114,7 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
     });
 
     return () => feed.stop();
-  }, []);
+  }, [realtimeClient, topicKey]);
 
   // The source needs to know what the client holds so it can report removals.
   React.useEffect(() => {

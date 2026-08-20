@@ -4,6 +4,7 @@ import type { OrganizationSummary } from '@leoos/contracts';
 import type { NavSection } from '@/lib/navigation';
 import type { Session } from '@/lib/session';
 import { ToastProvider, TooltipProvider } from '@/components/ui';
+import { RealtimeProvider } from '@/lib/realtime/realtime-context';
 import { AuthProvider, type AuthState } from './auth-context';
 import { Sidebar } from './sidebar';
 import { TopBar } from './top-bar';
@@ -39,6 +40,12 @@ export function AppShell({
 }) {
   return (
     <AuthProvider state={authState}>
+    {/*
+      * The socket lives ABOVE the router outlet, so moving between dispatch, the
+      * map and the dashboard reuses one connection rather than minting a ticket
+      * and resyncing on every sidebar click.
+      */}
+    <RealtimeProvider>
     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
       <DutyStatusProvider>
         <CommandPaletteProvider sections={sections}>
@@ -60,6 +67,7 @@ export function AppShell({
         </CommandPaletteProvider>
       </DutyStatusProvider>
     </TooltipProvider>
+    </RealtimeProvider>
     </AuthProvider>
   );
 }

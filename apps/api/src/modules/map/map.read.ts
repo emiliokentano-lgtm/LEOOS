@@ -3,7 +3,8 @@ import {
   incident, incidentType, mapMarker, operationalStatus, organization, organizationMember,
   person, unit, unitMember, userAccount, vehicle, type Database,
 } from '@leoos/db';
-import type { MapScope } from './map.scope.js';
+import type { ActorContext } from '@leoos/authz-core';
+import { resolveMapScope, type MapScope } from './map.scope.js';
 
 /**
  * Map reads.
@@ -367,4 +368,32 @@ export async function getMarkerCore(db: Database, markerId: string) {
     .where(eq(mapMarker.id, markerId))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * The unit ids one subscriber may see positions for.
+ *
+ * Used by the real-time hub to filter the position feed per subscriber. It runs
+ * the SAME `visibilityPredicate` as every other query in this module, so the
+ * live feed cannot become a second, weaker door onto covert units than the
+ * snapshot is — which is exactly the failure mode the map's visibility rules
+ * exist to prevent.
+ *
+ * Ids only. The hub does not need unit detail and should not be handed it.
+ */
+export async function visibleUnitIdsFor(
+  db: Database,
+  actor: ActorContext,
+  actorUserId: string,
+): Promise<Set<string>> {
+  const scope = resolveMapScope(actor, actorUserId);
+  if (!scope.canViewMap) return new Set();
+
+  const rows = await db
+    .select({ id: unit.id })
+    .from(unit)
+    .innerJoin(organization, eq(organization.id, unit.organizationId))
+    .where(and(eq(unit.status, 'active'), visibilityPredicate(scope)));
+
+  return new Set(rows.map((r) => r.id));
 }

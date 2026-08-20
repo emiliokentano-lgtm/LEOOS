@@ -197,9 +197,22 @@ The same seam the map uses. `DispatchDataSource` (`apps/web/lib/dispatch/`) is
 push-shaped — `subscribe` with callbacks, not `getBoard()` — so the WebSocket
 implementation is natural rather than a faked request/response cycle.
 
-Today it polls `/board/poll` every 4 seconds, sending the last `revision` it saw.
-The server compares a cheap change marker and answers `{ changed: false }`
-without serialising the board, which is the common case on a quiet shift.
+**The socket now carries the board**, on the `org:{id}:incidents`, `:units` and
+`:panic` topics. An event says the board moved; the board then refetches through
+the authorized read, which says what it moved to. Patching screen state from an
+event payload would mean the payload had to carry everything the screen shows —
+which is how a feed ends up broadcasting a caller's phone number to every console
+that can see the topic.
+
+The revision poll was **demoted, not deleted**. It drops to 30 seconds while the
+socket is live and returns to 4 seconds when it is not. Keeping it is deliberate:
+a socket can be silently wrong in ways it cannot detect — a topic denied at
+subscribe time, a proxy holding a connection open with nothing flowing through it
+— and a board that had stopped asking would never find out.
+
+The poll sends the last `revision` it saw. The server compares a cheap change
+marker and answers `{ changed: false }` without serialising the board, which is
+the common case on a quiet shift.
 
 The revision combines a newest-timestamp and a row count per table. A timestamp
 alone misses a DELETE; a count alone misses an edit; and assignments and
@@ -209,9 +222,14 @@ first version was one hand-written statement and shipped two bugs typechecking
 could not see (a column named by its Drizzle property rather than its database
 name, and an array bound as a scalar).
 
-When the socket lands, `revision` becomes the per-topic `seq` the protocol
-already specifies ([03-realtime](03-realtime.md) §3–4), the transport changes, and
-the board, filters and detail panel do not.
+`revision` and the per-topic `seq` now coexist by design rather than one having
+replaced the other: `seq` detects a gap on the socket, `revision` decides whether
+a poll needs to serialise anything. Both are cheap change markers over the same
+data, and neither the board, the filters nor the detail panel know which one
+prompted a refetch.
+
+Measured end to end: a panic raised by one operator reaches a second operator's
+board in **0.5–0.7 s**, with no reload (`apps/web/scripts/realtime-check.mjs`).
 
 ---
 

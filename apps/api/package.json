@@ -11,6 +11,7 @@
     "lint": "echo 'no lint configured'"
   },
   "dependencies": {
+    "@fastify/websocket": "^11.3.0",
     "@leoos/authz-core": "workspace:*",
     "@leoos/contracts": "workspace:*",
     "@leoos/db": "workspace:*",
