@@ -6,6 +6,7 @@ import errorsPlugin from './plugins/errors.js';
 import authPlugin from './plugins/auth.js';
 import mapSourcePlugin from './plugins/map-source.js';
 import realtimePlugin from './plugins/realtime.js';
+import fivemPlugin from './plugins/fivem.js';
 import authRoutes from './modules/auth/auth.routes.js';
 import organizationRoutes from './modules/organizations/organization.routes.js';
 import personnelRoutes from './modules/personnel/personnel.routes.js';
@@ -16,6 +17,8 @@ import searchRoutes from './modules/search/search.routes.js';
 import mapRoutes from './modules/map/map.routes.js';
 import dispatchRoutes from './modules/dispatch/dispatch.routes.js';
 import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
+import fivemRoutes from './modules/fivem/fivem.routes.js';
+import gameServerRoutes from './modules/fivem/gameserver.routes.js';
 import realtimeTicketRoutes from './realtime/ticket.routes.js';
 import websocketRoutes from './realtime/ws.routes.js';
 import type { MailTransport } from './modules/auth/mail.js';
@@ -89,7 +92,20 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
    */
   app.addContentTypeParser(
     'application/json', { parseAs: 'string' },
-    (_request, body: string, done) => {
+    (request, body: string, done) => {
+      /**
+       * The FiveM bridge signs a hash of the body it SENT.
+       *
+       * Re-serialising the parsed object would not reproduce it — key order,
+       * number formatting and whitespace are all free to differ — so the exact
+       * bytes are kept for those routes and only for those routes. Holding the
+       * raw body of every request would be a per-request allocation the rest of
+       * the API has no use for.
+       */
+      if (request.url.startsWith('/api/v1/fivem')) {
+        request.rawBody = body ?? '';
+      }
+
       if (body === undefined || body === null || body.trim() === '') {
         done(null, {});
         return;
@@ -105,6 +121,11 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
   await app.register(contextPlugin, { config, db: options.db, mail: options.mail });
   await app.register(errorsPlugin);
   await app.register(authPlugin);
+  /**
+   * Before the map source: `FiveMPositionSource` is chosen there, and the ingest
+   * surface it serves needs the nonce store and the secret box to exist first.
+   */
+  await app.register(fivemPlugin, { config });
   // After the context plugin: the position source needs `app.db` to load the
   // unit roster it simulates.
   await app.register(mapSourcePlugin, { config, ...options.map });
@@ -171,6 +192,18 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
    * not a versioned REST resource, it carries no cookie, and it authenticates
    * from its first message rather than from a header.
    */
+  /**
+   * FiveM ingest is TWO surfaces with two completely different auth models, and
+   * they are registered separately so that stays visible.
+   *
+   * `/api/v1/fivem/*` is machine-to-machine: no session, no cookie, no CSRF —
+   * every request is authenticated by an HMAC signature over its own body
+   * (04-fivem-integration.md §3). `/api/v1/game-servers/*` is an ordinary
+   * authenticated admin surface gated on `admin.game_servers`, and it is where
+   * the credentials the other surface verifies are issued.
+   */
+  await app.register(fivemRoutes, { prefix: '/api/v1/fivem' });
+  await app.register(gameServerRoutes, { prefix: '/api/v1/game-servers' });
   await app.register(realtimeTicketRoutes, { prefix: '/api/v1/realtime' });
   await app.register(websocketRoutes);
 

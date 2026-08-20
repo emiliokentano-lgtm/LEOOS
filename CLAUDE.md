@@ -104,6 +104,7 @@ is actually held.
 | 17 | `.env*` gitignored; secret scanning in CI; FiveM secret read from a convar, never a file. | `.gitignore`, CI |
 | 18, 19 | Zod schema on every route and every ingest payload; unvalidated `request.body` access is a lint error. | [overview §7](docs/architecture/00-overview.md) |
 | 20 | All FiveM coordinates come from server-side natives. Org, rank, callsign, and permissions always resolve from the LEOOS database. | [fivem §1](docs/architecture/04-fivem-integration.md) |
+| 36, 37 | The bridge's whole framework surface is four fields in `server/adapters/`; **standalone is what ships**, and nothing outside that directory may name a framework global. | [fivem §8](docs/architecture/04-fivem-integration.md), `resources/leoos_bridge/server/adapters/` |
 | 21, 22 | Live state is held out of Postgres (in-process today, Redis when provisioned); Postgres receives a downsample. Position fan-out is throttled by one server-side clock, coalesced to the latest state per unit, and batched to 1 msg/s per subscriber. | [realtime §7](docs/architecture/03-realtime.md), [data-model §9](docs/architecture/01-data-model.md) |
 | 23 | Single audit helper, written in the same transaction as the change; audit table is append-only by DB privilege. | [data-model §7](docs/architecture/01-data-model.md) |
 | 24, 25 | Soft deletion across operational records. | [ADR-0008](docs/adr/0008-soft-deletion.md) |
@@ -133,6 +134,21 @@ is actually held.
 | 41 | The cookie could not cross the origin boundary the socket needs; raised and resolved in writing rather than worked around. | [ADR-0013](docs/adr/0013-websocket-ticket-handshake.md) |
 | 42 | The transport document records where the implementation diverged from the design, rather than quietly editing the plan to match. | [realtime](docs/architecture/03-realtime.md) |
 | 45 | The status bar reports the connection's ACTUAL state — "Feed: live" or "Feed: polling" — never a green light it has not earned. | `apps/web/components/shell/status-bar.tsx` |
+
+### FiveM ingest
+
+| Rules | Mechanism | Location |
+| --- | --- | --- |
+| 10, 19, 20 | The telemetry payload has **nowhere to put** an organization, rank, callsign or unit — absent from the type, refused by a `.strict()` schema. Every organizational fact resolves from `game_identity` → member → unit. A test sends a payload that tries to forge one. | `packages/contracts/src/fivem.ts`, `apps/api/src/modules/fivem/fivem.identity.ts` |
+| 10, 12 | An in-game panic or status change runs through the SAME dispatch service a browser request does, with a scope built from the player's real permissions. The game server asking does not make it so. | `apps/api/src/modules/fivem/fivem.routes.ts` |
+| 16 | The ingest secret leaves the API exactly once, at creation. No endpoint can return it again; the admin DTO does not select the columns. | `apps/api/src/modules/fivem/gameserver.routes.ts` |
+| 17 | The resource reads its secret from a **convar**, never a resource file — server files reach version control and backups even though they never reach clients. | `resources/leoos_bridge/config.lua` |
+| 18, 19 | Zod on every ingest payload, `.strict()` throughout, with bounds on every string and number. | `apps/api/src/modules/fivem/fivem.schema.ts` |
+| 21, 22 | Throttled in the resource (distance/heading/keep-alive), batched one request per tick, coalesced in the live store, and flushed to Postgres at 1/30th the tick rate. | `resources/leoos_bridge/server/collector.lua`, `apps/api/src/plugins/fivem.ts` |
+| 23 | Handshake, credential issue/revoke and identity linking are audited; a refused identity claim is audited as `denied`. | `apps/api/src/modules/fivem/` |
+| 31, 32 | Signature, replay, skew, tamper, revocation and the forge-an-organization attempt are release-gate tests. | `apps/api/test/fivem.test.ts` |
+| 41 | HMAC cannot verify against a one-way hash. Raised and resolved in writing rather than silently weakening the scheme. | [migration 0007](packages/db/migrations/0007_fivem.sql) |
+| 45 | The map source reports the connection it has: "FiveM bridge — not reporting" when nothing is reporting, never a green light it has not earned. | `apps/api/src/modules/fivem/fivem.source.ts` |
 
 ### Dispatch-specific
 

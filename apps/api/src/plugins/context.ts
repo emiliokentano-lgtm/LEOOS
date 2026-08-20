@@ -15,6 +15,14 @@ declare module 'fastify' {
   }
   interface FastifyRequest {
     requestId: string;
+    /**
+     * The body exactly as it arrived, kept only for `/api/v1/fivem` routes.
+     *
+     * Those verify an HMAC over a hash of the bytes the game server sent, and a
+     * re-serialised object is not those bytes. Set in the content-type parser in
+     * app.ts.
+     */
+    rawBody?: string;
     /** Set by the auth plugin once a session resolves. */
     auth?: {
       sessionId: string;

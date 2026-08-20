@@ -42,7 +42,25 @@ export const gameServerCredential = pgTable(
       .references(() => gameServer.id, { onDelete: 'cascade' }),
     /** Public, sent in a header, identifies which secret to verify against. */
     keyId: citext('key_id').notNull(),
+    /**
+     * Argon2id hash of the secret.
+     *
+     * NOT the verification path — see `secretEnc`. HMAC is symmetric, so
+     * verifying a signature needs the key itself, and a one-way hash cannot
+     * provide it. This is kept because it answers "is this the secret you were
+     * given?" for a support flow without decrypting anything.
+     */
     secretHash: text('secret_hash').notNull(),
+    /**
+     * AES-256-GCM ciphertext of the same secret, under a key held in the
+     * environment and never in the database.
+     *
+     * Nullable only for credentials issued before the ingest scheme existed.
+     * One of those cannot be verified at all, and the API says so and asks for a
+     * reissue rather than failing with an inscrutable signature mismatch.
+     * See migration 0007 for why this column has to exist.
+     */
+    secretEnc: text('secret_enc'),
     scopes: text('scopes').array().notNull().default(sql`ARRAY[]::text[]`),
     createdBy: uuid('created_by').references(() => userAccount.id, { onDelete: 'set null' }),
     createdAt: createdAt(),
@@ -70,7 +88,17 @@ export const gameServerState = pgTable(
     resourceVersion: text('resource_version'),
     /** Monotonic replay protection — survives the nonce cache TTL window. */
     lastIngestSeq: bigint('last_ingest_seq', { mode: 'bigint' }).notNull().default(sql`0`),
+    /**
+     * Assigned at handshake, echoed on every later request.
+     *
+     * Lives beside the sequence counter because the two move together: a
+     * restarted resource legitimately starts counting from zero, and without a
+     * session boundary that is indistinguishable from a replay.
+     */
+    sessionId: text('session_id'),
+    sessionStartedAt: timestamp('session_started_at', { withTimezone: true }),
     anomalyCount: integer('anomaly_count').notNull().default(0),
+    lastAnomalyAt: timestamp('last_anomaly_at', { withTimezone: true }),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
 );

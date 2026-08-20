@@ -14,12 +14,24 @@ export interface TestHarness {
   close: () => Promise<void>;
 }
 
-export async function createHarness(): Promise<TestHarness> {
+export interface HarnessOptions {
+  /**
+   * Extra environment for this harness only.
+   *
+   * Used by suites that need a variable the rest do not — the FiveM tests need
+   * an ingest encryption key, and setting one globally would make every other
+   * suite's configuration differ from the default it is meant to exercise.
+   */
+  env?: Record<string, string>;
+}
+
+export async function createHarness(options: HarnessOptions = {}): Promise<TestHarness> {
   const config = loadConfig({
     ...process.env,
+    ...options.env,
     NODE_ENV: 'test',
     INTERNAL_API_TOKEN: 'test-internal-token-0123456789',
-    LOG_LEVEL: 'silent',
+    LOG_LEVEL: process.env.HARNESS_LOG ?? 'silent',
     // Argon2 at production cost would make this suite take minutes. Reduced
     // ONLY for tests; production parameters are validated in config.ts and
     // asserted by a test of their own.

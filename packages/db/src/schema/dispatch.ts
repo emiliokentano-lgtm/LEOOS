@@ -86,6 +86,15 @@ export const unit = pgTable(
     /** Metres per second at the last sample. Drives map interpolation confidence. */
     speed: doublePrecision('speed'),
     positionUpdatedAt: timestamp('position_updated_at', { withTimezone: true }),
+    /**
+     * Which game server reported that position.
+     *
+     * Needed for offline detection: when a game server stops sending
+     * heartbeats, every unit IT was reporting goes offline — and only those. A
+     * deployment with two game servers must not have one going quiet blank the
+     * other's units.
+     */
+    posGameServerId: uuid('pos_game_server_id'),
 
     /**
      * Covert unit — excluded from every map payload except its own

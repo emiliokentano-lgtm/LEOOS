@@ -1,5 +1,23 @@
 # 04 — FiveM Integration
 
+> **Status: implemented.** This described a design; it now describes what runs.
+> Five things changed between the two, and each is recorded here rather than
+> quietly edited away — a document that hides where reality diverged teaches the
+> next person nothing.
+>
+> | Was | Is | Why |
+> | --- | --- | --- |
+> | Secret stored as an Argon2id hash | Secret stored **encrypted** (AES-256-GCM) | HMAC is symmetric — a one-way hash cannot verify a signature. [Migration 0007](../../packages/db/migrations/0007_fivem.sql) |
+> | Nonces in Redis | Nonce cache in-process | Redis is not provisioned. The persisted **sequence** is what holds under scale, and it is checked too. |
+> | Live positions in Redis, TTL 45 s | In-process store, swept on a 5 s tick | Same reason. Same TTL, same semantics. |
+> | `/events` covers in-game panic and duty toggle | Also `player.connected` / `player.dropped` | Prompt departure beats waiting out a 45 s TTL. |
+> | Position history downsampled to `position_history` | **Not built** | No playback UI exists yet; writing history nothing reads is rule 22 in reverse. |
+>
+> Implementation: [`apps/api/src/modules/fivem/`](../../apps/api/src/modules/fivem/),
+> [`resources/leoos_bridge/`](../../resources/leoos_bridge/) — whose
+> [README](../../resources/leoos_bridge/README.md) is the operator-facing
+> installation, configuration and troubleshooting guide.
+
 ## 1. Trust model
 
 The single most important statement in this document:
@@ -66,7 +84,22 @@ server; commands flow the other way by being included in the ingest response bod
 Per game server, a credential pair:
 
 - `key_id` — public, sent in a header, identifies which secret to use.
-- `secret` — 256-bit, shown **once** at creation, stored as an Argon2id hash.
+- `secret` — 256-bit, shown **once** at creation, stored **encrypted at rest**.
+
+> **Corrected from the original design, which said "stored as an Argon2id
+> hash".** That is not achievable alongside HMAC: HMAC is symmetric, so verifying
+> a signature means holding the same key the resource used, and a one-way hash
+> cannot provide it. The alternative — the resource sending its secret on every
+> request — loses the body binding that makes tampering with one coordinate a
+> signature failure, and puts a long-lived credential in every proxy log between
+> the game host and the API.
+>
+> So the secret is sealed with AES-256-GCM under `LEOOS_FIVEM_SECRET_KEY`, held
+> in the environment and never in the database, following the `*_enc` convention
+> this schema already uses for `user_account.totp_secret_enc`. Someone with a
+> database dump alone has ciphertext. `secret_hash` is still written and still
+> never leaves the API; it is no longer the verification path. See
+> [migration 0007](../../packages/db/migrations/0007_fivem.sql).
 
 Every request carries:
 
@@ -84,11 +117,23 @@ Verification, in order, failing closed:
 
 1. `key_id` resolves to a credential that is not revoked and not expired.
 2. `|now − timestamp| ≤ 60 s` (clock skew window).
-3. Nonce unseen — stored in Redis with a 120 s TTL, `SET NX`.
+3. Nonce unseen — in-process, 120 s TTL. **Not Redis**, which is not
+   provisioned; the consequence is stated rather than hidden, in
+   `nonce-store.ts`: across two API processes one instance's nonce cache is
+   unknown to the other, so step 4 is what actually holds under horizontal
+   scale. That is why both checks exist and why they are in this order.
 4. `seq > game_server_state.last_ingest_seq` — monotonic replay protection that
    survives the nonce TTL window.
 5. HMAC recomputed and compared in constant time.
-6. Body validated against the Zod schema.
+6. Body validated against the Zod schema — `.strict()`, so an unknown field is
+   a rejection rather than a silent ignore. That is how a resource sending
+   `organization` finds out immediately instead of shipping for months believing
+   the API reads it.
+
+The **signature check is last** on purpose: it is the only step that costs real
+CPU, and everything above it discards a malformed or replayed request without
+reaching it. An unknown `key_id` and a bad signature return an identical
+response, so the endpoint cannot be used to enumerate key ids.
 
 Signing the body hash rather than the body keeps verification cheap and makes
 tampering with a single coordinate a signature failure.
@@ -167,31 +212,49 @@ silently attach an identifier to an account.
 ```
 signature verified
       ▼
-schema validation (Zod)
+schema validation (Zod, .strict())
       ▼
-sanity filters  ──── reject/flag ────▶ anomaly counter + audit
+identifier extraction ──── no identifier ─────▶ reject, counted
       ▼
-identity resolution (game_identity → member → org, from DB)
+duplicate detection   ──── same id twice ─────▶ reject BOTH, counted
       ▼
-enrichment (callsign, unit, duty status, org colour — all from DB)
+identity resolution (game_identity → member → unit, from DB only)
+      ▼                └─ unlinked / not crewed ──▶ tracked, attributed to nobody
+sanity filters  ──── out of bounds / teleport ──▶ reject, counted
       ▼
-Redis write (unit:live:*, TTL 45 s)
+live position store (TTL 45 s)
       ▼
-downsampler (1 sample / 10 s) ─────▶ position_history
+Postgres `unit.pos_*` cache, at 1/30th the tick rate
       ▼
-delta computation ────────────────▶ realtime hub → map:units
+location broadcaster ─────────────────────────▶ realtime hub → map:units
 ```
+
+`position_history` downsampling is **not built**. The table exists and the
+`map.history` permission exists, but no playback UI does — and writing history
+nothing reads is engineering rule 22 in reverse. It lands with the playback
+screen or not at all.
 
 **Sanity filters** — cheap, and they catch both bugs and spoofing:
 
 | Check | Action on failure |
 | --- | --- |
-| Coordinates within GTA V world bounds (x −4000…4500, y −4500…8500, z −500…1500) | drop sample, increment anomaly counter |
-| Implied speed between consecutive samples ≤ 200 m/s | flag as `teleport`, keep last good position, raise counter |
-| Timestamp within skew window | drop batch |
-| Player count ≤ configured slots | drop batch, alert |
-| Same identifier appearing twice in one batch | drop batch as malformed |
-| Unknown identifier | accept position, mark unit `unlinked`, do not attribute to any org |
+| Coordinates within GTA V world bounds | reject at the schema; the batch is a `400` |
+| Implied speed between consecutive samples ≤ 200 m/s | reject the sample as `teleport`, **keep the last good position**, count the anomaly |
+| Timestamp within skew window | reject the request, `401` |
+| Batch size ≤ 512 players | reject at the schema |
+| Same identifier appearing twice in one batch | reject **both** samples, count twice |
+| Unknown identifier | tracked as seen, attributed to nobody — no organization, no callsign, no unit |
+| Linked but not crewed in a unit | no position: the map shows units, and a person is not one |
+| Member terminated or suspended | no position, immediately |
+
+A rejected coordinate is **never clamped**. That is a deliberate difference from
+the live position store, which does clamp: there, losing track of a unit entirely
+is worse than a slightly wrong pin. At the trust boundary an out-of-world
+coordinate is *evidence*, and it is counted so an operator can see it happened.
+
+The teleport rule keeps the previous position rather than replacing it. A
+dispatcher acting on a slightly stale position is far better off than one acting
+on a position in the ocean.
 
 An unlinked player is tracked but never appears as an organizational unit. This
 matters: it means the map cannot be made to show a fake ICE unit by an unknown
@@ -212,13 +275,24 @@ Three independent levels, because they fail differently:
 
 | Level | Detection | Effect |
 | --- | --- | --- |
-| Player left | present in `departed[]`, or absent from telemetry for 2 consecutive ticks | unit removed from live map immediately |
-| Player stale | Redis key TTL (45 s) expires | unit disappears even if the removal event was lost |
-| Server offline | no heartbeat for 30 s | **all** units for that server marked offline, `admin:events` broadcast, dashboard banner |
+| Player left | present in `departed[]`, or a `player.dropped` event | unit removed from the live map immediately |
+| Position stale | no sample for 45 s | unit disappears even if the removal was lost |
+| Server offline | no heartbeat for 30 s | every unit **that server** was reporting goes offline |
 
-The Redis TTL is the safety net that makes the whole thing self-healing: if the
-API restarts, or a delete is missed, or the game server dies mid-tick, stale units
-still expire on their own. Nothing has to remember to clean up.
+The TTL is the safety net that makes the whole thing self-healing: if the API
+restarts, or a removal is missed, or the game server dies mid-tick, stale
+positions expire on their own and nothing has to remember to clean up. It is
+swept on a 5 s tick by `FiveMPositionSource`.
+
+**Server-offline detection is scoped by `unit.pos_game_server_id`**, added in
+migration 0007 for exactly this reason. A deployment with two game servers must
+not have one going quiet blank the other's units — which is precisely the bug a
+global clear would be.
+
+`FiveMPositionSource.status()` is what the map screen renders, and it reports the
+connection it actually has: with the bridge enabled and nothing reporting it says
+"FiveM bridge — not reporting", never a green light it has not earned
+(engineering rule 45).
 
 ---
 
@@ -256,16 +330,35 @@ thin command handler for identity claiming.
 ```
 leoos_bridge/
 ├── fxmanifest.lua
-├── config.lua              # non-secret defaults
+├── config.lua                    # non-secret defaults, all convar-overridable
+├── README.md                     # installation, configuration, troubleshooting
 ├── server/
-│   ├── main.lua            # tick loop, lifecycle
-│   ├── collector.lua       # server-side natives → player snapshots
-│   ├── transport.lua       # signing, PerformHttpRequest, retry queue
-│   ├── hmac.lua            # HMAC-SHA256 (pure Lua or ox_lib crypto)
-│   └── commands.lua        # applies commands from responses
+│   ├── sha2.lua                  # SHA-256, pure Lua
+│   ├── hmac.lua                  # HMAC-SHA256 (RFC 2104)
+│   ├── adapters/
+│   │   ├── standalone.lua        # base natives only — the default
+│   │   └── init.lua              # selection; the whole framework seam
+│   ├── collector.lua             # server-side natives → snapshots, throttling
+│   ├── transport.lua             # signing, PerformHttpRequest, retry, backoff
+│   ├── commands.lua              # applies commands from responses
+│   └── main.lua                  # lifecycle, loops, in-game commands
 └── client/
-    └── claim.lua           # /leoos-link command only
+    └── claim.lua                 # renders notifications. Nothing else.
 ```
+
+**Crypto is pure Lua, not `ox_lib`.** FiveM ships no primitives, and the
+alternatives were a hard dependency on somebody else's resource for one function,
+or a process spawn per request. About 90 lines, verified at start-up against the
+published FIPS 180-4 and RFC 4231 vectors — a subtly wrong hash does not error,
+it produces a signature the API rejects, which presents as "authentication is
+broken" and sends an operator hunting through their credentials rather than their
+Lua. The resource refuses to start if the self-check fails.
+
+**Throttling lives in the collector**, not the transport: the decision is per
+player and the transport deals in batches. A player is sent when they moved more
+than 3 m, turned more than 10°, changed vehicle, or have not been sent for 10 s.
+On a server where most players are standing still a batch is a handful of entries
+rather than everyone, and a parked server sends nothing at all.
 
 Implementation constraints that shape this design:
 
@@ -278,10 +371,15 @@ Implementation constraints that shape this design:
   is never retried — a one-second-old position is worthless, and retrying it turns
   a blip into a thundering herd.
 - Backoff on failure: 1s → 2s → 4s → 8s → 15s cap, with jitter.
-- **No framework is assumed** (rule 37). The default and reference implementation
-  is `standalone`, which uses only base FiveM natives (`GetPlayerIdentifiers`,
-  `GetEntityCoords`, `GetEntityHeading`, `GetVehiclePedIsIn`) and depends on
-  nothing else. It works on any FiveM server.
+- **No framework is assumed** (rule 37). The default and only shipped
+  implementation is `standalone`, which uses only base FiveM natives
+  (`GetPlayerIdentifiers`, `GetEntityCoords`, `GetEntityHeading`,
+  `GetVehiclePedIsIn`) and depends on nothing else. It works on any FiveM server.
+
+  Adapters **register themselves** into a global table rather than returning a
+  value — FiveM loads each `server_script` as its own chunk and discards what it
+  returns, so a `return` would simply vanish. Adding a framework adapter is one
+  file plus one manifest line, with nothing in `init.lua` to edit.
 
   Framework-specific access is confined to one adapter interface in
   `server/adapters/`, and nothing outside that directory may reference a framework

@@ -31,6 +31,27 @@ const schema = z.object({
   LOGIN_MAX_ATTEMPTS: z.coerce.number().int().positive().default(10),
   LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().positive().default(15),
 
+  /**
+   * Where live unit positions come from.
+   *
+   * Explicit rather than inferred from whether a game server happens to be
+   * registered. "Is this map real?" must be answerable from configuration, not
+   * from the current contents of a table.
+   */
+  POSITION_SOURCE: z.enum(['mock', 'fivem']).default('mock'),
+
+  /**
+   * Base64 32-byte key that encrypts FiveM ingest secrets at rest.
+   *
+   * Optional, because an installation with no game server has no use for it and
+   * refusing to boot would make an optional integration a hard dependency. What
+   * it must never do is silently degrade: without it, credentials cannot be
+   * issued and signed requests cannot be verified, and both say so.
+   *
+   *   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+   */
+  LEOOS_FIVEM_SECRET_KEY: z.string().min(1).optional(),
+
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 });
 
@@ -48,6 +69,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   if (value.NODE_ENV === 'production' && value.ARGON2_MEMORY_KIB < 19456) {
     throw new Error('ARGON2_MEMORY_KIB is below the OWASP baseline for production.');
+  }
+
+  /**
+   * Choosing the FiveM source without a key is a misconfiguration that would
+   * otherwise present as "every game server is unauthenticated", which reads
+   * like a bug in the resource rather than a missing variable here.
+   */
+  if (value.POSITION_SOURCE === 'fivem' && !value.LEOOS_FIVEM_SECRET_KEY) {
+    throw new Error(
+      'POSITION_SOURCE=fivem requires LEOOS_FIVEM_SECRET_KEY, which encrypts ingest ' +
+        'secrets at rest. Without it no game server credential can be verified.',
+    );
   }
 
   return {

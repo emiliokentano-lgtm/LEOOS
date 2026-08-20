@@ -94,4 +94,27 @@ export const LIMITS = {
   passwordResetPerIp: { limit: 10, windowSeconds: 3600 },
   verificationResend: { limit: 3, windowSeconds: 3600 },
   general: { limit: 300, windowSeconds: 60 },
+
+  /**
+   * FiveM ingest, keyed per credential.
+   *
+   * Sized at roughly twice the configured interval so a normal resource never
+   * sees these, and a runaway Lua loop is throttled rather than absorbed. The
+   * point is not to stop an attacker — a forged request fails the signature long
+   * before it gets here — it is to stop a MISCONFIGURED game server from turning
+   * one bad `SetTimeout` into a denial of service against its own dispatch.
+   */
+  fivemTelemetry: { limit: 180, windowSeconds: 60 },
+  fivemHeartbeat: { limit: 60, windowSeconds: 60 },
+  fivemEvents: { limit: 120, windowSeconds: 60 },
+  /** A resource handshakes at start-up. Frequent handshakes mean a crash loop. */
+  fivemHandshake: { limit: 30, windowSeconds: 3600 },
+  /**
+   * Claim attempts, keyed per game server.
+   *
+   * Tight, because this is the one ingest endpoint where a guess is worth
+   * something: six characters is 2 billion combinations, and a five-minute TTL
+   * plus this limit puts a brute force far outside the window.
+   */
+  fivemClaim: { limit: 20, windowSeconds: 600 },
 } as const;
