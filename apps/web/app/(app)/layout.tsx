@@ -1,3 +1,4 @@
+import type { Route } from 'next';
 import { redirect } from 'next/navigation';
 import { AppShell } from '@/components/shell/app-shell';
 import { NAVIGATION, type NavSection } from '@/lib/navigation';
@@ -16,7 +17,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // The real guard. Middleware only checks that a cookie exists; this is where
   // the session is actually validated, by the API.
   const session = await getSessionOrNull();
-  if (!session) redirect('/login');
+  // NOT `/login`: the middleware would bounce a caller who still holds a stale
+  // cookie straight back here, and the two would redirect at each other until
+  // the browser gave up. `/api/session/expired` clears the cookie first — see
+  // the note there.
+  // The cast is because typed routes only enumerate PAGE routes; this is a
+  // Route Handler, which is the only thing that can clear a cookie.
+  if (!session) redirect('/api/session/expired' as Route);
 
   const organizations = session.memberships.map((m) => m.organization);
   const organization = organizations.find((o) => o.id === session.organizationId);

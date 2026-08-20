@@ -235,22 +235,97 @@ describe('ingest authentication', () => {
 
   it('refuses a stale sequence number even with a fresh nonce', async () => {
     // The nonce cache is in-process and expires; the sequence is persisted and
-    // does not. This is the check that survives a restart.
+    // does not. This is the check that survives a restart of the API.
+    //
+    // Asserted on TELEMETRY rather than on the handshake, because the handshake
+    // is deliberately exempt — see the restart test below.
     const credential = await registerServer('seq');
-    const ok = await post(credential, '/api/v1/fivem/handshake', { resourceVersion: '1.0.0' }, {
-      seq: 5_000n,
-    });
+    const sessionId = await handshake(credential);
+    const payload = { sessionId, sentAt: Date.now(), players: [] };
+
+    const ok = await post(credential, '/api/v1/fivem/telemetry', payload, { seq: 5_000n });
     expect(ok.statusCode).toBe(200);
 
-    const stale = await post(credential, '/api/v1/fivem/handshake', { resourceVersion: '1.0.0' }, {
-      seq: 4_999n,
-    });
+    const stale = await post(credential, '/api/v1/fivem/telemetry', payload, { seq: 4_999n });
     expect(stale.statusCode).toBe(409);
 
-    const equal = await post(credential, '/api/v1/fivem/handshake', { resourceVersion: '1.0.0' }, {
-      seq: 5_000n,
-    });
+    const equal = await post(credential, '/api/v1/fivem/telemetry', payload, { seq: 5_000n });
     expect(equal.statusCode).toBe(409);
+  });
+
+  it('lets a restarted game server handshake from a LOWER sequence', async () => {
+    /**
+     * The restart path, which the sequence check would otherwise make
+     * impossible.
+     *
+     * The resource counts per process. The API remembers per credential, in the
+     * database. So a game server that restarts comes back counting from near
+     * zero while this side is holding a mark in the thousands — and if the
+     * handshake were checked against it, the credential would be bricked: every
+     * request refused, and the one remedy the error message names ("re-run the
+     * handshake") unavailable. An administrator would have to issue a new
+     * secret every time a game server rebooted.
+     */
+    const credential = await registerServer('restart');
+
+    const first = await post(credential, '/api/v1/fivem/handshake', { resourceVersion: '1.0.0' }, {
+      seq: 900_000n,
+    });
+    expect(first.statusCode).toBe(200);
+    const oldSession = (first.json() as { sessionId: string }).sessionId;
+    expect(
+      (await post(credential, '/api/v1/fivem/telemetry', {
+        sessionId: oldSession, sentAt: Date.now(), players: [],
+      }, { seq: 900_001n })).statusCode,
+    ).toBe(200);
+
+    // The server restarts: a fresh process, counting from the bottom again.
+    const restarted = await post(credential, '/api/v1/fivem/handshake', {
+      resourceVersion: '1.0.0',
+    }, { seq: 12n });
+    expect(restarted.statusCode).toBe(200);
+    const newSession = (restarted.json() as { sessionId: string }).sessionId;
+    expect(newSession).not.toBe(oldSession);
+
+    // And it can speak again, from its own low numbers.
+    expect(
+      (await post(credential, '/api/v1/fivem/telemetry', {
+        sessionId: newSession, sentAt: Date.now(), players: [],
+      }, { seq: 13n })).statusCode,
+    ).toBe(200);
+
+    // The old session is gone with it, so traffic captured from the previous
+    // run cannot be replayed into the new one.
+    expect(
+      (await post(credential, '/api/v1/fivem/telemetry', {
+        sessionId: oldSession, sentAt: Date.now(), players: [],
+      }, { seq: 14n })).statusCode,
+    ).toBe(400);
+  });
+
+  it('still refuses a REPLAYED handshake, exemption or not', async () => {
+    // The exemption removes the ordering check, not the replay protection. A
+    // captured handshake is refused by the nonce inside the skew window and by
+    // the timestamp outside it, so there is no window in which it works.
+    const credential = await registerServer('handshake-replay');
+    const body = JSON.stringify({ resourceVersion: '1.0.0' });
+    const headers = signedHeaders(credential, '/api/v1/fivem/handshake', body, { seq: 500n });
+
+    const first = await h.app.inject({
+      method: 'POST', url: '/api/v1/fivem/handshake', payload: body, headers,
+    });
+    expect(first.statusCode).toBe(200);
+
+    const replayed = await h.app.inject({
+      method: 'POST', url: '/api/v1/fivem/handshake', payload: body, headers,
+    });
+    expect(replayed.statusCode).toBe(409);
+
+    const tooOld = await post(credential, '/api/v1/fivem/handshake', { resourceVersion: '1.0.0' }, {
+      seq: 501n,
+      timestamp: Math.floor(Date.now() / 1000) - FIVEM_CLOCK_SKEW_SECONDS - 30,
+    });
+    expect(tooOld.statusCode).toBe(401);
   });
 
   it('refuses a timestamp outside the skew window', async () => {
@@ -304,16 +379,22 @@ describe('ingest authentication', () => {
     /**
      * Otherwise a request that failed validation stays replayable for as long as
      * an attacker cares to wait for its nonce to expire.
+     *
+     * On telemetry rather than on the handshake: the handshake has no sequence
+     * to burn by design, and is protected against exactly this by the timestamp
+     * window instead — see the replay test above.
      */
     const credential = await registerServer('burn');
-    const bad = await post(credential, '/api/v1/fivem/handshake', { nonsense: true }, {
+    const sessionId = await handshake(credential);
+
+    const bad = await post(credential, '/api/v1/fivem/telemetry', { nonsense: true }, {
       seq: 7_000n,
     });
     expect(bad.statusCode).toBe(400);
 
-    const reuse = await post(credential, '/api/v1/fivem/handshake', { resourceVersion: '1.0.0' }, {
-      seq: 7_000n,
-    });
+    const reuse = await post(credential, '/api/v1/fivem/telemetry', {
+      sessionId, sentAt: Date.now(), players: [],
+    }, { seq: 7_000n });
     expect(reuse.statusCode).toBe(409);
   });
 });

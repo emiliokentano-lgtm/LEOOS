@@ -353,9 +353,14 @@ The game host's clock is wrong. Fix NTP on the host; do not widen the window.
 
 ### `Request sequence is not ahead of the last accepted one` (409)
 
-The resource restarted and its sequence counter reset. It re-handshakes on its
-own within one heartbeat and recovers — no action needed. If it repeats
-continuously, two resources are sharing one credential; issue each its own.
+Two requests overtook each other, or the host's clock went backwards far enough
+that the counter — seeded from `os.time()` — restarted behind where the previous
+run finished. The resource re-handshakes on its own within one heartbeat and
+recovers: the handshake is the one request allowed to establish the sequence
+rather than continue it, which is exactly so that a restart is survivable.
+
+If it repeats continuously, two resources are sharing one credential and are
+overwriting each other's high-water mark. Issue each its own.
 
 ### `This credential cannot be verified by the API` (503)
 

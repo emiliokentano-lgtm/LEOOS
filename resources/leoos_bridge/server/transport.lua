@@ -30,8 +30,18 @@ Transport = {}
 local state = {
   secret = nil,
   sessionId = nil,
-  --- Monotonic, per process. Strictly increasing, including across retries.
-  seq = 0,
+  --- Strictly increasing, including across retries.
+  ---
+  --- SEEDED FROM THE CLOCK, not from zero. The API keeps the last accepted
+  --- sequence per credential and it survives a restart on that side, so a
+  --- resource that started counting from 1 again would spend its first few
+  --- thousand requests behind a mark it could not see. Unix seconds only ever
+  --- go up, so a restart starts ahead of where the last run finished.
+  ---
+  --- The API also lets the handshake establish the counter, so a server whose
+  --- clock has been wound backwards still recovers; this makes that path the
+  --- exception rather than the norm.
+  seq = os.time(),
   telemetryInFlight = false,
   --- Consecutive failures, for backoff.
   failures = 0,

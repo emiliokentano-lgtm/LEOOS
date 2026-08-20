@@ -123,12 +123,41 @@ Verification, in order, failing closed:
    unknown to the other, so step 4 is what actually holds under horizontal
    scale. That is why both checks exist and why they are in this order.
 4. `seq > game_server_state.last_ingest_seq` — monotonic replay protection that
-   survives the nonce TTL window.
+   survives the nonce TTL window. **The handshake is exempt**, and the exemption
+   is load-bearing: see *The restart problem* below.
 5. HMAC recomputed and compared in constant time.
 6. Body validated against the Zod schema — `.strict()`, so an unknown field is
    a rejection rather than a silent ignore. That is how a resource sending
    `organization` finds out immediately instead of shipping for months believing
    the API reads it.
+
+### The restart problem
+
+The resource counts sequence numbers per process; the API remembers the last
+accepted one per credential, in the database. Those two facts do not compose. A
+game server that restarts comes back counting from near zero while the API is
+holding a high-water mark in the thousands, so if the handshake were checked
+against it, every request the restarted server sent would be refused — including
+the handshake that every other failure message tells it to run. The credential
+would be bricked until an administrator issued a new secret, and rebooting a
+FiveM server would be an administrative event.
+
+Two changes, together:
+
+- **The handshake establishes the sequence rather than continuing it.** Check 4
+  is skipped for `POST /handshake`, and the handler writes that request's
+  sequence as the new baseline — a reset, not an advance. Nothing is given up:
+  a captured handshake is still refused by the nonce inside the 60 s skew window
+  and by the timestamp outside it, so there is no window in which replaying one
+  works. The exemption is derived from the route rather than passed as a
+  parameter, so no other endpoint can ask for it.
+- **The resource seeds its counter from `os.time()`**, so an ordinary restart is
+  already ahead of where the previous run finished and never needs the reset.
+  The reset is the recovery path for a clock that went backwards, not the normal
+  one.
+
+Regression tests cover the restarted server, the replayed handshake and the
+timestamp backstop (`apps/api/test/fivem.test.ts`).
 
 The **signature check is last** on purpose: it is the only step that costs real
 CPU, and everything above it discards a malformed or replayed request without

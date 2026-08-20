@@ -234,15 +234,19 @@ prunes on expiry rather than accumulating history in the browser.
 
 ## 8. Where positions come from
 
-The map must eventually consume live FiveM data. No bridge exists yet, so the
-subsystem is built around a seam rather than around what is behind it today.
+The subsystem was built around a seam rather than around what was behind it at
+the time. **That seam is now carrying real traffic**: the `leoos_bridge` FiveM
+resource ships (see [04-fivem-integration](04-fivem-integration.md)) and
+`FiveMPositionSource` is a second implementation of the same interface. The mock
+remains, selected by `POSITION_SOURCE`, because a deployment with no game server
+still needs a map that says so.
 
 ```
-   FiveM server                    ┌─────────────────────┐
-   (not connected)  ─ ─ ─ ─ ─ ─ ─▶ │  PositionSource     │
-                                   │  .start() .stop()   │
-   MockPositionSource ────────────▶│  .status()          │
-   (what ships today)              └──────────┬──────────┘
+   FiveM server ──HMAC──▶ ingest ─▶ ┌─────────────────────┐
+   (leoos_bridge)                   │  PositionSource     │
+                                    │  .start() .stop()   │
+   MockPositionSource ─────────────▶│  .status()          │
+   (POSITION_SOURCE=mock)           └──────────┬──────────┘
                                               │ pushes samples
                                               ▼
                                    ┌─────────────────────┐
@@ -268,11 +272,14 @@ what the FiveM bridge will implement. It is deliberately PUSH-based — a source
 fills the store, it is never polled — because a pull interface would force the
 real bridge to buffer and would put per-request latency on the game server.
 
-`MockPositionSource` is the only implementation today. Per engineering rules 34,
-35 and 45 it is named as a mock, it refuses to register in production without
-`ALLOW_MOCK_ADAPTERS`, it logs a warning at boot, and its `status()` reports
-`kind: 'mock'` — which the map screen renders as "Simulated map", never as a
-green light.
+There are two implementations. `FiveMPositionSource` is fed by the signed ingest
+endpoints and reports what it actually has — "1 game server(s) — … reporting,
+with 9 player(s) online", or "No game server is reporting" when nothing is.
+`MockPositionSource` is, per engineering rules 34, 35 and 45, named as a mock,
+refuses to register in production without `ALLOW_MOCK_ADAPTERS`, logs a warning
+at boot, and reports `kind: 'mock'` — which the map screen renders as "Simulated
+map", never as a green light. Neither source can report a state it has not
+earned; that is the whole reason `status()` exists.
 
 **Why a store between them.** Positions arrive at 1 Hz. Writing that to Postgres
 is the ~13M rows/day that engineering rules 21 and 22 exist to prevent, so the
@@ -316,3 +323,134 @@ change take effect immediately with no revocation machinery.
 needed. It can never widen what comes back — the server re-derives the visible
 set from the caller's permissions on every tick — so a forged list gains a caller
 nothing.
+
+---
+
+## 9. Live units on the map
+
+Connecting the FiveM feed to the screen turned out to be less about drawing and
+more about **what may re-render when a unit moves**. Positions arrive once a
+second; callsigns, crews, vehicles and assignments change a handful of times a
+shift. Holding both in one piece of React state means every position sample
+re-renders the whole screen — 150 unit rows, the filter bar, the detail panel —
+to move some pixels on a canvas that was going to repaint anyway.
+
+### 9.1 One store, three granularities
+
+`MapUnitStore` (`apps/web/lib/map/unit-store.ts`) splits the state by how often
+each part changes:
+
+| | What it is | Where it lives | Changes |
+| --- | --- | --- | --- |
+| **Roster** | who exists, and what they are | React state, via `useSyncExternalStore` | a few times a shift |
+| **Positions** | where they are | a plain `Map`, **not** React state | 1 Hz |
+| **Freshness** | whether a position can still be trusted | derived, published only on a **threshold crossing** | twice in a unit's life |
+
+The canvas subscribes to positions directly and reads them inside its own
+animation frame, which is the only place they are needed sixty times a second.
+React never sees a position unless a component asks for one specific unit — the
+detail panel and the panic bar do, the 150-row list deliberately does not.
+
+Three hooks expose it (`lib/map/use-unit-store.ts`): `useRoster`,
+`useUnitPosition` (one unit, ~1 Hz) and `useUnitFreshness`. `useUnitPosition`
+returns the *same object* when a sample is identical, so a resync redelivering
+unchanged coordinates does not wake anything.
+
+Positions are never written onto the `MapUnit` objects React renders from.
+Mutating those would make a memoised row comparing `prev.unit === next.unit`
+never update — the version of this optimisation that silently breaks a screen
+months later.
+
+The walkthrough measures the result rather than asserting it: with the feed at
+10 Hz, the unit list records **zero DOM mutations over eight seconds**.
+
+### 9.2 The freshness lifecycle
+
+A position has an age, and past two thresholds it stops meaning what it says:
+
+```
+   reported ──15 s──▶ stale ──45 s──▶ offline        (never reported: "no fix")
+     live             faded            hollow ring, no heading
+```
+
+- `UNIT_STALE_AFTER_MS` = 15 s — roughly a city block at speed. The marker
+  desaturates and the row reads **Stale**; the position is where the unit *was*.
+- `UNIT_OFFLINE_AFTER_MS` = `FIVEM_POSITION_TTL_MS` = 45 s. Deliberately the
+  *same constant* as the ingest layer's TTL rather than a round number: past that
+  point the server has stopped broadcasting the unit, so a client still drawing
+  it as tracked would be asserting something the feed no longer says. Tying them
+  together means they cannot drift into a window where the client believes it is
+  tracking a unit the server already dropped.
+
+**Offline is not deletion.** The unit stays in the roster, stays selectable, and
+its last known position and last-update time stay readable — "we do not know
+where this unit is" and "this unit never existed" are different facts, and only
+the first is true (engineering rules 24, 25). `unknown` ("no fix") is kept
+separate from `offline` for the same reason: one has never reported, the other
+was being tracked a minute ago.
+
+Freshness is recomputed on a **one-second sweep** but published only when a level
+actually changes. A unit's age changes every second; its level changes twice in
+its whole life, so that is what React is told about.
+
+### 9.3 Filtering
+
+`MapFilterState` gained a `freshness` axis, kept deliberately apart from
+`statusKeys` in both the model and the filter bar. A unit's operational status is
+what the officer says they are doing; its freshness is whether we still know
+where they are. A unit can perfectly well be *Available* and *offline* — which is
+precisely the combination a dispatcher most needs to be able to find.
+
+`matchesUnitFilter` takes an already-computed `LocationFreshness` rather than a
+clock. That keeps the predicate pure — a `Date.now()` inside a function called
+during render is an impure read React's compiler rightly rejects — and it means
+the canvas and the side list filter on the *same* value, so two views of one
+fleet cannot disagree about which units are in it.
+
+### 9.4 Panic, without relying on animation
+
+A blinking marker is invisible for half its duty cycle, unreadable to a
+colour-blind operator, disabled outright by `prefers-reduced-motion`, and useless
+when the unit is off-screen. So there are **three static mechanisms, each of
+which works on its own** (`app/(app)/map/panic-locator.tsx`):
+
+1. **A standing bar** across the top of the map — `role="alert"`, one row per
+   unit in panic, with callsign, organization, crew, live position and a
+   **Locate** button that takes the camera there. It is **not filterable**: a
+   panic an operator has filtered away is a panic they will not answer.
+2. **An off-screen bearing arrow** clamped to the map edge, positioned where the
+   line from the centre crosses it — so its place on the border encodes the
+   direction — labelled with the callsign and the distance. "Obvious without
+   relying on flashing" means an operator must be able to *find* the location,
+   and a marker they cannot see does not help them.
+3. **The marker itself**: filled halo, two concentric rings, four crosshair ticks
+   and a permanently drawn label. All static.
+
+The list row is marked structurally too — a left rule, not only a colour — so it
+survives a monochrome display.
+
+### 9.5 From the map to the board
+
+The unit detail panel's **View unit** action links to `/dispatch?unit=<id>`. The
+dispatch page reads that parameter server-side and passes it to `UnitBoard`,
+which scrolls the row into view and highlights it. It is *scrolled to*, not
+*filtered to*: an operator who came to look at one unit still needs the rest of
+the board around it to do anything useful with what they find.
+
+The parameter cannot widen anything — the board contains what the API already
+decided to send, so an id belonging to another organization simply matches
+nothing.
+
+### 9.6 What was actually tested
+
+`apps/web/scripts/live-map-check.mjs` drives a real browser against a real API
+while `apps/web/scripts/fivem-simulator.mjs` pushes positions through the genuine
+signed ingest path. Everything between the two is production code. It covers
+multiple units across agencies, a 10 Hz burst, a dropped and restored browser
+connection, a fleet going quiet through stale into offline, both filter axes,
+panic in all three of its forms, and organization isolation — checked while FIB
+units are actively transmitting, against a session that does not hold
+`map.track_all_orgs` and one that does.
+
+That walkthrough is what found the game-server restart defect described in
+[04-fivem-integration §The restart problem](04-fivem-integration.md).

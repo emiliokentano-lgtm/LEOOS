@@ -33,7 +33,13 @@ import { NewIncidentDialog } from './new-incident-dialog';
  * through `DispatchDataSource`; nothing here is a local toggle that another
  * operator cannot see.
  */
-export function DispatchView({ initialBoard }: { initialBoard: DispatchBoard | null }) {
+export function DispatchView({
+  initialBoard, focusUnitId = null,
+}: {
+  initialBoard: DispatchBoard | null;
+  /** A unit to scroll to and mark on the board — see the page's `?unit=`. */
+  focusUnitId?: string | null;
+}) {
   const [board, setBoard] = React.useState<DispatchBoard | null>(initialBoard);
   const [connection, setConnection] = React.useState<DispatchConnectionState>('connecting');
   const [connectionDetail, setConnectionDetail] = React.useState<string | null>(null);
@@ -285,6 +291,7 @@ export function DispatchView({ initialBoard }: { initialBoard: DispatchBoard | n
           <UnitBoard
             units={units}
             selfUnitId={self?.unitId ?? null}
+            focusedUnitId={focusUnitId}
             canManage={capabilities?.canManageUnits ?? false}
             onChanged={refresh}
             onSelectIncident={setSelectedId}

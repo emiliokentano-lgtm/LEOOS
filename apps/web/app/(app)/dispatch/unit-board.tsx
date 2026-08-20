@@ -17,15 +17,36 @@ import { cn } from '@/lib/utils';
  * "who is free", not "who exists", and a flat list makes them scan for it.
  */
 export function UnitBoard({
-  units, selfUnitId, canManage, onChanged, onSelectIncident,
+  units, selfUnitId, focusedUnitId, canManage, onChanged, onSelectIncident,
 }: {
   units: DispatchUnit[];
   selfUnitId: string | null;
+  /**
+   * A unit arrived at from elsewhere — the map's "View unit", today.
+   *
+   * Scrolled to and highlighted rather than filtered to: an operator who came
+   * here to look at one unit still needs the rest of the board around it to do
+   * anything useful with what they find.
+   */
+  focusedUnitId: string | null;
   canManage: boolean;
   onChanged: () => void;
   onSelectIncident: (incidentId: string) => void;
 }) {
   const [creating, setCreating] = React.useState(false);
+  const focusedRef = React.useRef<HTMLDivElement>(null);
+
+  /**
+   * Scrolls the focused unit into view, once it exists.
+   *
+   * Keyed on the id AND on the unit count, because arriving from the map often
+   * beats the first board load — without the second dependency the effect would
+   * run against an empty list and never run again.
+   */
+  React.useEffect(() => {
+    if (focusedUnitId === null) return;
+    focusedRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [focusedUnitId, units.length]);
 
   const groups = React.useMemo(() => {
     const available = units.filter((u) => u.status.isAvailable && !u.status.isPanic);
@@ -57,6 +78,22 @@ export function UnitBoard({
           </div>
         }
       />
+      {/*
+        * A unit was followed here that this board does not contain.
+        *
+        * Reachable when the link is stale, when the unit went off the board
+        * between the two screens, or when it belongs to another organization —
+        * the map shows those, the board does not. Silently doing nothing would
+        * leave the operator hunting a row that is not there (engineering rules
+        * 26, 45).
+        */}
+      {focusedUnitId !== null && !units.some((u) => u.id === focusedUnitId) ? (
+        <p className="border-b border-border-subtle bg-raised px-3 py-1.5 text-2xs text-text-tertiary">
+          The unit you followed is not on this board — it may belong to another
+          organization or have gone off duty.
+        </p>
+      ) : null}
+
       <div className="min-h-0 flex-1 overflow-auto">
         {units.length === 0 ? (
           <EmptyState title="No units" description="No unit is currently on the board." />
@@ -67,14 +104,22 @@ export function UnitBoard({
                 {group.label} · {group.units.length}
               </p>
               {group.units.map((unit) => (
-                <UnitRow
+                <div
                   key={unit.id}
-                  unit={unit}
-                  isMine={unit.id === selfUnitId}
-                  canManage={canManage}
-                  onChanged={onChanged}
-                  onSelectIncident={onSelectIncident}
-                />
+                  ref={unit.id === focusedUnitId ? focusedRef : undefined}
+                  className={cn(
+                    unit.id === focusedUnitId
+                      && 'bg-active ring-1 ring-inset ring-[var(--color-accent)]',
+                  )}
+                >
+                  <UnitRow
+                    unit={unit}
+                    isMine={unit.id === selfUnitId}
+                    canManage={canManage}
+                    onChanged={onChanged}
+                    onSelectIncident={onSelectIncident}
+                  />
+                </div>
               ))}
             </div>
           ))

@@ -1,4 +1,5 @@
 import 'server-only';
+import type { Route } from 'next';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { OrganizationSummary, PermissionKey } from '@leoos/contracts';
@@ -134,10 +135,19 @@ export async function getSessionOrNull(): Promise<Session | null> {
   };
 }
 
-/** For layouts that have already been through the auth guard. */
+/**
+ * For screens under the authenticated shell.
+ *
+ * Redirects rather than throwing. The layout guard has normally already sent an
+ * unauthenticated caller away, but Next renders a layout and its page
+ * CONCURRENTLY: when a session ends between the two, the page's throw surfaces
+ * as a server error before the layout's redirect wins, and the operator sees a
+ * crash where they should see a sign-in screen.
+ */
 export async function requireSession(): Promise<Session> {
   const session = await getSessionOrNull();
-  if (!session) throw new Error('requireSession called without a session');
+  // Cast because typed routes enumerate pages only; see the layout.
+  if (!session) redirect('/api/session/expired' as Route);
   return session;
 }
 
@@ -182,7 +192,10 @@ export async function requireActiveOrganization(): Promise<{
   organization: OrganizationSummary;
 }> {
   const session = await getSessionOrNull();
-  if (!session) redirect('/login');
+  // Clears the stale cookie on the way, so middleware and the API cannot
+  // disagree about whether this caller is signed in — see
+  // app/api/session/expired/route.ts.
+  if (!session) redirect('/api/session/expired' as Route);
 
   const organization = session.memberships.find(
     (m) => m.organization.id === session.organizationId,

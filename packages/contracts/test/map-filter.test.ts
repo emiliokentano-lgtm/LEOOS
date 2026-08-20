@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-  EMPTY_MAP_FILTER, countActiveMapFilters, freshnessOf, matchesIncidentFilter,
+  EMPTY_MAP_FILTER, UNIT_OFFLINE_AFTER_MS, UNIT_STALE_AFTER_MS,
+  countActiveMapFilters, freshnessOf, isTracked, matchesIncidentFilter,
   matchesMarkerFilter, matchesUnitFilter,
   type MapFilterState, type MapIncidentMarker, type MapMarker, type MapUnit,
 } from '../src/map';
+import { FIVEM_POSITION_TTL_MS } from '../src/fivem';
 
 const ORG_PD = { id: 'org-pd', key: 'pd', shortName: 'PD', color: '#3b82f6' };
 const ORG_MD = { id: 'org-md', key: 'md', shortName: 'MD', color: '#ef4444' };
@@ -166,17 +168,69 @@ describe('freshness', () => {
     expect(freshnessOf(unit().location, now + 2_000)).toBe('live');
   });
 
-  it('reports an old sample as stale', () => {
-    expect(freshnessOf(unit().location, now + 60_000)).toBe('stale');
+  it('reports a sample past the stale threshold as stale', () => {
+    expect(freshnessOf(unit().location, now + UNIT_STALE_AFTER_MS + 1)).toBe('stale');
+  });
+
+  it('reports a sample past the offline threshold as offline', () => {
+    expect(freshnessOf(unit().location, now + UNIT_OFFLINE_AFTER_MS + 1)).toBe('offline');
+  });
+
+  it('goes offline no later than the feed stops broadcasting', () => {
+    // The two constants are tied together on purpose: past this point the
+    // server has dropped the unit, so a client still calling it tracked would
+    // be asserting something the feed no longer says.
+    expect(UNIT_OFFLINE_AFTER_MS).toBe(FIVEM_POSITION_TTL_MS);
+    expect(UNIT_STALE_AFTER_MS).toBeLessThan(UNIT_OFFLINE_AFTER_MS);
   });
 
   it('reports a unit that has never reported as unknown', () => {
     expect(freshnessOf(null, now)).toBe('unknown');
   });
 
-  it('treats an unparseable timestamp as stale rather than live', () => {
+  it('treats an unparseable timestamp as offline rather than live', () => {
     // Failing open here would draw a confident marker on garbage.
     const broken = { ...unit().location!, updatedAt: 'not a date' };
-    expect(freshnessOf(broken, now)).toBe('stale');
+    expect(freshnessOf(broken, now)).toBe('offline');
+  });
+
+  it('keeps unknown and offline apart', () => {
+    // Different facts: one unit has no FiveM identity linked at all, the other
+    // was being tracked a minute ago. An operator needs to know which.
+    expect(isTracked('live')).toBe(true);
+    expect(isTracked('stale')).toBe(true);
+    expect(isTracked('offline')).toBe(false);
+    expect(isTracked('unknown')).toBe(false);
+  });
+});
+
+describe('freshness filtering', () => {
+  it('is inert until a level is selected', () => {
+    expect(matchesUnitFilter(unit(), EMPTY_MAP_FILTER, 'offline')).toBe(true);
+  });
+
+  it('keeps only the selected levels', () => {
+    const only = filter({ freshness: ['stale', 'offline'] });
+    expect(matchesUnitFilter(unit(), only, 'live')).toBe(false);
+    expect(matchesUnitFilter(unit(), only, 'stale')).toBe(true);
+    expect(matchesUnitFilter(unit(), only, 'offline')).toBe(true);
+  });
+
+  it('is orthogonal to operational status', () => {
+    // "Available but offline" is the combination a dispatcher most needs to
+    // find, so the two filters must intersect rather than exclude each other.
+    const both = filter({ statusKeys: ['available'], freshness: ['offline'] });
+    expect(matchesUnitFilter(unit(), both, 'offline')).toBe(true);
+    expect(matchesUnitFilter(unit(), both, 'live')).toBe(false);
+  });
+
+  it('does not hide a unit from a caller that computed no freshness', () => {
+    // A caller with no freshness filter active has no reason to compute one;
+    // the predicate must not silently drop every unit when it is missing.
+    expect(matchesUnitFilter(unit(), filter({ freshness: ['live'] }))).toBe(true);
+  });
+
+  it('counts towards the active-filter badge', () => {
+    expect(countActiveMapFilters(filter({ freshness: ['stale', 'offline'] }))).toBe(2);
   });
 });

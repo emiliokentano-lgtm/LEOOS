@@ -150,6 +150,19 @@ is actually held.
 | 41 | HMAC cannot verify against a one-way hash. Raised and resolved in writing rather than silently weakening the scheme. | [migration 0007](packages/db/migrations/0007_fivem.sql) |
 | 45 | The map source reports the connection it has: "FiveM bridge — not reporting" when nothing is reporting, never a green light it has not earned. | `apps/api/src/modules/fivem/fivem.source.ts` |
 
+### Live map
+
+| Rules | Mechanism | Location |
+| --- | --- | --- |
+| 9, 10, 11 | The map filter is a VIEW filter over a payload the server already decided. Clearing every filter cannot reveal a unit the caller was not entitled to; the walkthrough asserts a non-cleared session receives no FIB unit **while FIB units are transmitting**, and that a session holding `map.track_all_orgs` differs only by the permission. | [map §5](docs/architecture/05-map.md), `apps/web/scripts/live-map-check.mjs` |
+| 21, 22, 27 | Roster, positions and freshness are separated by HOW OFTEN THEY CHANGE. Positions never enter React state; freshness is published only at a threshold crossing. Measured, not asserted: zero DOM mutations in the unit list across eight seconds of a 10 Hz feed. | [map §9.1](docs/architecture/05-map.md), `apps/web/lib/map/unit-store.ts` |
+| 24, 25 | Offline is a LEVEL, not a deletion. The unit stays in the roster with its last known position and last-update time readable, and `unknown` is kept distinct from `offline`. | [map §9.2](docs/architecture/05-map.md) |
+| 30, 45 | `UNIT_OFFLINE_AFTER_MS` **is** `FIVEM_POSITION_TTL_MS` — the same constant, not a matching number — so the client cannot believe it is tracking a unit the server has already dropped. | `packages/contracts/src/map.ts` |
+| 26, 43 | Panic visibility rests on three STATIC mechanisms, each sufficient alone: an unfilterable alert bar, an edge-clamped bearing arrow for an off-screen unit, and a marker drawn with halo, rings, ticks and a permanent label. No animation is load-bearing. | [map §9.4](docs/architecture/05-map.md), `apps/web/app/(app)/map/panic-locator.tsx` |
+| 30 | `matchesUnitFilter` takes a computed freshness rather than reading a clock, so the predicate stays pure and the canvas and the list cannot disagree about the fleet. | `packages/contracts/src/map.ts` |
+| 26, 45 | A cookie that outlives its session is cleared and the operator is told, rather than being bounced between the middleware and the layout guard until the browser gives up. Regression-checked. | [authz §A.2b](docs/architecture/02-authorization.md), `apps/web/scripts/session-check.mjs` |
+| 40, 41 | The walkthrough is a release gate, and it earned its keep: it found that a restarted game server could never re-handshake, because the sequence check applied to the handshake itself. Fixed in the protocol and covered by regression tests rather than worked around in the simulator. | [fivem §The restart problem](docs/architecture/04-fivem-integration.md), `apps/api/test/fivem.test.ts` |
+
 ### Dispatch-specific
 
 | Rules | Mechanism | Location |

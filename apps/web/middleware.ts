@@ -42,5 +42,15 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|icon.svg|map/tiles).*)'],
+  /**
+   * `api` is excluded deliberately.
+   *
+   * These are the web tier's own Route Handlers, and they answer with JSON. A
+   * middleware redirect to an HTML sign-in page in the middle of a `fetch()`
+   * is not a useful answer to any of them — each forwards the cookie and lets
+   * the API decide, which is where the decision belongs anyway. It also keeps
+   * `/api/session/expired` reachable by the one caller it exists for: someone
+   * holding a cookie the server has already rejected.
+   */
+  matcher: ['/((?!api|_next/static|_next/image|favicon.ico|icon.svg|map/tiles).*)'],
 };

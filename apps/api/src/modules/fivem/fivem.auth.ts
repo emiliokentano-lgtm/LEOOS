@@ -67,6 +67,11 @@ export interface VerifyInput {
   headers: Record<string, string | string[] | undefined>;
   /** The body EXACTLY as it arrived. A re-serialised object will not match. */
   rawBody: string;
+  /**
+   * True only for the handshake, which ESTABLISHES the sequence counter rather
+   * than continuing it. See check 6 for why that exemption has to exist.
+   */
+  isHandshake?: boolean;
   now?: number;
 }
 
@@ -201,9 +206,29 @@ export async function verifyFiveMRequest(
   // Strictly greater. Equality is a replay, not a retry — the resource assigns a
   // fresh sequence number to every attempt, including retries, precisely so that
   // this check can be strict.
-  const lastSeq = credential.lastIngestSeq ?? 0n;
-  if (seq <= lastSeq) {
-    return { ok: false, reason: 'stale-sequence' };
+  //
+  // ──────────────────────────────────────────────────────────────────────────
+  // THE HANDSHAKE IS EXEMPT, AND THAT EXEMPTION IS LOAD-BEARING.
+  //
+  // The resource's counter is per PROCESS: a game server that restarts begins
+  // again near zero, while this side holds a high-water mark in the thousands.
+  // Checking the handshake against it would mean a restarted server could never
+  // speak again — and "re-run the handshake", which every session failure tells
+  // it to do, would be advice it is structurally unable to take. The credential
+  // would be bricked until an administrator issued a new one.
+  //
+  // Nothing is given up by exempting it. A handshake is still signed, still
+  // nonce-checked and still inside the ±60 s skew window, so it cannot be
+  // replayed: inside the window the nonce store refuses it, outside it the
+  // timestamp does. The handshake handler then RESETS the high-water mark to
+  // this request's sequence, so everything that follows is ordered against a
+  // baseline the resource actually holds.
+  // ──────────────────────────────────────────────────────────────────────────
+  if (input.isHandshake !== true) {
+    const lastSeq = credential.lastIngestSeq ?? 0n;
+    if (seq <= lastSeq) {
+      return { ok: false, reason: 'stale-sequence' };
+    }
   }
 
   // ── 7. Signature ─────────────────────────────────────────────────────────

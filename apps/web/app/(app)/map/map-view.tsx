@@ -6,10 +6,10 @@ import {
   RefreshCw, ZoomIn, ZoomOut,
 } from 'lucide-react';
 import {
-  EMPTY_MAP_FILTER, UNIT_TYPES, countActiveMapFilters, freshnessOf,
+  EMPTY_MAP_FILTER, FRESHNESS_META, UNIT_TYPES, countActiveMapFilters,
   matchesIncidentFilter, matchesMarkerFilter, matchesUnitFilter,
-  type MapFilterState, type MapSnapshot, type MapUnit,
-  type UnitPositionDelta, type WorldPosition,
+  type LocationFreshness, type MapFilterState, type MapSnapshot, type MapUnit,
+  type UnitPositionDelta, type Viewport, type WorldPosition,
 } from '@leoos/contracts';
 import {
   Alert, Badge, EmptyState, FilterBar, FilterChip, IconButton, Panel, PanelHeader,
@@ -17,13 +17,16 @@ import {
 } from '@/components/ui';
 import { Icon } from '@/components/icon';
 import { MapCanvas, type MapCanvasHandle } from '@/components/domain/map-canvas';
-import { applyTick, type MapDataSource, type MapConnectionState } from '@/lib/map/map-source';
+import { type MapDataSource, type MapConnectionState } from '@/lib/map/map-source';
+import { MapUnitStore } from '@/lib/map/unit-store';
+import { OffScreenPanicMarkers, PanicBar } from './panic-locator';
+import { useRoster } from '@/lib/map/use-unit-store';
 import { RealtimeMapSource } from '@/lib/map/realtime-map-source';
-import { useNow } from '@/lib/map/use-now';
+
 import { useRealtimeClient } from '@/lib/realtime/realtime-context';
 import { mapTopics } from '@/lib/realtime/topics';
 import { useAuth } from '@/components/shell/auth-context';
-import { cn, timeAgo } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { MarkerDialog } from './marker-dialog';
 import { UnitDetail, IncidentDetail, MarkerDetail } from './map-details';
 
@@ -49,7 +52,6 @@ import { UnitDetail, IncidentDetail, MarkerDetail } from './map-details';
 
 export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | null }) {
   const [snapshot, setSnapshot] = React.useState<MapSnapshot | null>(initialSnapshot);
-  const [units, setUnits] = React.useState<MapUnit[]>(initialSnapshot?.units ?? []);
   const [connection, setConnection] = React.useState<MapConnectionState>('connecting');
   const [connectionDetail, setConnectionDetail] = React.useState<string | null>(null);
 
@@ -62,12 +64,47 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
   const [selectedMarkerId, setSelectedMarkerId] = React.useState<string | null>(null);
   const [followUnitId, setFollowUnitId] = React.useState<string | null>(null);
   const [pendingMarker, setPendingMarker] = React.useState<WorldPosition | null>(null);
+  const [viewport, setViewport] = React.useState<Viewport | null>(null);
 
   const canvasRef = React.useRef<MapCanvasHandle>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const sourceRef = React.useRef<MapDataSource | null>(null);
   const auth = useAuth();
   const realtimeClient = useRealtimeClient();
+
+  /**
+   * Positions live HERE, not in React state.
+   *
+   * The store is created once and never replaced. Roster changes reach React
+   * through `useRoster`; position batches reach only the canvas, which reads
+   * them inside its own animation frame. That split is the reason a unit moving
+   * does not re-render 150 list rows — see lib/map/unit-store.ts.
+   */
+  const [store] = React.useState(() => {
+    const created = new MapUnitStore();
+    if (initialSnapshot !== null) created.applySnapshot(initialSnapshot);
+    return created;
+  });
+  React.useEffect(() => () => store.dispose(), [store]);
+
+  const roster = useRoster(store);
+  const units = roster.units;
+
+  /**
+   * Whether a unit could appear on THIS operator's dispatch board.
+   *
+   * The map shows units from every organization that shares on it; the dispatch
+   * board shows the operator's own, unless they hold a global clearance. Used
+   * only to decide whether offering "View unit" would be honest — the board
+   * re-derives what it shows from the caller's scope server-side either way
+   * (engineering rule 9).
+   */
+  const reachesDispatchBoard = React.useCallback(
+    (unit: MapUnit) => unit.organization.id === auth.activeOrganizationId
+      || auth.isGlobalAdmin
+      || auth.globalCapabilities.includes('org_admin'),
+    [auth.activeOrganizationId, auth.isGlobalAdmin, auth.globalCapabilities],
+  );
 
   const capabilities = snapshot?.capabilities ?? null;
   const source = snapshot?.source ?? null;
@@ -93,19 +130,23 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
     feed.start({
       onSnapshot(next) {
         setSnapshot(next);
-        setUnits(next.units);
+        store.applySnapshot(next);
       },
       onTick(tick) {
-        // The merge lives in the source module so the socket implementation
-        // cannot merge differently from the poller.
-        setUnits((current) => {
-          if (needsMetadataRefresh(current, tick.positions)) {
-            // A unit was assigned to a call this client has never seen. Pull a
-            // snapshot rather than guess at the incident's number and priority.
-            sourceRef.current?.refresh();
-          }
-          return applyTick(current, tick, mergeDelta);
-        });
+        /**
+         * Straight into the store. NO setState.
+         *
+         * This is the line the whole architecture turns on: a position batch
+         * updates the canvas and nothing else. Calling `setState` here — which
+         * is what this used to do — re-rendered the entire screen once a second.
+         */
+        store.applyTick(tick);
+
+        // A unit carrying an assignment this client has never seen needs the
+        // richer read; the tick cannot describe an incident it does not carry.
+        if (needsMetadataRefresh(store.getRosterSnapshot().units, tick.positions)) {
+          sourceRef.current?.refresh();
+        }
       },
       onStateChange(state, detail) {
         setConnection(state);
@@ -114,17 +155,63 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
     });
 
     return () => feed.stop();
-  }, [realtimeClient, topicKey]);
+  }, [realtimeClient, topicKey, store]);
 
-  // The source needs to know what the client holds so it can report removals.
+  /**
+   * The source needs to know what the client holds so it can report removals.
+   *
+   * Keyed on the roster VERSION, not on the array: the array is deliberately the
+   * same object between roster changes, so depending on it would never fire.
+   */
   React.useEffect(() => {
     sourceRef.current?.setKnownUnits(units.map((u) => u.id));
-  }, [units]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roster.version]);
 
   // ── Derived state ───────────────────────────────────────────────────────
+  /**
+   * The filtered list, recomputed on a ROSTER CHANGE, not on a position batch.
+   *
+   * Keyed on `roster.version` because the array is deliberately the same object
+   * between roster changes — depending on the array would never invalidate, and
+   * depending on positions would put us back where we started.
+   *
+   * Freshness comes from the store's precomputed levels rather than from a clock
+   * read here, so this and the row badges cannot disagree about whether a unit
+   * is stale.
+   */
   const visibleUnits = React.useMemo(
-    () => units.filter((u) => matchesUnitFilter(u, filter)),
-    [units, filter],
+    () => units.filter((u) => matchesUnitFilter(
+      u,
+      filter,
+      // The store's precomputed level, not a clock read here. Its 1 Hz sweep is
+      // what moves a unit across a threshold; this only reads the result.
+      roster.freshness.get(u.id),
+    )),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [roster.version, filter],
+  );
+
+  /** How many units sit at each level, for the filter chips' counts. */
+  const freshnessCounts = React.useMemo(() => {
+    const counts: Record<LocationFreshness, number> = {
+      live: 0, stale: 0, offline: 0, unknown: 0,
+    };
+    for (const level of roster.freshness.values()) counts[level] += 1;
+    return counts;
+  }, [roster.freshness]);
+
+  /**
+   * Units in panic, and the ONE list the panic bar and the map agree on.
+   *
+   * Deliberately NOT filtered: a panic that an operator has hidden behind a
+   * filter chip is a panic they will not see, and no filter should be able to do
+   * that. Everything else on this screen is filterable; this is not.
+   */
+  const panicUnits = React.useMemo(
+    () => units.filter((u) => u.status.key === 'panic'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [roster.version],
   );
   const visibleIncidents = React.useMemo(
     () => (snapshot?.incidents ?? []).filter((i) => matchesIncidentFilter(i, filter)),
@@ -176,6 +263,21 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
     );
     return [...seen].sort();
   }, [units]);
+
+  /**
+   * Takes the operator to a unit.
+   *
+   * Centres rather than zooms: someone responding to a panic wants to be moved
+   * to the place, not to have their scale changed underneath them. Selecting it
+   * too means the detail panel is already open when they arrive.
+   */
+  const locateUnit = React.useCallback((unit: MapUnit) => {
+    const at = store.positionOf(unit.id);
+    if (at !== null) canvasRef.current?.centerOn(at);
+    setSelectedUnitId(unit.id);
+    setSelectedIncidentId(null);
+    setSelectedMarkerId(null);
+  }, [store]);
 
   // ── Selection ───────────────────────────────────────────────────────────
   const selectUnit = React.useCallback((unit: MapUnit | null) => {
@@ -262,6 +364,15 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
 
   return (
     <div ref={containerRef} className="flex h-full min-h-0 flex-col bg-base">
+      {/*
+        * ABOVE the filter bar, and unfilterable.
+        *
+        * A panic hidden behind a filter chip is a panic an operator will not
+        * see, and no view control should be able to do that. Everything else on
+        * this screen can be filtered away; this cannot.
+        */}
+      <PanicBar units={panicUnits} store={store} onLocate={locateUnit} />
+
       <FilterBar
         activeCount={activeFilters}
         onClearAll={() => setFilter(EMPTY_MAP_FILTER)}
@@ -329,6 +440,30 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
           </>
         ) : null}
 
+        {/*
+          * TRACKING, kept apart from Status on purpose.
+          *
+          * A unit's status is what the officer says they are doing; its
+          * freshness is whether we still know where they are. They are different
+          * kinds of fact, and a unit can perfectly well be "Available" and
+          * offline — which is exactly the combination worth being able to find.
+          */}
+        <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+        <span className="mr-1 text-2xs uppercase tracking-wide text-text-disabled">
+          Tracking
+        </span>
+        {(['live', 'stale', 'offline'] as const).map((level) => (
+          <FilterChip
+            key={level}
+            label={FRESHNESS_META[level].label}
+            count={freshnessCounts[level]}
+            active={filter.freshness.includes(level)}
+            onToggle={() => setFilter((f) => ({
+              ...f, freshness: toggleIn(f.freshness, level),
+            }))}
+          />
+        ))}
+
         {unitTypeOptions.length > 0 ? (
           <>
             <span className="mx-1 h-4 w-px bg-border" aria-hidden />
@@ -385,9 +520,20 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
 
       <div className="relative flex min-h-0 flex-1">
         <div className="relative min-w-0 flex-1">
+          {/* Pinned to the map's edges, pointing at panics the viewport has cut
+              off. Inside this relative container so the coordinates line up with
+              the canvas rather than with the page. */}
+          <OffScreenPanicMarkers
+            units={panicUnits}
+            store={store}
+            viewport={viewport}
+            onLocate={locateUnit}
+          />
           <MapCanvas
             ref={canvasRef}
-            units={visibleUnits}
+            store={store}
+            filter={filter}
+            onViewportChange={setViewport}
             incidents={visibleIncidents}
             markers={visibleMarkers}
             selectedUnitId={selectedUnitId}
@@ -475,7 +621,8 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
               <UnitDetail
                 unit={selectedUnit}
                 following={followUnitId === selectedUnit.id}
-                canAssign={capabilities?.canAssignUnits ?? false}
+                store={store}
+                onDispatchBoard={reachesDispatchBoard(selectedUnit)}
                 onToggleFollow={() => setFollowUnitId(
                   (current) => (current === selectedUnit.id ? null : selectedUnit.id),
                 )}
@@ -526,7 +673,8 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
                       key={unit.id}
                       unit={unit}
                       selected={unit.id === selectedUnitId}
-                      onSelect={() => selectUnit(unit)}
+                      freshness={roster.freshness.get(unit.id) ?? 'unknown'}
+                      onSelect={selectUnit}
                     />
                   ))
                 )}
@@ -552,40 +700,6 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
   );
 }
 
-/**
- * Applies one position delta to a unit.
- *
- * TWO THINGS THE TICK CANNOT DO ON ITS OWN, both deliberate:
- *
- *   The status LABEL and colour are not in the delta — only the key is, to keep
- *   a 300-unit tick under 5 KB. A key whose presentation the client does not
- *   know keeps the old label rather than rendering an empty badge, and the next
- *   snapshot corrects it.
- *
- *   An incident the client has no metadata for cannot be rendered from a delta
- *   either. The previous assignment is kept rather than blanked, and
- *   `needsMetadataRefresh` below tells the screen to pull a snapshot — which is
- *   a sub-second correction instead of a flicker to "unassigned" and back.
- */
-function mergeDelta(unit: MapUnit, delta: UnitPositionDelta): MapUnit {
-  return {
-    ...unit,
-    status: unit.status.key === delta.statusKey
-      ? unit.status
-      : { ...unit.status, key: delta.statusKey },
-    incident: delta.incidentId === null ? null : unit.incident,
-    location: {
-      unitId: unit.id,
-      organizationId: unit.organization.id,
-      x: delta.x,
-      y: delta.y,
-      z: unit.location?.z ?? null,
-      heading: delta.heading,
-      speed: delta.speed,
-      updatedAt: delta.updatedAt,
-    },
-  };
-}
 
 /**
  * Whether any delta references an incident the client cannot describe.
@@ -679,27 +793,54 @@ function MapLegend() {
   );
 }
 
-function MapUnitRow({
-  unit, selected, onSelect,
+/**
+ * One row, MEMOISED, with freshness handed in.
+ *
+ * Two things were costing a render per second each, and both are gone:
+ *
+ *   Every row called `useNow()` to compute staleness, so 150 rows re-rendered
+ *   once a second whether or not anything had changed. Freshness now arrives as
+ *   a prop and only changes when a unit crosses a threshold.
+ *
+ *   The list rebuilt on every position batch. Positions no longer live in React
+ *   state at all, so the array reaching this component is the same one until the
+ *   roster genuinely changes.
+ *
+ * `React.memo` is what converts those into an actual saving: without it a parent
+ * render still walks every child even when no prop differs.
+ */
+const MapUnitRow = React.memo(function MapUnitRow({
+  unit, selected, freshness, onSelect,
 }: {
   unit: MapUnit;
   selected: boolean;
-  onSelect: () => void;
+  freshness: LocationFreshness;
+  /**
+   * Takes the unit, rather than being a closure over it.
+   *
+   * `onSelect={() => selectUnit(unit)}` builds a new function for every row on
+   * every render, which makes `React.memo` compare unequal every time and does
+   * precisely nothing. Passing the stable callback and letting the row supply
+   * its own unit is what makes the memo real.
+   */
+  onSelect: (unit: MapUnit) => void;
 }) {
-  const now = useNow();
-  const freshness = freshnessOf(unit.location, now);
   const type = UNIT_TYPES[unit.unitType as keyof typeof UNIT_TYPES];
 
   return (
     <button
       type="button"
-      onClick={onSelect}
+      onClick={() => onSelect(unit)}
       aria-current={selected ? 'true' : undefined}
       className={cn(
         'flex w-full items-center gap-2.5 border-b border-border-subtle px-3 py-1.5 text-left',
         'transition-colors duration-(--duration-fast)',
         selected ? 'bg-active' : 'hover:bg-hover',
-        freshness !== 'live' && 'opacity-60',
+        freshness === 'stale' && 'opacity-70',
+        freshness === 'offline' && 'opacity-50',
+        // A panic row is marked structurally, not only by colour: a left rule
+        // survives a monochrome display and a colour-blind reader.
+        unit.status.key === 'panic' && 'border-l-2 border-l-[var(--status-panic)] bg-danger-subtle',
       )}
     >
       <span className="flex size-5 shrink-0 items-center justify-center text-text-tertiary">
@@ -735,12 +876,21 @@ function MapUnitRow({
         >
           {unit.status.shortLabel || unit.status.label}
         </span>
-        <span className="font-mono text-2xs text-text-tertiary">
-          {unit.location === null || now === 0
-            ? 'no fix'
-            : timeAgo(new Date(unit.location.updatedAt), new Date(now))}
+        {/* The LEVEL, not a ticking age. An age would re-render this row every
+            second for a number nobody reads at that precision; the level is what
+            an operator actually acts on, and it changes twice in a unit's life. */}
+        <span
+          className={cn(
+            'font-mono text-2xs',
+            freshness === 'live' && 'text-text-tertiary',
+            freshness === 'stale' && 'text-warning',
+            freshness === 'offline' && 'text-danger',
+            freshness === 'unknown' && 'text-text-disabled',
+          )}
+        >
+          {FRESHNESS_META[freshness].shortLabel}
         </span>
       </div>
     </button>
   );
-}
+});

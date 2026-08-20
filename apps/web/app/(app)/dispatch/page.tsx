@@ -15,9 +15,27 @@ export const metadata: Metadata = { title: 'Dispatch' };
  * What is on the board is decided entirely by the API. This page does not
  * filter and does not know what was withheld.
  */
-export default async function DispatchPage() {
+export default async function DispatchPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   await requireSession();
   const board = await fetchDispatchBoard();
+  const params = await searchParams;
 
-  return <DispatchView initialBoard={board} />;
+  /**
+   * `?unit=` — a unit arrived at from somewhere else, the map's "View unit"
+   * today. It focuses a row that the API already decided to send; it does not
+   * widen the board by one character, so an id belonging to another
+   * organization simply matches nothing.
+   */
+  const unit = params.unit;
+
+  return (
+    <DispatchView
+      initialBoard={board}
+      focusUnitId={typeof unit === 'string' && unit !== '' ? unit : null}
+    />
+  );
 }

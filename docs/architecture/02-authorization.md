@@ -54,6 +54,35 @@ Revocation cascade:
 | Membership terminated | sessions kept, permissions recomputed immediately |
 | Global capability changed | session rotated, permission cache flushed |
 
+### A.2b When the cookie outlives the session
+
+The cookie lives in the browser; the session is a row that can end without it —
+the sliding expiry, the absolute cap, a revocation cascade above, an account
+suspended mid-shift. The two guards then disagree, and the disagreement used to
+be fatal:
+
+| | Sees | Concludes | Sends to |
+| --- | --- | --- | --- |
+| `middleware.ts` | a cookie (it cannot reach the database, by design) | signed in | `/login` → `/dashboard` |
+| `(app)/layout.tsx` | the API's answer | not signed in | `/dashboard` → `/login` |
+
+Which is an infinite redirect. The operator could reach neither the application
+nor the sign-in page, and the browser gave up with `ERR_TOO_MANY_REDIRECTS`;
+the only escape was clearing site data.
+
+A Server Component cannot write a cookie, so it cannot resolve this itself. The
+server-side guards therefore redirect to **`/api/session/expired`**, a Route
+Handler that clears `leoos_session`, `leoos_csrf` and `leoos_org` and forwards to
+`/login?reason=expired` — a message the sign-in screen already knew how to show
+but could never be reached to display. `/api/*` is excluded from the middleware
+matcher: those handlers answer with JSON, and an HTML redirect is not a useful
+answer to a `fetch()`.
+
+This is a *correctness* fix, not a security one — the cookie was already being
+rejected on every request. `apps/web/scripts/session-check.mjs` asserts the loop
+cannot return: a stale cookie must settle on the sign-in page within a bounded
+number of hops, with the cookie actually cleared.
+
 ### A.3 CSRF
 `SameSite=Lax` blocks the common cases. On top of that, all state-changing
 requests must carry an `X-LEOOS-CSRF` header holding a value from a

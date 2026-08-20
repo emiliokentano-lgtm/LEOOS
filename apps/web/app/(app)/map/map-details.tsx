@@ -1,17 +1,21 @@
 'use client';
 
 import * as React from 'react';
-import { Crosshair, PanelRightClose, Trash2, TriangleAlert } from 'lucide-react';
+import Link from 'next/link';
+import { Crosshair, ExternalLink, PanelRightClose, Trash2, TriangleAlert } from 'lucide-react';
 import {
-  MAP_MARKER_TYPES, UNIT_TYPES, formatWorldPosition, freshnessOf, headingToCompass,
+  FRESHNESS_META, MAP_MARKER_TYPES, UNIT_TYPES, formatWorldPosition, freshnessOf,
+  headingToCompass,
   type MapIncidentMarker, type MapMarker, type MapUnit,
 } from '@leoos/contracts';
 import {
-  Badge, Button, IconButton, Panel, PanelHeader, PriorityBadge, Tooltip, useToast,
+  Badge, Button, IconButton, Panel, PanelHeader, PriorityBadge, useToast,
 } from '@/components/ui';
 import { Icon } from '@/components/icon';
 import { removeMapMarker } from '@/lib/map-actions';
 import { useNow } from '@/lib/map/use-now';
+import type { MapUnitStore } from '@/lib/map/unit-store';
+import { useUnitPosition } from '@/lib/map/use-unit-store';
 import { cn, timeAgo } from '@/lib/utils';
 
 /**
@@ -47,18 +51,35 @@ function OrgTag({ shortName, color }: { shortName: string; color: string }) {
 }
 
 export function UnitDetail({
-  unit, following, canAssign, onToggleFollow, onClose,
+  unit, following, store, onDispatchBoard, onToggleFollow, onClose,
 }: {
   unit: MapUnit;
   following: boolean;
-  canAssign: boolean;
+  /**
+   * Read for THIS unit's live position only.
+   *
+   * The detail panel is the one place on the screen showing coordinates, a
+   * heading and a speed that have to be current, so it is the one place worth a
+   * render per second. The list beside it deliberately subscribes to nothing of
+   * the kind — see lib/map/unit-store.ts.
+   */
+  store: MapUnitStore;
+  /**
+   * Whether this unit can actually appear on the caller's dispatch board.
+   *
+   * Cosmetic, not a permission check — the board re-derives what it shows from
+   * the caller's own scope server-side. What it decides here is whether
+   * offering "View unit" would be honest.
+   */
+  onDispatchBoard: boolean;
   onToggleFollow: () => void;
   onClose: () => void;
 }) {
   const type = UNIT_TYPES[unit.unitType as keyof typeof UNIT_TYPES];
   // Ticks, so "last update" keeps counting up when the feed goes quiet.
   const now = useNow();
-  const freshness = freshnessOf(unit.location, now);
+  const location = useUnitPosition(store, unit.id) ?? unit.location;
+  const freshness = freshnessOf(location, now);
 
   return (
     <Panel flush>
@@ -73,10 +94,13 @@ export function UnitDetail({
       />
 
       {freshness !== 'live' ? (
-        <p className="border-b border-border-subtle bg-raised px-3 py-1.5 text-2xs text-warning">
-          {freshness === 'unknown'
-            ? 'This unit has never reported a position.'
-            : 'Position is stale — this is where the unit was last seen, not where it is.'}
+        <p
+          className={cn(
+            'border-b border-border-subtle bg-raised px-3 py-1.5 text-2xs',
+            freshness === 'offline' ? 'text-danger' : 'text-warning',
+          )}
+        >
+          {FRESHNESS_META[freshness].description}
         </p>
       ) : null}
 
@@ -130,26 +154,37 @@ export function UnitDetail({
           <Row label="Vehicle"><span className="text-text-tertiary">None assigned</span></Row>
         )}
 
-        {unit.location ? (
+        {location ? (
           <>
             <Row label="Position">
-              <span className="font-mono">{formatWorldPosition(unit.location)}</span>
+              <span className="font-mono">{formatWorldPosition(location)}</span>
             </Row>
             <Row label="Heading">
               <span className="font-mono">
-                {unit.location.heading === null
+                {location.heading === null
                   ? '—'
-                  : `${unit.location.heading.toFixed(0)}° ${headingToCompass(unit.location.heading)}`}
+                  : `${location.heading.toFixed(0)}° ${headingToCompass(location.heading)}`}
               </span>
             </Row>
-            {unit.location.speed !== null ? (
+            {location.speed !== null ? (
               <Row label="Speed">
-                <span className="font-mono">{Math.round(unit.location.speed * 3.6)} km/h</span>
+                <span className="font-mono">{Math.round(location.speed * 3.6)} km/h</span>
               </Row>
             ) : null}
+            <Row label="Tracking">
+              <span
+                className={cn(
+                  'font-mono',
+                  freshness === 'stale' && 'text-warning',
+                  freshness === 'offline' && 'text-danger',
+                )}
+              >
+                {FRESHNESS_META[freshness].label}
+              </span>
+            </Row>
             <Row label="Last update">
-              <span className={cn('font-mono', freshness === 'stale' && 'text-warning')}>
-                {now === 0 ? '—' : timeAgo(new Date(unit.location.updatedAt), new Date(now))}
+              <span className={cn('font-mono', freshness !== 'live' && 'text-warning')}>
+                {now === 0 ? '—' : timeAgo(new Date(location.updatedAt), new Date(now))}
               </span>
             </Row>
           </>
@@ -179,19 +214,43 @@ export function UnitDetail({
           size="sm"
           className="flex-1"
           onClick={onToggleFollow}
-          disabled={unit.location === null}
+          disabled={location === null}
         >
           <Crosshair aria-hidden /> {following ? 'Following' : 'Follow'}
         </Button>
-        <Tooltip
-          content={canAssign
-            ? 'Assignment lands with the dispatch module'
-            : 'You do not hold dispatch.assign'}
-        >
-          {/* Disabled either way today: the dispatch module is a later phase, and
-              claiming otherwise would be the map lying about what it can do. */}
-          <Button variant="secondary" size="sm" className="flex-1" disabled>Assign</Button>
-        </Tooltip>
+
+        {/*
+          * The route into dispatch, replacing a disabled "Assign" button that
+          * said assignment "lands with the dispatch module".
+          *
+          * Dispatch has since shipped, so that button had become a lie about
+          * what the product can do — the exact failure engineering rule 45
+          * exists to prevent. Assignment belongs to the board, where the call
+          * queue and the rest of the fleet are visible, so this hands the
+          * operator over to it with the unit already selected rather than
+          * duplicating the board's controls into a map popover.
+          */}
+        {onDispatchBoard ? (
+          <Button asChild variant="secondary" size="sm" className="flex-1">
+            <Link href={`/dispatch?unit=${encodeURIComponent(unit.id)}`}>
+              <ExternalLink aria-hidden /> View unit
+            </Link>
+          </Button>
+        ) : (
+          /*
+           * Another agency's unit.
+           *
+           * The map deliberately shows units from organizations that share on
+           * it; the dispatch board deliberately does not — it is your own fleet
+           * and your own queue. Offering the action anyway would hand the
+           * operator a link to a board the unit is not on, so the reason is
+           * stated instead of a dead end being presented as a control.
+           */
+          <p className="flex-1 text-2xs text-text-tertiary">
+            {unit.organization.shortName} unit — the dispatch board shows your own
+            organization.
+          </p>
+        )}
       </div>
     </Panel>
   );

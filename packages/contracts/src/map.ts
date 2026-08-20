@@ -1,4 +1,7 @@
 import type { IncidentPriority, IncidentStatusKey } from './statuses';
+// The offline threshold is the ingest layer's own position TTL, imported rather
+// than duplicated so the two cannot drift apart. See UNIT_OFFLINE_AFTER_MS.
+import { FIVEM_POSITION_TTL_MS } from './fivem';
 
 /**
  * Map subsystem contracts.
@@ -245,6 +248,23 @@ export const MAP_TICK_MS = 1_000;
 export const UNIT_STALE_AFTER_MS = 15_000;
 
 /**
+ * Beyond this gap the unit is OFFLINE and leaves live tracking.
+ *
+ * Deliberately equal to the ingest layer's position TTL: at that point the
+ * server has stopped broadcasting the unit at all, so continuing to draw it as
+ * tracked would be the map asserting something the feed no longer says. Tying
+ * the two constants together rather than picking a round number means they
+ * cannot drift into a window where the client believes it is tracking a unit the
+ * server has already dropped.
+ *
+ * OFFLINE IS NOT DELETION. The unit stays in the roster, stays selectable, and
+ * its last known position and the time it was seen remain readable — that is
+ * the difference between "we do not know where this unit is" and "this unit
+ * never existed", and only the first is true.
+ */
+export const UNIT_OFFLINE_AFTER_MS = FIVEM_POSITION_TTL_MS;
+
+/**
  * Interpolation is capped, so a unit that reappears after a gap SNAPS rather
  * than gliding across half the map — a smooth slide down a coastline the unit
  * never drove is a lie the renderer would be telling.
@@ -267,6 +287,16 @@ export const HIDDEN_TAB_UNSUBSCRIBE_MS = 5 * 60_000;
 export interface MapFilterState {
   organizationIds: string[];
   statusKeys: string[];
+  /**
+   * Filter by how current a unit's position is.
+   *
+   * Separate from `statusKeys` because these are different KINDS of fact and
+   * conflating them would be a lie. A unit's operational status is what the
+   * officer says they are doing; its freshness is whether we still know where
+   * they are. A unit can perfectly well be "Available" and offline — that is
+   * precisely the combination a dispatcher most needs to be able to find.
+   */
+  freshness: LocationFreshness[];
   unitTypes: string[];
   vehicleClasses: string[];
   incidentPriorities: IncidentPriority[];
@@ -284,6 +314,7 @@ export interface MapFilterState {
 export const EMPTY_MAP_FILTER: MapFilterState = {
   organizationIds: [],
   statusKeys: [],
+  freshness: [],
   unitTypes: [],
   vehicleClasses: [],
   incidentPriorities: [],
@@ -299,6 +330,7 @@ export function countActiveMapFilters(filter: MapFilterState): number {
   return (
     filter.organizationIds.length +
     filter.statusKeys.length +
+    filter.freshness.length +
     filter.unitTypes.length +
     filter.vehicleClasses.length +
     filter.incidentPriorities.length +
@@ -317,7 +349,24 @@ export function countActiveMapFilters(filter: MapFilterState): number {
  * genuinely confusing bug to be looking at during an incident, so they share
  * this function rather than each re-deriving the condition.
  */
-export function matchesUnitFilter(unit: MapUnit, filter: MapFilterState): boolean {
+export function matchesUnitFilter(
+  unit: MapUnit,
+  filter: MapFilterState,
+  /**
+   * The unit's ALREADY-COMPUTED freshness.
+   *
+   * Passed in rather than derived from a clock here, for two reasons. It keeps
+   * this function pure — a `Date.now()` inside a predicate called during render
+   * is an impure read React's compiler rightly rejects. And it means the canvas
+   * and the side list filter on the SAME value: each computes freshness once,
+   * from its own clock, and two views of one fleet cannot disagree about which
+   * units are in it.
+   *
+   * Optional, because a caller with no freshness filter active has no reason to
+   * compute one.
+   */
+  freshness?: LocationFreshness,
+): boolean {
   if (!filter.showUnits) return false;
   if (!unit.status.isOnDuty && !filter.includeOffDuty) return false;
 
@@ -325,6 +374,10 @@ export function matchesUnitFilter(unit: MapUnit, filter: MapFilterState): boolea
     && !filter.organizationIds.includes(unit.organization.id)) return false;
 
   if (filter.statusKeys.length > 0 && !filter.statusKeys.includes(unit.status.key)) return false;
+
+  if (filter.freshness.length > 0 && freshness !== undefined) {
+    if (!filter.freshness.includes(freshness)) return false;
+  }
   if (filter.unitTypes.length > 0 && !filter.unitTypes.includes(unit.unitType)) return false;
 
   if (filter.vehicleClasses.length > 0) {
@@ -388,14 +441,69 @@ export function matchesMarkerFilter(marker: MapMarker, filter: MapFilterState): 
 
 // ── Staleness ──────────────────────────────────────────────────────────────
 
-export type LocationFreshness = 'live' | 'stale' | 'unknown';
+/**
+ * How much a position can be trusted, as a function of ITS AGE.
+ *
+ *   live     reported within the last 15 s — act on it
+ *   stale    older than that but still tracked — where the unit WAS
+ *   offline  the feed has given up on it — position is history, not tracking
+ *   unknown  the unit has never reported at all
+ *
+ * `unknown` and `offline` are different facts and are kept apart. A unit that
+ * has never reported may simply have no FiveM identity linked; one that has gone
+ * offline was being tracked a minute ago and is not any more. Collapsing them
+ * would hide which of those an operator is looking at.
+ */
+export type LocationFreshness = 'live' | 'stale' | 'offline' | 'unknown';
 
 export function freshnessOf(
   location: UnitLocation | null,
   now: number,
   staleAfterMs = UNIT_STALE_AFTER_MS,
+  offlineAfterMs = UNIT_OFFLINE_AFTER_MS,
 ): LocationFreshness {
   if (location === null) return 'unknown';
+
   const age = now - Date.parse(location.updatedAt);
-  return Number.isNaN(age) || age > staleAfterMs ? 'stale' : 'live';
+  // An unparseable timestamp is treated as the worst case rather than the best.
+  // Reading it as fresh would draw a unit as live on the strength of a value we
+  // could not understand.
+  if (Number.isNaN(age)) return 'offline';
+
+  if (age > offlineAfterMs) return 'offline';
+  if (age > staleAfterMs) return 'stale';
+  return 'live';
 }
+
+/** True while the map still considers this a tracked unit. */
+export function isTracked(freshness: LocationFreshness): boolean {
+  return freshness === 'live' || freshness === 'stale';
+}
+
+/** How each level is named to an operator. One wording, used everywhere. */
+export const FRESHNESS_META: Record<LocationFreshness, {
+  label: string;
+  shortLabel: string;
+  description: string;
+}> = {
+  live: {
+    label: 'Live',
+    shortLabel: 'Live',
+    description: 'Reporting now.',
+  },
+  stale: {
+    label: 'Stale',
+    shortLabel: 'Stale',
+    description: 'Last known position — not where the unit is now.',
+  },
+  offline: {
+    label: 'Offline',
+    shortLabel: 'Offline',
+    description: 'No longer tracked. The position shown is history.',
+  },
+  unknown: {
+    label: 'No fix',
+    shortLabel: 'No fix',
+    description: 'This unit has never reported a position.',
+  },
+};

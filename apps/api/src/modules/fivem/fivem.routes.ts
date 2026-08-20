@@ -69,6 +69,12 @@ export default async function fivemRoutes(app: FastifyInstance): Promise<void> {
     limit: { limit: number; windowSeconds: number },
     surface: string,
   ): Promise<AuthedRequest | null> {
+    // The handshake establishes the sequence counter rather than continuing it,
+    // which is what lets a restarted game server come back — see check 6 in
+    // fivem.auth.ts. Derived from the surface rather than passed separately, so
+    // there is no way to ask for the exemption on any other endpoint.
+    const isHandshake = surface === 'handshake';
+
     const rawBody = request.rawBody ?? '';
     if (rawBody.length > MAX_BODY_BYTES) {
       await reply.status(413).send({
@@ -86,6 +92,7 @@ export default async function fivemRoutes(app: FastifyInstance): Promise<void> {
         path: request.url.split('?')[0] ?? request.url,
         headers: request.headers as Record<string, string | string[] | undefined>,
         rawBody,
+        isHandshake,
       },
       { db: app.db, nonces: app.fivemNonces, secretBox: app.secretBox },
     );
@@ -160,6 +167,17 @@ export default async function fivemRoutes(app: FastifyInstance): Promise<void> {
           sessionStartedAt: now,
           resourceVersion: body.resourceVersion,
           lastHeartbeatAt: now,
+          /**
+           * The baseline is RESET, not advanced.
+           *
+           * `commitSequence` only ever moves this forward, which is right for
+           * ordinary traffic and wrong here: a resource that restarted is
+           * counting from near zero again, and leaving the old high-water mark
+           * in place would reject every request it goes on to send. The
+           * handshake is the one request that gets to say where the sequence
+           * starts, and it may only say so about itself.
+           */
+          lastIngestSeq: authed.principal.seq,
           updatedAt: now,
         },
       });
