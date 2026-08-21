@@ -6,6 +6,8 @@ import errorsPlugin from './plugins/errors.js';
 import authPlugin from './plugins/auth.js';
 import mapSourcePlugin from './plugins/map-source.js';
 import realtimePlugin from './plugins/realtime.js';
+import requestLimitPlugin from './plugins/request-limit.js';
+import retentionPlugin from './plugins/retention.js';
 import fivemPlugin from './plugins/fivem.js';
 import authRoutes from './modules/auth/auth.routes.js';
 import organizationRoutes from './modules/organizations/organization.routes.js';
@@ -124,6 +126,11 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
   await app.register(errorsPlugin);
   await app.register(authPlugin);
   /**
+   * Immediately after auth: the budget is keyed on the user, so it needs the
+   * identity hook to have run, and it must run before any route work begins.
+   */
+  await app.register(requestLimitPlugin);
+  /**
    * Before the map source: `FiveMPositionSource` is chosen there, and the ingest
    * surface it serves needs the nonce store and the secret box to exist first.
    */
@@ -137,6 +144,11 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
    * capture undefined decorators.
    */
   await app.register(realtimePlugin, { config });
+  /**
+   * Retention. Sweeps the two tables that grow per operator — see the plugin
+   * for what is and is not deleted, and for why the audit log is not.
+   */
+  await app.register(retentionPlugin, {});
 
   app.get('/health', async () => ({ status: 'ok' }));
   app.get('/health/ready', async () => {

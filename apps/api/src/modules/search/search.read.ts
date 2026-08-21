@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import {
-  incident, organization, organizationMember, person, unit, userAccount, vehicle,
+  incident, organization, organizationMember, person, personAlias, unit, userAccount, vehicle,
   type Database,
 } from '@leoos/db';
 import {
@@ -84,13 +84,30 @@ export async function searchPersonsCategory(
   { term, limit, offset }: QueryOptions,
 ): Promise<CategoryResult> {
   const like = `%${term}%`;
+
+  /**
+   * Aliases resolved first — see `person.read.ts` for the full reasoning.
+   *
+   * A correlated `EXISTS` inside an `OR` makes the whole predicate
+   * unindexable, because the planner cannot fold it into the bitmap it builds
+   * from the other branches. One extra query against a small, trigram-indexed
+   * table buys a predicate where every branch is an index scan.
+   */
+  const aliasMatches = await db
+    .select({ personId: personAlias.personId })
+    .from(personAlias)
+    .where(sql`${personAlias.alias} ILIKE ${like}`)
+    .limit(500);
+  const aliasIds = [...new Set(aliasMatches.map((r) => r.personId))];
+
   const where = and(
     scope.includeArchivedPersons ? undefined : isNull(person.deletedAt),
     or(
       sql`(${person.firstName} || ' ' || ${person.lastName}) ILIKE ${like}`,
       sql`${person.phoneNumber} ILIKE ${like}`,
-      sql`EXISTS (SELECT 1 FROM person_alias pa
-            WHERE pa.person_id = ${person.id} AND pa.alias ILIKE ${like})`,
+      aliasIds.length > 0
+        ? sql`${person.id} = ANY(${sql.param(aliasIds)}::uuid[])`
+        : undefined,
     ),
   );
 

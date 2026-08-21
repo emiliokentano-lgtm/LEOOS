@@ -1,9 +1,9 @@
 'use client';
 
-import * as React from 'react';
 import Link from 'next/link';
 import type { Route } from 'next';
-import * as Icons from 'lucide-react';
+import { Bell } from 'lucide-react';
+import { ICONS } from '@/components/icon';
 import {
   NOTIFICATION_SEVERITIES, notificationTypeMeta, type NotificationDto,
 } from '@leoos/contracts';
@@ -23,12 +23,16 @@ import { OrgBadge } from '@/components/ui';
  * the list (engineering rules 5–7).
  */
 
+/**
+ * Falls back to a bell for a type this build has never heard of.
+ *
+ * Read from the shared registry rather than a namespace import: the latter
+ * defeats tree-shaking and pulled the entire icon library into the client
+ * bundle — see `components/icon.tsx`.
+ */
 function LucideIcon({ name, className }: { name: string; className?: string }) {
-  const Icon = (Icons as unknown as Record<
-    string, React.ComponentType<{ className?: string }>
-  >)[name];
-  if (!Icon) return <Icons.Bell className={className} aria-hidden />;
-  return <Icon className={className} aria-hidden />;
+  const Cmp = ICONS[name] ?? Bell;
+  return <Cmp className={className} aria-hidden />;
 }
 
 const TONE_DOT: Record<string, string> = {

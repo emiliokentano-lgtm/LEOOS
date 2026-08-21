@@ -225,6 +225,27 @@ regression test that fails without the fix — see
 | 35, 45 | System configuration is READ-ONLY and reports the state each component has — the mail screen says password resets are written to a log and not delivered, rather than showing a configured tick. | [admin §6](docs/architecture/11-administration.md) |
 | 26 | An unavailable action states its reason in words from the API's own `restrictions` list, rather than presenting a silently disabled control. | `apps/web/app/(app)/admin/users/[userId]/` |
 
+### Performance
+
+Every optimisation carries a before/after number taken against a checked-in
+fixture at roleplay scale. Where a candidate produced no measurable win it was
+NOT made, and that decision is recorded too — see
+[performance §8](docs/architecture/14-performance.md).
+
+| Rules | Mechanism | Location |
+| --- | --- | --- |
+| 50 | Measure, then change, then measure again. The fixture and the benchmark are both checked in, so every figure in the document can be reproduced rather than believed. The benchmark times the query the APPLICATION issues, copied from the read module named beside it — a simplified stand-in reported 49 ms for a register search that actually costs 11 ms, because the simplification dropped the ordering that decides the plan. | `packages/db/scripts/load-fixture.mjs`, `bench-queries.mjs` |
+| 2, 34 | The fixture REFUSES a database not named for benchmarking. Not a comment — the comment was there and the mistake was made anyway, and the audit rows it wrote could not be deleted afterwards because the table is append-only. | `packages/db/scripts/load-fixture.mjs` |
+| 21, 22 | An `OR` degrades to a sequential scan if ANY branch is unindexed, so the indexes on the other branches buy nothing: 135 ms → 1.6 ms on vehicle search, 67 ms → 14 ms on the person register. The audit log's composites end in its keyset, `occurred_at DESC, id DESC`, because a composite serves a sort only if the direction matches. | [migration 0010](packages/db/migrations/0010_performance.sql) |
+| 21, 22 | A re-report of the same place is NOT a change. The position store carries a revision bumped only on real movement, and each subscriber has its own baseline — `sampledAt` is deliberately excluded from the comparison, because the bridge's keep-alive would otherwise make every tick a change and the whole thing a no-op. A parked fleet costs ZERO messages, asserted by a benchmark that is a test. | `apps/api/src/modules/map/sources/live-positions.ts`, `apps/api/test/broadcast-bench.test.ts` |
+| 9, 10, 44 | Identity resolution is cached on `permission_version` — a key every mutating path already bumps inside its own transaction — NOT on a timer. A demotion takes effect on the very next request, with no wait, and a regression test fails if the version check is removed. The five-second TTL exists for the one change no transaction can announce (an override reaching `expires_at`), and the test asserts the STALE window as well as the recovery, so the size of what is being accepted is written down rather than claimed. | [performance §4](docs/architecture/14-performance.md), `apps/api/test/identity-cache.test.ts` |
+| 10, 12 | A mutation never decides from the cache. `loadActorContextLocked` reads through, because a decision made under `SELECT … FOR UPDATE` must see the rows it locked — proved by a test that changes authority without a version bump. | `apps/api/src/modules/auth/context.service.ts` |
+| 16, 21 | Nothing this API serves is cacheable by default. Routes had been setting `no-store` by hand and most had not; a cached authenticated response is one a shared proxy can replay to the next person through it. | `apps/api/src/plugins/auth.ts`, `apps/api/test/security.test.ts` |
+| 18, 44 | Rate limiting existed where a request is a GUESS and nowhere else. Two per-USER budgets now cover where a request is a COST — and keyed on the user rather than the address, because a roleplay community behind one NAT would otherwise throttle the second dispatcher to sign in. That property has its own test. | `apps/api/src/plugins/request-limit.ts`, `apps/api/test/rate-limit.test.ts` |
+| 22, 24 | Retention sweeps the two tables that grow per operator. READ notifications past the window go; UNREAD ones never go by age. The audit log is not touched by anything, ever. | `apps/api/src/plugins/retention.ts` |
+| 28, 29 | A namespace import is opaque to tree-shaking, so `import * as Icons` shipped ~1 500 components in the shared chunk on every page: 948 KB → 228 KB. The registry keeps the data-driven lookup exactly, and a lint step fails the build if a catalogue names an icon it does not have. | `apps/web/components/icon.tsx`, `apps/web/scripts/check-icons.mjs` |
+| 28, 34 | Rejected optimisations are recorded with their numbers: the roster's level computation (17 → 15 ms, inside the noise), marker clustering (no measurable problem at 500 units), and `position_history` retention (the table has no writer yet). | [performance §8](docs/architecture/14-performance.md) |
+
 ---
 
 ## Standing conventions

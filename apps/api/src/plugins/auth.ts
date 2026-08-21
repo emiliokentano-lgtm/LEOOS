@@ -5,7 +5,7 @@ import type { PermissionKey } from '@leoos/contracts';
 import { can, type ActorContext } from '@leoos/authz-core';
 import { ForbiddenError, UnauthenticatedError } from '../lib/errors.js';
 import { resolveSession, touchSession } from '../modules/auth/session.service.js';
-import { resolveIdentity, toActorContext } from '../modules/auth/context.service.js';
+import { resolveIdentityCached, toActorContext } from '../modules/auth/context.service.js';
 
 /**
  * Authentication middleware.
@@ -125,7 +125,13 @@ export default fp(async (app) => {
     const record = await resolveSession(app.db, token);
     if (!record) return;
 
-    const identity = await resolveIdentity(app.db, record.userId);
+    /**
+     * Cached on the user's `permission_version`, NOT on a timer alone — see the
+     * block above `resolveIdentityCached`. On a hit this is one indexed read
+     * instead of seven queries; a permission change invalidates it by moving the
+     * key, so a demotion takes effect on the very next request.
+     */
+    const identity = await resolveIdentityCached(app.db, record.userId);
     if (!identity) return;
 
     const requested = request.headers[ORG_HEADER];
@@ -145,6 +151,32 @@ export default fp(async (app) => {
     };
 
     await touchSession(app.db, app.config, record);
+  });
+
+  /**
+   * NOTHING THIS API SERVES IS CACHEABLE BY DEFAULT.
+   *
+   * Individual routes had been setting `cache-control: no-store` by hand — the
+   * dispatch board, the map, the dashboard, notifications, the ticket endpoint.
+   * The ones that remembered were the ones whose author was thinking about
+   * freshness. The rest — the organization panels, personnel, the person and
+   * vehicle registers, search, roles, the whole admin surface — sent no
+   * `cache-control` at all, which leaves the decision to a heuristic in whatever
+   * sits between the browser and the API.
+   *
+   * That is the wrong default twice over. Operationally, a stale roster or a
+   * stale audit page is a screen lying to a dispatcher. For security, a cached
+   * authenticated response is a response that can be replayed to somebody else
+   * by a shared proxy — the same class of problem as the serialization boundary,
+   * reached through the transport instead of the DTO.
+   *
+   * So the default inverts: every response leaves with `no-store` unless the
+   * route set something itself. A route that genuinely serves cacheable public
+   * content states so explicitly, which is a decision worth making visible.
+   */
+  app.addHook('onSend', async (_request, reply, payload) => {
+    if (!reply.hasHeader('cache-control')) reply.header('cache-control', 'no-store');
+    return payload;
   });
 
   app.decorate('requireSession', async (request: FastifyRequest) => {

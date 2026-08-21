@@ -1,7 +1,6 @@
 'use client';
 
-import * as React from 'react';
-import * as Icons from 'lucide-react';
+import { Icon } from '@/components/icon';
 import {
   DUTY_STATUSES, INCIDENT_STATUSES, PRIORITIES,
   type DutyStatusKey, type IncidentStatusKey, type IncidentPriority,
@@ -17,10 +16,14 @@ import { cn } from '@/lib/utils';
  * where colour fidelity is poor.
  */
 
+/**
+ * Icons come from the shared registry, not from a namespace import.
+ *
+ * `import * as Icons from 'lucide-react'` is opaque to tree-shaking and pulled
+ * the whole library into the client bundle — see `components/icon.tsx`.
+ */
 function LucideIcon({ name, className }: { name: string; className?: string }) {
-  const Icon = (Icons as unknown as Record<string, React.ComponentType<{ className?: string }>>)[name];
-  if (!Icon) return null;
-  return <Icon className={className} aria-hidden />;
+  return <Icon name={name} className={className} />;
 }
 
 export interface DutyStatusBadgeProps {

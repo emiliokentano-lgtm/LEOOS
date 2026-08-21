@@ -6,7 +6,7 @@
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
-    "lint": "eslint .",
+    "lint": "eslint . && node scripts/check-icons.mjs",
     "typecheck": "tsc --noEmit",
     "visual-check": "node scripts/visual-check.mjs"
   },

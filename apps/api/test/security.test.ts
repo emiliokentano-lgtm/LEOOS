@@ -915,3 +915,44 @@ describe('hierarchy and privilege-escalation attacks are all refused', () => {
     expect(after!.n).toBeGreaterThanOrEqual(before!.n);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// No authenticated response is cacheable
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('every API response forbids caching unless it says otherwise', () => {
+  /**
+   * A cached authenticated response is a response a shared proxy can replay to
+   * the next person through it. Individual routes had been setting `no-store`
+   * by hand and most had not, so the default now comes from a hook and this
+   * test walks the surfaces that were previously silent.
+   *
+   * It checks refusals as well as successes: an error body carries a request id
+   * and a reason, and a cached 404 is a wrong answer that outlives the state
+   * that produced it.
+   */
+  const SURFACES = [
+    '/api/v1/auth/me',
+    '/api/v1/organizations',
+    '/api/v1/search?q=test',
+    '/api/v1/persons',
+    '/api/v1/vehicles',
+    '/api/v1/admin/users',
+    '/api/v1/dispatch/board',
+    '/api/v1/notifications',
+  ];
+
+  it('sends cache-control: no-store on every read surface', async () => {
+    const operatorSession = await operator('nostore', 'PD', 'lieutenant');
+
+    for (const url of SURFACES) {
+      const res = await h.app.inject({ method: 'GET', url, headers: operatorSession.headers });
+      expect(res.headers['cache-control'], `${url} (${res.statusCode})`).toBe('no-store');
+    }
+  });
+
+  it('sends it on an unauthenticated refusal too', async () => {
+    const res = await h.app.inject({ method: 'GET', url: '/api/v1/auth/me' });
+    expect(res.headers['cache-control']).toBe('no-store');
+  });
+});

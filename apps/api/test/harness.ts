@@ -133,12 +133,59 @@ export async function signIn(h: TestHarness, creds: { username: string; password
   };
 }
 
+/**
+ * Bumps a user's permission version the way the real services do.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHY EVERY DIRECT-SQL HELPER BELOW CALLS THIS
+ *
+ * Identity resolution is cached on `user_account.permission_version` (see
+ * `resolveIdentityCached`). Every application path that changes a user's
+ * effective authority bumps that column inside its own transaction, so a
+ * demotion is visible on the very next request.
+ *
+ * The helpers in this file deliberately bypass those paths — a scoping test
+ * must be able to SET UP the state it then proves is refused, without depending
+ * on the endpoint that produces it working. Bypassing the service also bypasses
+ * the bump, which would leave the test asserting against an identity resolved
+ * before its own setup ran.
+ *
+ * So the helpers bump too. This is not a workaround for the cache: it makes the
+ * fixtures behave the way the production writers behave. A test that changes
+ * authorization state with raw SQL of its own must do the same.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+export async function bumpVersionForUser(db: Database, userId: string): Promise<void> {
+  await db.execute(
+    sql`UPDATE user_account SET permission_version = permission_version + 1 WHERE id = ${userId}`,
+  );
+}
+
+/** Same, addressed by username — the shape most helpers here already have. */
+export async function bumpVersionForUsername(db: Database, username: string): Promise<void> {
+  await db.execute(sql`
+    UPDATE user_account SET permission_version = permission_version + 1
+     WHERE username = ${username}
+  `);
+}
+
+/** Same, addressed by membership — used where only the member id is to hand. */
+export async function bumpVersionForMember(db: Database, memberId: string): Promise<void> {
+  await db.execute(sql`
+    UPDATE user_account SET permission_version = permission_version + 1
+     WHERE id = (SELECT user_id FROM organization_member WHERE id = ${memberId})
+  `);
+}
+
 export async function setAccountStatus(
   db: Database,
   email: string,
   status: 'active' | 'suspended' | 'disabled' | 'pending_verification',
 ): Promise<void> {
   await db.update(userAccount).set({ status }).where(eq(userAccount.email, email));
+  await db.execute(sql`
+    UPDATE user_account SET permission_version = permission_version + 1 WHERE email = ${email}
+  `);
 }
 
 
@@ -196,6 +243,8 @@ export async function grantMembership(
     ON CONFLICT (member_id) DO NOTHING
   `);
 
+  await bumpVersionForUser(db, user.id);
+
   return { memberId: member.id, organizationId: org.id, roleId: role.id };
 }
 
@@ -211,6 +260,7 @@ export async function setPermissionOverride(
     ON CONFLICT (member_id, permission_key)
     DO UPDATE SET effect = ${effect}::permission_override_effect
   `);
+  await bumpVersionForMember(db, memberId);
 }
 
 /** Makes an account a global administrator. */
@@ -220,6 +270,7 @@ export async function makeGlobalAdmin(db: Database, username: string): Promise<v
     VALUES ((SELECT id FROM user_account WHERE username = ${username}), 'global_admin')
     ON CONFLICT DO NOTHING
   `);
+  await bumpVersionForUsername(db, username);
 }
 
 /**
@@ -245,6 +296,7 @@ export async function makeOrgLead(
     ON CONFLICT (user_id, organization_id)
     DO UPDATE SET revoked_at = NULL, revoked_by = NULL
   `);
+  await bumpVersionForUsername(db, username);
 }
 
 export async function organizationIdByKey(db: Database, key: string): Promise<string> {

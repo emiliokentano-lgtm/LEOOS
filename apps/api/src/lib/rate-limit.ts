@@ -93,7 +93,35 @@ export const LIMITS = {
   passwordResetRequest: { limit: 3, windowSeconds: 3600 },
   passwordResetPerIp: { limit: 10, windowSeconds: 3600 },
   verificationResend: { limit: 3, windowSeconds: 3600 },
+  /**
+   * The per-operator request budget for the whole authenticated API.
+   *
+   * Sized from what a real console actually does: the dispatch board and the
+   * dashboard each poll on a few-second timer, the notification badge has a
+   * 30-second backstop behind the socket, and a page load fans out into a
+   * handful of reads. A busy dispatcher on three screens lands around 60–90
+   * requests a minute; 300 leaves several times that headroom and still catches
+   * a script.
+   *
+   * Keyed on the USER, not the IP. Everyone on a shared game-community network
+   * — or behind one reverse proxy — presents the same address, so an IP budget
+   * would throttle the second dispatcher to sign in rather than the one
+   * misbehaving. The unauthenticated surfaces are keyed by IP instead, because
+   * there is no user yet; those limits live beside their routes.
+   */
   general: { limit: 300, windowSeconds: 60 },
+
+  /**
+   * The searches that scan.
+   *
+   * Global search, the person register and the vehicle register each run
+   * trigram scans across the largest tables in the system, and their cost does
+   * not fall with a narrow result set — a two-character term matches a great
+   * deal before the limit applies. A human types a query every few seconds at
+   * most; 60 a minute is generous for that and closes the cheapest way to make
+   * the database do a lot of work with very little traffic.
+   */
+  search: { limit: 60, windowSeconds: 60 },
 
   /**
    * FiveM ingest, keyed per credential.
