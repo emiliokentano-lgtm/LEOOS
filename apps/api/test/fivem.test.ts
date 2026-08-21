@@ -8,6 +8,7 @@ import {
   createActiveUser, createHarness, grantMembership, resetAccounts, signIn,
   userIdByUsername, type TestHarness,
 } from './harness.js';
+import { LIMITS } from '../src/lib/rate-limit.js';
 import { SecretBox } from '../src/lib/secret-box.js';
 import { NonceStore } from '../src/modules/fivem/nonce-store.js';
 import { parseIdentifier, primaryIdentifier } from '../src/modules/fivem/fivem.identity.js';
@@ -829,6 +830,149 @@ describe('the trust model', () => {
 
 // ── Heartbeat and offline detection ─────────────────────────────────────────
 
+// ── Excessive request rate ──────────────────────────────────────────────────
+
+describe('a runaway resource is throttled rather than absorbed', () => {
+  /**
+   * The threat here is NOT an attacker.
+   *
+   * A forged request fails the signature long before it reaches the limiter, so
+   * an outsider cannot spend a credential's budget. What this bounds is a
+   * MISCONFIGURED game server — one bad `SetTimeout` in Lua turning a 1 Hz
+   * telemetry loop into an unbounded one — taking down its own dispatch.
+   *
+   * Keyed per CREDENTIAL, not per IP: a game server is one machine behind one
+   * address, so an IP bucket would be the same bucket, and a shared host would
+   * put two unrelated servers in it.
+   */
+  async function ready(prefix: string) {
+    const credential = await registerServer(prefix);
+    const sessionId = await handshake(credential);
+    return { credential, sessionId };
+  }
+
+  const heartbeat = (credential: Credential, sessionId: string) =>
+    post(credential, '/api/v1/fivem/heartbeat', {
+      sessionId, playerCount: 1, uptimeSeconds: 60, resourceVersion: '1.0.0',
+    });
+
+  it('refuses past the per-credential limit, with a retry hint', async () => {
+    const { credential, sessionId } = await ready('ratelimit');
+
+    const codes: number[] = [];
+    for (let i = 0; i < LIMITS.fivemHeartbeat.limit + 2; i += 1) {
+      codes.push((await heartbeat(credential, sessionId)).statusCode);
+    }
+
+    // The handshake spent one of this surface's budget? No — surfaces have
+    // separate buckets, so the first `limit` heartbeats all succeed.
+    expect(codes.slice(0, LIMITS.fivemHeartbeat.limit).every((c) => c === 200)).toBe(true);
+    expect(codes.at(-1)).toBe(429);
+  });
+
+  it('does not spend one game server’s budget on another’s traffic', async () => {
+    const first = await ready('ratekeya');
+    const second = await ready('ratekeyb');
+
+    for (let i = 0; i < LIMITS.fivemHeartbeat.limit + 1; i += 1) {
+      await heartbeat(first.credential, first.sessionId);
+    }
+    expect((await heartbeat(first.credential, first.sessionId)).statusCode).toBe(429);
+
+    // Same address, same surface, different credential — unaffected.
+    expect((await heartbeat(second.credential, second.sessionId)).statusCode).toBe(200);
+  });
+
+  it('keeps a separate budget per surface, so telemetry survives a heartbeat storm', async () => {
+    const { credential, sessionId } = await ready('ratesurface');
+
+    for (let i = 0; i < LIMITS.fivemHeartbeat.limit + 1; i += 1) {
+      await heartbeat(credential, sessionId);
+    }
+    expect((await heartbeat(credential, sessionId)).statusCode).toBe(429);
+
+    // Telemetry is what the map is built from. A resource misbehaving on one
+    // endpoint must not blind dispatch on the other.
+    const telemetry = await post(credential, '/api/v1/fivem/telemetry', {
+      sessionId, sentAt: Date.now(), players: [],
+    });
+    expect(telemetry.statusCode).toBe(200);
+  });
+});
+
+// ── A player crewing no unit ────────────────────────────────────────────────
+
+describe('a player the database cannot place', () => {
+  async function ready(prefix: string) {
+    const credential = await registerServer(prefix);
+    const sessionId = await handshake(credential);
+    return { credential, sessionId };
+  }
+
+  it('accepts a linked member who crews NO unit, and maps nothing', async () => {
+    /**
+     * The middle case between "unlinked stranger" and "officer in a car".
+     *
+     * A member on duty but not crewed into a unit is completely ordinary — they
+     * have just come on shift, or stepped out of a car. The ingest must not
+     * refuse the batch, and must not invent a unit to hang the position on:
+     * `unit` is where a position lives, and there isn't one.
+     */
+    const { credential, sessionId } = await ready('nounit');
+
+    h.app.limiter.resetAll();
+    const creds = await createActiveUser(h, 'fivemnounit');
+    const m = await grantMembership(h.db, creds.username, { orgKey: 'PD', roleKey: 'officer' });
+    const userId = await userIdByUsername(h.db, creds.username);
+    const license = `license:${randomBytes(8).toString('hex')}`;
+
+    await h.db.execute(sql`
+      INSERT INTO game_identity (user_id, provider, identifier, verified_at)
+      VALUES (${userId}, 'license', ${license.split(':')[1]}, now())
+    `);
+
+    // Deliberately NOT crewed into any unit.
+    const before = await h.db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM unit_member
+       WHERE member_id = ${m.memberId} AND left_at IS NULL
+    `);
+    expect(before[0]!.n).toBe(0);
+
+    const res = await post(credential, '/api/v1/fivem/telemetry', {
+      sessionId,
+      sentAt: Date.now(),
+      players: [{
+        src: 7, identifiers: { license }, x: 100, y: 200, z: 30, heading: 45,
+      }],
+    });
+
+    /**
+     * Not an error — and nothing was attributed.
+     *
+     * The response counts what the pipeline did with the batch; the assertion
+     * that matters is the second one, against the live position store. A sample
+     * that reached the store would mean the ingest had invented a unit to hang
+     * it on, which is the trust-model failure this whole surface exists to
+     * prevent — reached by accident rather than by forgery.
+     */
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { ok: boolean; accepted: number; rejected: number };
+    expect(body.ok).toBe(true);
+    expect(body.rejected).toBe(0);
+
+    const planted = h.app.mapPositions.all()
+      .filter((p) => p.x === 100 && p.y === 200);
+    expect(planted, 'a position was stored for a player who crews no unit').toHaveLength(0);
+
+    // The membership is untouched: no unit was created and nobody was crewed.
+    const after = await h.db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM unit_member
+       WHERE member_id = ${m.memberId} AND left_at IS NULL
+    `);
+    expect(after[0]!.n).toBe(0);
+  });
+});
+
 describe('heartbeat', () => {
   it('records a heartbeat and the player count', async () => {
     const credential = await registerServer('hb');
@@ -1076,6 +1220,61 @@ describe('game server administration', () => {
 });
 
 // ── Units of the pieces ─────────────────────────────────────────────────────
+
+describe('an unconfigured installation says so', () => {
+  /**
+   * FOUND BY RUNNING THE WALKTHROUGHS, not by reading the code.
+   *
+   * A server started without `LEOOS_FIVEM_SECRET_KEY` answered "issue a
+   * credential" with a bare 500 and logged `unhandled error`. The exception
+   * carried a perfectly good explanation — which variable is missing and how to
+   * generate one — and none of it reached the administrator, because the class
+   * extended plain `Error` and never reached the error plugin's mapping.
+   *
+   * A missing configuration is a service that is not available, not a crash.
+   */
+  it('answers 503 with the setting to configure, rather than a bare 500', async () => {
+    // A harness with NO ingest key — the default for an installation that has
+    // not set one up.
+    const bare = await createHarness();
+    try {
+      h.app.limiter.resetAll();
+      const creds = await createActiveUser(bare, 'nokeyadmin');
+      await grantMembership(bare.db, creds.username, { orgKey: 'PD', roleKey: 'chief' });
+      await bare.db.execute(sql`
+        INSERT INTO user_global_role (user_id, capability)
+        VALUES ((SELECT id FROM user_account WHERE username = ${creds.username}), 'global_admin')
+        ON CONFLICT DO NOTHING
+      `);
+      await bare.db.execute(sql`
+        UPDATE user_account SET permission_version = permission_version + 1
+         WHERE username = ${creds.username}
+      `);
+      const auth = await signIn(bare, creds);
+
+      const registered = await bare.app.inject({
+        method: 'POST', url: '/api/v1/game-servers', headers: auth.headers,
+        payload: { key: `nokey${Date.now().toString(36)}`, name: 'Unconfigured' },
+      });
+      expect(registered.statusCode).toBe(201);
+      const serverId = (registered.json() as { id: string }).id;
+
+      const issued = await bare.app.inject({
+        method: 'POST', url: `/api/v1/game-servers/${serverId}/credentials`,
+        headers: auth.headers, payload: {},
+      });
+
+      expect(issued.statusCode).toBe(503);
+      const body = issued.json() as { error: { code: string; message: string } };
+      expect(body.error.code).toBe('FIVEM_SECRET_KEY_UNCONFIGURED');
+      // The message must name the setting: an administrator reading it should
+      // not have to search the source to find out what to do.
+      expect(body.error.message).toContain('LEOOS_FIVEM_SECRET_KEY');
+    } finally {
+      await bare.close();
+    }
+  });
+});
 
 describe('secret box', () => {
   it('round-trips, and refuses a value encrypted under another key', () => {

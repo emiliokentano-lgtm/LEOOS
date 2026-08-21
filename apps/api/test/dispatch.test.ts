@@ -713,6 +713,86 @@ describe('unit management', () => {
   });
 });
 
+// ── Unit status, set by a dispatcher rather than by the crew ───────────────
+//
+// `POST /units/:unitId/status` is a different operation from `POST /self/status`
+// and had no coverage of its own. It is a dispatcher marking a CAR out of
+// service — a statement about the vehicle, not about the people in it — so it is
+// gated on `units.manage` where the self endpoint is gated on nothing but an
+// active membership. The two being adjacent in the routes file is exactly why
+// this needs testing: the wrong one is easy to reach for.
+
+describe('unit status set by a dispatcher', () => {
+  it('sets the status of a unit the caller does not crew', async () => {
+    const sgt = await member('dustatus', 'PD', 'sergeant');
+    const unit = await makeUnit('PD');
+
+    const result = await post(sgt, `/api/v1/dispatch/units/${unit.id}/status`,
+      { statusKey: 'at_hq' });
+    expect(result.status).toBe(200);
+
+    const [row] = await h.db.execute<{ status_key: string }>(
+      sql`SELECT status_key FROM unit WHERE id = ${unit.id}`,
+    );
+    expect(row!.status_key).toBe('at_hq');
+  });
+
+  it('refuses without units.manage, where the SELF endpoint would allow it', async () => {
+    const officer = await member('dustatusperm', 'PD', 'officer');
+    await setPermissionOverride(h.db, officer.memberId, 'units.manage', 'deny');
+    const unit = await makeUnit('PD');
+
+    expect((await post(officer, `/api/v1/dispatch/units/${unit.id}/status`,
+      { statusKey: 'at_hq' })).status).toBe(403);
+
+    // The same operator can still set their OWN status, which is the whole
+    // point of the two endpoints being separate.
+    expect((await post(officer, '/api/v1/dispatch/self/status',
+      { statusKey: 'busy' })).status).toBe(200);
+  });
+
+  it('hides another organization unit behind a 404', async () => {
+    const sgt = await member('dustatuscross', 'PD', 'sergeant');
+    const foreign = await makeUnit('MD');
+    const result = await post(sgt, `/api/v1/dispatch/units/${foreign.id}/status`,
+      { statusKey: 'busy' });
+    expect(result.status).toBe(404);
+  });
+
+  it('refuses a status outside the catalogue', async () => {
+    const sgt = await member('dustatusbad', 'PD', 'sergeant');
+    const unit = await makeUnit('PD');
+    const result = await post(sgt, `/api/v1/dispatch/units/${unit.id}/status`,
+      { statusKey: 'definitely_not_a_status' });
+    expect([400, 422]).toContain(result.status);
+  });
+
+  it('refuses to set the status of a disbanded unit', async () => {
+    const sgt = await member('dustatusdead', 'PD', 'sergeant');
+    const unit = await makeUnit('PD');
+    expect((await del(sgt, `/api/v1/dispatch/units/${unit.id}`)).status).toBe(200);
+
+    const result = await post(sgt, `/api/v1/dispatch/units/${unit.id}/status`,
+      { statusKey: 'busy' });
+    expect(result.status).toBe(409);
+    expect(result.body.error).toMatchObject({ code: 'UNIT_DISBANDED' });
+  });
+
+  it('audits the change against the unit, not against the actor member', async () => {
+    const sgt = await member('dustatusaudit', 'PD', 'sergeant');
+    const unit = await makeUnit('PD');
+    await post(sgt, `/api/v1/dispatch/units/${unit.id}/status`, { statusKey: 'busy' });
+
+    const rows = await h.db.execute<{ entity_type: string; metadata: Record<string, unknown> }>(sql`
+      SELECT entity_type, metadata FROM audit_log
+       WHERE entity_id = ${unit.id} AND action = 'status.changed'
+       ORDER BY occurred_at DESC LIMIT 1
+    `);
+    expect(rows[0]?.entity_type).toBe('unit');
+    expect(rows[0]?.metadata).toMatchObject({ self: false });
+  });
+});
+
 // ── The record ─────────────────────────────────────────────────────────────
 
 describe('the record', () => {

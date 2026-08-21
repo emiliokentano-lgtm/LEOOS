@@ -246,6 +246,25 @@ NOT made, and that decision is recorded too — see
 | 28, 29 | A namespace import is opaque to tree-shaking, so `import * as Icons` shipped ~1 500 components in the shared chunk on every page: 948 KB → 228 KB. The registry keeps the data-driven lookup exactly, and a lint step fails the build if a catalogue names an icon it does not have. | `apps/web/components/icon.tsx`, `apps/web/scripts/check-icons.mjs` |
 | 28, 34 | Rejected optimisations are recorded with their numbers: the roster's level computation (17 → 15 ms, inside the noise), marker clustering (no measurable problem at 500 units), and `position_history` retention (the table has no writer yet). | [performance §8](docs/architecture/14-performance.md) |
 
+### Testing
+
+874 tests across four packages plus 13 browser walkthroughs, all green, none
+skipped. What could not be tested is written down rather than papered over —
+see [testing §7](docs/architecture/15-testing.md).
+
+| Rules | Mechanism | Location |
+| --- | --- | --- |
+| 31, 32, 40 | Every requested area has coverage AT THE LAYER IT CAN FAIL: hierarchy and permission arithmetic as properties over the whole matrix in the kernel, organization scope again at every HTTP surface, and re-authorization again on every real-time delivery. A rule proved once in `authz-core` is proved again wherever a caller could forget to consult it. | `packages/authz-core/test/`, `apps/api/test/security.test.ts` |
+| 33 | A test that CANNOT FAIL is worse than no test, because it reads as coverage. Three were found and fixed: a rank-ceiling check counting options in an unopened Radix listbox behind a `.catch(() => 0)`, a benchmark filtering on a value the fixture never produced (0.3 ms over ZERO rows), and a benchmark that was not the query the application issues. | [testing §5](docs/architecture/15-testing.md) |
+| 40, 41 | The end-to-end walk earned its keep on its first run: a lead grant REQUIRES a membership (so the obvious ordering is wrong, and the refusal is the front-door form of the F1 finding), termination revokes every session (401, not the 404 the test expected — the stronger answer is the one asserted), and archiving an organization with staff answered 500. | `apps/api/test/lifecycle.test.ts` |
+| 26, 45 | **T1, T2** — a MISSING CONFIGURATION AND A BUSINESS RULE ARE NOT CRASHES. An unconfigured ingest key and an organization that still has staff both reached the administrator as `500 Something went wrong`, for conditions that are ordinary, expected and theirs to fix. Now 503 naming the setting, and 409 naming the number of people to transfer. The database trigger stays exactly as it is — this is the message, not a replacement for the rule. | `apps/api/src/lib/secret-box.ts`, `organization.service.ts` |
+| 32 | Each of T1 and T2 has a regression test VERIFIED to fail against the pre-fix code — 500 in both cases — rather than merely written after it. | `apps/api/test/fivem.test.ts`, `lifecycle.test.ts` |
+| 21, 22, 30 | Real-time lifecycle is covered where it can actually go wrong: a reconnecting client's subscribe reply carries the CURRENT sequence so it can tell it missed events, sequences never repeat or renumber when a second subscriber joins, a double subscribe does not double-deliver a panic, and ten rapid samples for one unit coalesce to the LATEST rather than the first. | `apps/api/test/realtime.test.ts` |
+| 19, 20 | Ingest rate limiting is keyed per CREDENTIAL and per SURFACE, so one game server cannot spend another's budget and a heartbeat storm cannot blind dispatch by exhausting telemetry. A linked member crewing no unit is accepted and attributed to NOTHING — no unit is invented to hang a position on. | `apps/api/test/fivem.test.ts` |
+| 26, 43 | The browser walkthroughs screenshot every screen at FOUR viewports down to 1024 and fail on horizontal body scroll at any of them. The two narrower ones exist because the shell already contained breakpoint logic nothing was exercising. 1024 is the floor deliberately: claiming a phone layout the product does not have would be worse than not claiming one. | `apps/web/scripts/visual-check.mjs` |
+| 2, 24 | The shared test database keeps accounts and memberships ON PURPOSE, and that has a price paid three times: an interrupted run left a live lead grant that failed an unrelated assertion; an assertion about global state ("FIB has no leads at all") rotted; and a walkthrough that reached into `tbody` broke once the roster outgrew its page. Each fixed at the cause, not by loosening the assertion. | [testing §6](docs/architecture/15-testing.md), `apps/api/test/harness.ts` |
+| 34, 35 | Concurrency is tested BY CONSTRUCTION (every mutation decides under `FOR UPDATE`) rather than by racing, single-node caching is untested because nothing supports multi-instance yet, and load is measured but not sustained. Stated as risks rather than implied to be covered. | [testing §7](docs/architecture/15-testing.md) |
+
 ---
 
 ## Standing conventions

@@ -723,6 +723,211 @@ describe('dispatch mutations publish', () => {
   });
 });
 
+// ── Connection lifecycle: disconnect, reconnect, ordering, duplicates ───────
+
+describe('connection lifecycle', () => {
+  const ORG = '00000000-0000-4000-8000-00000000000c';
+
+  function hubWith(actors: Record<string, ActorContext | null>): RealtimeHub {
+    return new RealtimeHub({
+      resolveActor: async (userId) => actors[userId] ?? null,
+      isSessionLive: async () => true,
+      visibleUnitsFor: async () => new Set(),
+    });
+  }
+
+  const dispatcher = () => actor({
+    organizationId: ORG, permissions: new Set(['dispatch.view', 'map.track_units']),
+  });
+
+  it('stops delivering to a connection that has gone away', async () => {
+    const hub = hubWith({ a: dispatcher() });
+    const socket = fakeSocket();
+    const a = hub.add({ userId: 'a', sessionId: 's', organizationId: ORG, socket });
+    await hub.subscribe(a.id, [`org:${ORG}:incidents`]);
+
+    expect(await hub.publish(event('incident.created', ORG))).toBe(1);
+
+    // The client disconnects. Everything it held goes with it — the connection,
+    // its subscriptions, and any state the hub was keeping on its behalf.
+    hub.remove(a.id);
+
+    expect(await hub.publish(event('incident.created', ORG))).toBe(0);
+    // And nothing was written to the dead socket, which would be an error in
+    // production rather than a silent no-op.
+    expect(messages(socket).filter((m) => m.t === 'event')).toHaveLength(1);
+  });
+
+  it('removing a connection twice is not an error', async () => {
+    // A socket can close for several reasons at once — a client `close`, a
+    // heartbeat sweep and a session revocation can all land on the same
+    // connection. Whichever arrives second must be a no-op.
+    const hub = hubWith({ a: dispatcher() });
+    const a = hub.add({ userId: 'a', sessionId: 's', organizationId: ORG, socket: fakeSocket() });
+    hub.remove(a.id);
+    expect(() => hub.remove(a.id)).not.toThrow();
+  });
+
+  it('a reconnecting client resumes from the sequence it left off at', async () => {
+    const hub = hubWith({ a: dispatcher() });
+    const topic = `org:${ORG}:incidents`;
+
+    const first = fakeSocket();
+    const a = hub.add({ userId: 'a', sessionId: 's', organizationId: ORG, socket: first });
+    await hub.subscribe(a.id, [topic]);
+
+    await hub.publish(event('incident.created', ORG));
+    await hub.publish(event('incident.updated', ORG));
+
+    const lastSeen = messages(first)
+      .filter((m) => m.t === 'event')
+      .map((m) => m.seq as number)
+      .at(-1)!;
+    expect(lastSeen).toBe(2);
+
+    // The connection drops. Events continue while it is away — this is exactly
+    // the window a reconnecting client has to find out about.
+    hub.remove(a.id);
+    await hub.publish(event('incident.updated', ORG));
+
+    const second = fakeSocket();
+    const b = hub.add({ userId: 'a', sessionId: 's', organizationId: ORG, socket: second });
+    const { ok } = await hub.subscribe(b.id, [topic]);
+
+    /**
+     * The subscribe reply carries the CURRENT sequence, not zero.
+     *
+     * That is what makes recovery possible: the client compares it with the
+     * last sequence it saw and knows whether it missed anything. Here it left
+     * at 2 and the topic is now at 3, so the client knows to refetch rather
+     * than assuming the board it is holding is current.
+     */
+    expect(ok).toEqual([{ topic, seq: 3 }]);
+    expect(ok[0]!.seq).toBeGreaterThan(lastSeen);
+
+    // And it receives new events again from where it rejoined.
+    await hub.publish(event('incident.updated', ORG));
+    expect(messages(second).filter((m) => m.t === 'event').map((m) => m.seq)).toEqual([4]);
+  });
+
+  it('numbers a topic strictly monotonically, however many events arrive', async () => {
+    // The client's gap detection is subtraction. If the counter ever repeated
+    // or went backwards, a client would either resync forever or miss an event
+    // silently — and the second is worse.
+    const hub = hubWith({ a: dispatcher() });
+    const topic = `org:${ORG}:incidents`;
+    const socket = fakeSocket();
+    const a = hub.add({ userId: 'a', sessionId: 's', organizationId: ORG, socket });
+    await hub.subscribe(a.id, [topic]);
+
+    for (let i = 0; i < 25; i += 1) await hub.publish(event('incident.updated', ORG));
+
+    const seqs = messages(socket).filter((m) => m.t === 'event').map((m) => m.seq as number);
+    expect(seqs).toHaveLength(25);
+    for (let i = 1; i < seqs.length; i += 1) {
+      expect(seqs[i]!, `seq at ${i}`).toBe(seqs[i - 1]! + 1);
+    }
+  });
+
+  it('does not renumber a topic when a second subscriber joins it', async () => {
+    // `seq` is a property of the TOPIC, not of a connection. Two dispatchers
+    // watching the same board must be able to talk about "event 7" and mean the
+    // same event.
+    const hub = hubWith({ a: dispatcher(), b: dispatcher() });
+    const topic = `org:${ORG}:incidents`;
+
+    const socketA = fakeSocket();
+    const a = hub.add({ userId: 'a', sessionId: 's', organizationId: ORG, socket: socketA });
+    await hub.subscribe(a.id, [topic]);
+    await hub.publish(event('incident.created', ORG));
+
+    const socketB = fakeSocket();
+    const b = hub.add({ userId: 'b', sessionId: 's', organizationId: ORG, socket: socketB });
+    await hub.subscribe(b.id, [topic]);
+    await hub.publish(event('incident.updated', ORG));
+
+    const seqA = messages(socketA).filter((m) => m.t === 'event').map((m) => m.seq);
+    const seqB = messages(socketB).filter((m) => m.t === 'event').map((m) => m.seq);
+    expect(seqA).toEqual([1, 2]);
+    expect(seqB).toEqual([2]);
+  });
+
+  it('subscribing twice to the same topic does not double-deliver', async () => {
+    // A client that resubscribes after a flaky reconnect must not receive every
+    // subsequent event twice — a duplicated panic is a second alert for an
+    // emergency that is already being handled.
+    const hub = hubWith({ a: dispatcher() });
+    const topic = `org:${ORG}:panic`;
+    const socket = fakeSocket();
+    const a = hub.add({ userId: 'a', sessionId: 's', organizationId: ORG, socket });
+
+    await hub.subscribe(a.id, [topic]);
+    await hub.subscribe(a.id, [topic]);
+    await hub.subscribe(a.id, [topic, topic]);
+
+    const delivered = await hub.publish(event('panic.triggered', ORG));
+    expect(delivered).toBe(1);
+    expect(messages(socket).filter((m) => m.t === 'event')).toHaveLength(1);
+  });
+
+  it('unsubscribing stops delivery without closing the connection', async () => {
+    const hub = hubWith({ a: dispatcher() });
+    const incidents = `org:${ORG}:incidents`;
+    const panic = `org:${ORG}:panic`;
+    const socket = fakeSocket();
+    const a = hub.add({ userId: 'a', sessionId: 's', organizationId: ORG, socket });
+    await hub.subscribe(a.id, [incidents, panic]);
+
+    expect(hub.unsubscribe(a.id, [incidents])).toEqual([incidents]);
+    // Unsubscribing from something you are not subscribed to is a no-op, not an
+    // error — a client racing its own resubscribe must not be disconnected.
+    expect(hub.unsubscribe(a.id, [incidents])).toEqual([]);
+
+    await hub.publish(event('incident.created', ORG));
+    await hub.publish(event('panic.triggered', ORG));
+
+    const types = messages(socket).filter((m) => m.t === 'event')
+      .map((m) => (m.event as { type: string }).type);
+    expect(types).toEqual(['panic.triggered']);
+    expect(socket.closed).toHaveLength(0);
+  });
+
+  it('rapid position updates coalesce to the latest, not the first', async () => {
+    /**
+     * Out-of-order does not arise on one topic — the hub numbers events itself
+     * and a socket is ordered. Where it DOES arise is positions: several
+     * samples for one unit can be pending in the same tick, and the last one is
+     * the only one worth sending. Sending the first would put a unit behind
+     * where it actually is, which is worse than sending nothing.
+     */
+    const unitId = '00000000-0000-4000-8000-0000000000f1';
+    const hub = new RealtimeHub({
+      resolveActor: async () => dispatcher(),
+      isSessionLive: async () => true,
+      visibleUnitsFor: async () => new Set([unitId]),
+    });
+    const socket = fakeSocket();
+    const a = hub.add({ userId: 'a', sessionId: 's', organizationId: ORG, socket });
+    await hub.subscribe(a.id, ['map:units']);
+
+    for (let i = 1; i <= 10; i += 1) {
+      hub.queuePosition({
+        unitId, x: i * 10, y: i * -10, heading: i, speed: i,
+        sampledAt: new Date().toISOString(),
+      }, () => true);
+    }
+
+    hub.flushPositions();
+
+    const frames = messages(socket).filter((m) => m.t === 'event');
+    expect(frames).toHaveLength(1);
+    const positions = (frames[0]!.event as { payload: { positions: { x: number }[] } })
+      .payload.positions;
+    expect(positions).toHaveLength(1);
+    expect(positions[0]!.x).toBe(100);
+  });
+});
+
 // ── Scope helper ────────────────────────────────────────────────────────────
 
 describe('organization scoping of the feed', () => {

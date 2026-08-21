@@ -305,6 +305,32 @@ for (const [key, shares] of [['MD', true], ['FIB', false], ['PD', false]]) {
 }
 log('map sharing: MD shares on the public map, FIB and PD do not');
 
+/**
+ * A DETERMINISTIC PANIC COUNT.
+ *
+ * The walkthrough raises one panic and then asserts things about "the" panic
+ * bar — that Locate centres it, that panning produces an off-screen arrow, that
+ * Locate brings it back. Every one of those is a claim about a bar with one
+ * entry in it.
+ *
+ * The shared test database accumulates panics: the API suites raise them and
+ * stand them down in their own `beforeEach`, but a run that is interrupted
+ * leaves one live. Six had built up, the bar had six Locate buttons and six
+ * arrows, and "Locate brings it back" failed because locating one panic quite
+ * correctly leaves the other five off screen.
+ *
+ * Resolved rather than deleted — `panic_event` is a record, and resolving is
+ * what the application does.
+ */
+const staleAlerts = await sql`
+  UPDATE panic_event SET resolved_at = now()
+   WHERE resolved_at IS NULL
+   RETURNING id
+`;
+if (staleAlerts.length > 0) {
+  log(`stood down ${staleAlerts.length} panic alert(s) left live by an earlier run`);
+}
+
 // ── A game server credential ────────────────────────────────────────────────
 //
 // Issued through the real admin path, so the walkthrough proves the issuing and

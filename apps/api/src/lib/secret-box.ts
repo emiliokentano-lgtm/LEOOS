@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { AppError } from './errors.js';
 
 /**
  * Symmetric encryption for secrets the API must be able to READ BACK.
@@ -34,13 +35,26 @@ const ALGORITHM = 'aes-256-gcm';
 const IV_BYTES = 12; // 96 bits, the GCM standard.
 const KEY_BYTES = 32;
 
-export class SecretBoxUnavailable extends Error {
+/**
+ * A MISSING CONFIGURATION IS NOT A CRASH.
+ *
+ * This extended plain `Error`, so an installation without
+ * `LEOOS_FIVEM_SECRET_KEY` answered "issue a credential" with a bare 500 and
+ * "unhandled error" in the log — the one message that tells an administrator
+ * nothing and suggests the fault is in the code rather than in their
+ * environment. The condition is a service that is not configured, so it is a
+ * 503 that says which variable is missing and how to generate one.
+ *
+ * Naming the variable to the client is deliberate and safe: the endpoint
+ * requires `admin.game_servers`, the audience is the person who has to set it,
+ * and the name of a setting is not the value of one.
+ */
+export class SecretBoxUnavailable extends AppError {
   constructor() {
-    super(
-      'LEOOS_FIVEM_SECRET_KEY is not configured, so ingest credentials cannot be ' +
-        'issued or verified. Generate one with: ' +
-        "node -e \"console.log(require('crypto').randomBytes(32).toString('base64'))\"",
-    );
+    const message = 'LEOOS_FIVEM_SECRET_KEY is not configured, so ingest credentials cannot be '
+      + 'issued or verified. Generate one with: '
+      + "node -e \"console.log(require('crypto').randomBytes(32).toString('base64'))\"";
+    super(503, 'FIVEM_SECRET_KEY_UNCONFIGURED', message, undefined, message);
     this.name = 'SecretBoxUnavailable';
   }
 }

@@ -58,19 +58,40 @@ async function shot(page, name) {
   if (rows < 5) problems.push(`commander roster only ${rows} rows`);
   if (rows > 50) problems.push(`roster not paged: ${rows} rows in one page`);
 
+  /**
+   * Find the fixture rows by SEARCHING for them, not by assuming page one.
+   *
+   * The roster is paged at 50 by design and the shared test database keeps its
+   * memberships on purpose, so PD has accumulated more than a thousand. This
+   * walkthrough used to reach straight for `Tomas Brandt` in `tbody` and started
+   * failing once the roster outgrew a page — which was the walkthrough being
+   * wrong about the product, not the product being wrong.
+   *
+   * Searching is also what an operator does with a roster that size, so this
+   * exercises the debounced filter at the same time.
+   */
+  const findRow = async (name) => {
+    const box = page.locator('input[placeholder*="callsign" i], input[placeholder*="Search" i]').first();
+    await box.fill(name);
+    await page.waitForTimeout(700);
+    const row = page.locator('tbody tr', { hasText: name });
+    await row.first().waitFor({ state: 'visible', timeout: 10000 });
+    return row.first();
+  };
+
   // The Chief outranks the Commander, so that row must be locked.
-  const chiefRow = page.locator('tbody tr', { hasText: 'Marcus Vale' });
+  const chiefRow = await findRow('Marcus Vale');
   const chiefLocked = await chiefRow.locator('text=Locked').count();
   if (chiefLocked === 0) problems.push('Chief row is NOT locked for the Commander');
 
   // And so must their own row.
-  const selfRow = page.locator('tbody tr', { hasText: 'Renata Ochoa' });
+  const selfRow = await findRow('Renata Ochoa');
   if (await selfRow.locator('text=Locked').count() === 0) {
     problems.push('Commander\'s own row is NOT locked');
   }
 
   // An Officer is below them and must offer a menu.
-  const offRow = page.locator('tbody tr', { hasText: 'Tomas Brandt' });
+  const offRow = await findRow('Tomas Brandt');
   const manageBtn = offRow.locator('button', { hasText: 'Manage' });
   if (await manageBtn.count() === 0) problems.push('no Manage menu on an Officer row');
   else {
@@ -81,10 +102,31 @@ async function shot(page, name) {
     await page.waitForTimeout(400);
     await shot(page, '03-change-rank');
 
-    // The rank picker must disable everything at or above L80.
-    const disabled = await page.locator('select#rank-role option:disabled, [role="option"][data-disabled]').count()
-      .catch(() => 0);
-    console.log(`rank options disabled: ${disabled}`);
+    /**
+     * The rank picker must disable everything at or above the actor's own level.
+     *
+     * This step used to count `select#rank-role option:disabled` with a
+     * `.catch(() => 0)` around it. The picker is a Radix listbox, not a native
+     * `<select>`, and its options do not exist in the DOM until it is OPENED —
+     * so the count was always 0, the `.catch` swallowed the failure, and the
+     * step could not fail. A check that cannot fail is worse than no check,
+     * because it reads as coverage.
+     *
+     * Opened for real, and asserted: a Commander at L80 must see the Chief rank
+     * offered-but-disabled rather than either missing or selectable. Missing
+     * would hide the ceiling; selectable would invite a request the server will
+     * refuse. (The server refusing it regardless is covered by the authz suite —
+     * this is about the screen telling the truth.)
+     */
+    await page.locator('#rank-role').click();
+    await page.locator('[role="option"]').first().waitFor({ state: 'visible', timeout: 5000 });
+    const total = await page.locator('[role="option"]').count();
+    const disabled = await page.locator('[role="option"][data-disabled]').count();
+    console.log(`rank options: ${total}, disabled: ${disabled}`);
+    if (total === 0) problems.push('rank picker offered no options at all');
+    if (disabled === 0) problems.push('rank picker disabled nothing — no ceiling shown at L80');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
     await closeDialog(page);
   }
 

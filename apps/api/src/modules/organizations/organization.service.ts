@@ -452,6 +452,39 @@ export async function archiveOrganization(
     const current = rows[0];
     if (!current || current.deletedAt !== null) throw new NotFoundError('organization');
 
+    /**
+     * THE ACTIVE-MEMBER RULE IS ANSWERED HERE, NOT ONLY BY THE TRIGGER.
+     *
+     * `organization_archive_empty_check` refuses to archive an organization that
+     * still has active members, and it stays exactly as it is — a rule that
+     * matters this much belongs in the database, where no code path can go round
+     * it. But a trigger's `RAISE` is a raw Postgres error: it escaped the service
+     * unhandled, and an administrator archiving a department that still has staff
+     * got a 500 and "Something went wrong." The condition is ordinary, expected
+     * and entirely their fault to fix, and the answer told them none of that.
+     *
+     * So the precondition is CHECKED in the same transaction, under the same
+     * lock, and refused as a conflict that names the number of people still to
+     * be transferred or terminated. The trigger remains the backstop; this is
+     * the message.
+     *
+     * The count is read inside the transaction rather than before it for the
+     * usual reason: a hire committing between a check and an update would
+     * otherwise slip past, and the trigger would turn back into a 500.
+     */
+    const active = await tx.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM organization_member
+       WHERE organization_id = ${organizationId} AND status = 'active'
+    `);
+    const activeCount = active[0]?.n ?? 0;
+    if (activeCount > 0) {
+      throw new ConflictError(
+        'ORGANIZATION_HAS_MEMBERS',
+        `${current.name} still has ${activeCount} active member(s). `
+        + 'Transfer or terminate them before archiving it.',
+      );
+    }
+
     await tx
       .update(organization)
       .set({

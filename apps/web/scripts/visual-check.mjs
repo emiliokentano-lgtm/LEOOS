@@ -24,10 +24,28 @@ const SCREENS = [
   ['verify', '/verify'],
 ];
 
-// The product is desktop-first; these are the two sizes it is designed against.
+/**
+ * The product is desktop-first, and these are the widths it has to survive.
+ *
+ * The first two are what it is designed against. The narrower two were added
+ * because the shell already CONTAINS breakpoint logic — `top-bar.tsx` hides the
+ * organization label below `lg` so it stops competing with the status area —
+ * and nothing was exercising it. A branch that only ever runs on a reviewer's
+ * laptop is a branch nobody has tested.
+ *
+ * 1024 is the floor deliberately: this is an operational console for a seated
+ * dispatcher with a dispatch board, a map and a roster on screen, not a phone
+ * app, and pretending otherwise would mean asserting a layout the product does
+ * not claim. What IS asserted at every width is the thing that would actually
+ * break a shift — no console errors, no page errors, and no horizontal body
+ * scroll, because a table or a map that pushes the page sideways is unusable
+ * long before it is ugly.
+ */
 const VIEWPORTS = [
   { tag: 'fhd', width: 1920, height: 1080 },
   { tag: 'laptop', width: 1440, height: 900 },
+  { tag: 'small-laptop', width: 1280, height: 800 },
+  { tag: 'narrow', width: 1024, height: 768 },
 ];
 
 mkdirSync(OUT, { recursive: true });

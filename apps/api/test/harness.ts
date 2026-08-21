@@ -47,6 +47,9 @@ export async function createHarness(options: HarnessOptions = {}): Promise<TestH
   const app = await buildApp({ config, db, mail });
   await app.ready();
 
+  // Clear authority left behind by a run that did not finish. See the function.
+  await revokeStaleTestLeads(db);
+
   return {
     app, db, mail, config,
     close: async () => {
@@ -71,6 +74,45 @@ export async function resetAccounts(db: Database): Promise<void> {
   const testAccounts = sql`SELECT id FROM user_account WHERE email LIKE '%@test.invalid'`;
   await db.execute(sql`DELETE FROM "session" WHERE user_id IN (${testAccounts})`);
   await db.execute(sql`DELETE FROM auth_token WHERE user_id IN (${testAccounts})`);
+}
+
+/**
+ * Revokes organization-lead grants left behind by a run that did not finish.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHY THIS EXISTS
+ *
+ * The test database keeps its accounts and memberships on purpose — operational
+ * history must survive, so `resetAccounts` deliberately does not delete them.
+ * `organization_lead` accumulates the same way, and unlike a membership it is a
+ * grant of AUTHORITY: a test that grants one and is killed before it revokes it
+ * leaves a live lead behind, and the next run of any suite that reasons about
+ * "who leads this organization" starts from a state no test created.
+ *
+ * That is not hypothetical. Two suites were run against this database at the
+ * same time, one was interrupted mid-test, and the leftover grant failed an
+ * unrelated assertion in the next run — with a message about a list length,
+ * which points nowhere near the cause.
+ *
+ * Run ONCE per harness, not per test: a suite is entitled to grant a lead in
+ * `beforeAll` and rely on it across its tests, and sweeping in `beforeEach`
+ * would quietly break that. This clears the wreckage of a previous PROCESS,
+ * which is the only thing it is for.
+ *
+ * Revoked rather than deleted, because that is what the application does and
+ * the row is a record.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+export async function revokeStaleTestLeads(db: Database): Promise<number> {
+  // `organization_lead` is keyed on (user_id, organization_id) — there is no id
+  // column to return.
+  const rows = await db.execute<{ user_id: string }>(sql`
+    UPDATE organization_lead SET revoked_at = now()
+     WHERE revoked_at IS NULL
+       AND user_id IN (SELECT id FROM user_account WHERE email LIKE '%@test.invalid')
+    RETURNING user_id
+  `);
+  return rows.length;
 }
 
 export function cookiesFrom(headers: unknown): Record<string, string> {

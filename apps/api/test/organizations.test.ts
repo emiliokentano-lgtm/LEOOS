@@ -155,17 +155,21 @@ describe('organization lead capability', () => {
     const fib = await organizationIdByKey(h.db, 'FIB');
     const targetId = await userIdByUsername(h.db, target.username);
 
+    const leadUserIds = async (): Promise<string[]> => {
+      const res = await h.app.inject({
+        method: 'GET', url: url(`/${fib}/leads`), headers: admin.auth.headers,
+      });
+      return (res.json() as { leads: { userId: string }[] }).leads.map((l) => l.userId);
+    };
+
+    const before = await leadUserIds();
+
     const granted = await h.app.inject({
       method: 'POST', url: url(`/${fib}/leads`), headers: admin.auth.headers,
       payload: { userId: targetId, reason: 'appointed director' },
     });
     expect(granted.statusCode).toBe(201);
-
-    const listed = await h.app.inject({
-      method: 'GET', url: url(`/${fib}/leads`), headers: admin.auth.headers,
-    });
-    expect((listed.json() as { leads: { userId: string }[] }).leads.map((l) => l.userId))
-      .toContain(targetId);
+    expect(await leadUserIds()).toContain(targetId);
 
     const revoked = await h.app.inject({
       method: 'DELETE', url: url(`/${fib}/leads/${targetId}`), headers: admin.auth.headers,
@@ -173,10 +177,22 @@ describe('organization lead capability', () => {
     });
     expect(revoked.statusCode).toBe(200);
 
-    const after = await h.app.inject({
-      method: 'GET', url: url(`/${fib}/leads`), headers: admin.auth.headers,
-    });
-    expect((after.json() as { leads: unknown[] }).leads).toHaveLength(0);
+    /**
+     * The revoke removed THIS lead and nothing else.
+     *
+     * This asserted `toHaveLength(0)` — that FIB has no leads at all — which is
+     * a claim about every row in the table rather than about the operation
+     * under test. The test database accumulates by design, so one grant left
+     * behind by an interrupted run failed this assertion with a message about a
+     * list length, pointing nowhere near the cause.
+     *
+     * Comparing against the list taken before the grant is not weaker: it still
+     * catches a revoke that removed the wrong row or too many, and it is now
+     * about the revoke rather than about the tidiness of the database.
+     */
+    const after = await leadUserIds();
+    expect(after).not.toContain(targetId);
+    expect([...after].sort()).toEqual([...before].sort());
   });
 
   it('REFUSES an organization lead granting the capability to anyone', async () => {

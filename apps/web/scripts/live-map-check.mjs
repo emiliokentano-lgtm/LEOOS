@@ -696,12 +696,29 @@ if (check(
     );
     await shot(pd.page, '09-panic-offscreen');
 
-    // And Locate brings it back, which is the point of having the arrow at all.
+    /**
+     * And Locate brings it back, which is the point of having the arrow at all.
+     *
+     * Asserted as "one fewer panic is off screen", not "no panic is off
+     * screen". More than one alert can be live at once — that is normal on a
+     * busy shift — and centring one of them quite correctly leaves the others
+     * off screen. The assertion used to be `count() === 0`, which held only
+     * while the database happened to contain exactly one panic, and failed for
+     * the wrong reason the moment it contained two.
+     */
+    const offScreenLabels = async () => pd.page
+      .getByRole('button', { name: /Panic: .* off screen/i })
+      .evaluateAll((els) => els.map((e) => e.getAttribute('aria-label') ?? ''))
+      .catch(() => []);
+
+    const beforeLocate = await offScreenLabels();
     await safeClick(locate.first(), 'the panic bar’s Locate action (returning)');
     await pd.page.waitForTimeout(1200);
+    const afterLocate = await offScreenLabels();
     check(
-      await pd.page.getByRole('button', { name: /Panic: .* off screen/i }).count() === 0,
-      'Locate did not bring the panic back into view',
+      afterLocate.length < beforeLocate.length,
+      'Locate did not bring a panic back into view '
+        + `(off screen before: ${beforeLocate.length}, after: ${afterLocate.length})`,
       'Locate brought the panic back into view',
     );
     await shot(pd.page, '10b-panic-relocated');

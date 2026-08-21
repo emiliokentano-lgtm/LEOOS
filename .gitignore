@@ -37,8 +37,26 @@ apps/web/public/map/tiles/
 .vscode/*
 !.vscode/extensions.json
 
-# visual check output
+# Walkthrough output.
+#
+# Every `apps/web/scripts/*-check.mjs` writes screenshots to a dot-directory, so
+# they are listed together rather than one at a time as each was written — which
+# is how three of them ended up untracked-but-not-ignored and appearing in
+# `git status` after every run.
 .visual/
+.admin/
+.dashboard/
+.dispatch/
+.live-map/
+.notify/
+.personnel-check/
+.rcheck/
+.realtime/
+.records/
+.search/
+.roles/
+.fivem/
+.session/
 
 # local database state
 pgdata/
