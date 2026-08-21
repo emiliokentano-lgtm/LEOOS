@@ -70,6 +70,19 @@ export interface Connection {
 export interface HubOptions {
   resolveActor: ActorResolver;
   /**
+   * Is the session behind this connection still live?
+   *
+   * THE SOCKET'S EQUIVALENT OF PRESENTING A COOKIE. An HTTP request re-proves
+   * its session on every call; a WebSocket authenticated once and then held the
+   * connection open, so without this a logout, a revocation, an expiry or an
+   * account being disabled did nothing to a socket that was already streaming
+   * live positions and panic alerts.
+   *
+   * Injected rather than imported for the same reason `resolveActor` is: the
+   * hub depends on neither auth nor the database.
+   */
+  isSessionLive: (sessionId: string) => Promise<boolean>;
+  /**
    * Decides which units a subscriber may see positions for.
    *
    * Injected because the rule lives in the map module and depends on the
@@ -107,7 +120,20 @@ export class RealtimeHub {
 
   start(): void {
     if (this.heartbeatTimer === null) {
-      this.heartbeatTimer = setInterval(() => this.reapSilent(), HEARTBEAT_INTERVAL_MS);
+      this.heartbeatTimer = setInterval(() => {
+        this.reapSilent();
+        /**
+         * A SWEEP, as well as the per-delivery check.
+         *
+         * `subscribe` and `deliver` both verify the session, which covers any
+         * connection that is receiving events. A MAP-ONLY subscriber receives
+         * position batches and nothing else, and those are flushed on the
+         * broadcaster's clock through a synchronous path — so without this
+         * sweep a revoked session watching the live map would keep watching it.
+         * That is precisely the connection least acceptable to leave open.
+         */
+        void this.reapDeadSessions();
+      }, HEARTBEAT_INTERVAL_MS);
       this.heartbeatTimer.unref?.();
     }
     /**
@@ -181,6 +207,7 @@ export class RealtimeHub {
   ): Promise<{ ok: { topic: string; seq: number }[]; denied: { topic: string; reason: string }[] }> {
     const connection = this.connections.get(connectionId);
     if (!connection) return { ok: [], denied: [] };
+    if (!(await this.ensureLive(connection))) return { ok: [], denied: [] };
 
     const actor = await this.options.resolveActor(connection.userId, connection.organizationId);
     const ok: { topic: string; seq: number }[] = [];
@@ -261,6 +288,10 @@ export class RealtimeHub {
          * stops receiving; the subscription is also dropped so the work is not
          * repeated for every subsequent event.
          */
+        // The session first: an actor context resolves perfectly well for a user
+        // whose session was revoked five minutes ago.
+        if (!(await this.ensureLive(connection))) continue;
+
         const actor = await this.options.resolveActor(
           connection.userId, connection.organizationId,
         );
@@ -367,6 +398,32 @@ export class RealtimeHub {
       connection.socket.close(1001, 'heartbeat timeout');
       this.remove(connection.id);
       closed += 1;
+    }
+    return closed;
+  }
+
+  /**
+   * Drops a connection whose session has ended.
+   *
+   * CLOSED, not merely unsubscribed. A dead session must not keep a socket, a
+   * position cache or a place in the fan-out loop — "access ends now" is the
+   * whole point of server-side sessions (ADR-0004), and leaving the connection
+   * open but silent would still leak the fact that the process remembers it.
+   */
+  private async ensureLive(connection: Connection): Promise<boolean> {
+    if (await this.options.isSessionLive(connection.sessionId)) return true;
+    this.send(connection, { t: 'auth-failed', reason: 'Session ended.' });
+    connection.socket.close(4001, 'session ended');
+    this.remove(connection.id);
+    return false;
+  }
+
+  /** Drops every connection whose session has ended. Bounded by the heartbeat. */
+  private async reapDeadSessions(): Promise<number> {
+    let closed = 0;
+    // Snapshotted: `ensureLive` removes from the map it would otherwise iterate.
+    for (const connection of [...this.connections.values()]) {
+      if (!(await this.ensureLive(connection))) closed += 1;
     }
     return closed;
   }

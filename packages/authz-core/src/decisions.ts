@@ -350,7 +350,18 @@ export function canEditOrganization(
   return deny('PERMISSION_NOT_HELD', 'organization.edit');
 }
 
-/** Reading an organization's detail — same scoping, lower bar. */
+/**
+ * Reading an organization's detail — same scoping, lower bar.
+ *
+ * `membershipActive` is checked for the SAME reason `canEditOrganization`
+ * checks it, and it was once missing here. A lead grant and a membership status
+ * are separate rows: firing somebody does not revoke their lead grant, so a
+ * terminated chief arrived with `isOrgLead: true` and read the roster, the
+ * units and the vehicles of the organization that had just fired them. The
+ * context no longer asserts a lead grant on an inactive membership; this is the
+ * second lock on the same door, because a read decision that trusts its input
+ * is one refactor away from being wrong again.
+ */
 export function canViewOrganization(
   actor: ActorContext,
   organizationId: string,
@@ -361,6 +372,7 @@ export function canViewOrganization(
   if (actor.organizationId === null || actor.organizationId !== organizationId) {
     return deny('CROSS_ORGANIZATION', organizationId);
   }
+  if (!actor.membershipActive) return deny('NO_ACTIVE_MEMBERSHIP');
   if (actor.isOrgLead) return ALLOW;
   if (actor.permissions.has('organization.view')) return ALLOW;
   return deny('PERMISSION_NOT_HELD', 'organization.view');
@@ -411,6 +423,9 @@ export function canViewOrganizationSection(
   if (actor.organizationId === null || actor.organizationId !== organizationId) {
     return deny('CROSS_ORGANIZATION', organizationId);
   }
+  // See `canViewOrganization`: a terminated member holds nothing here either,
+  // lead grant or not.
+  if (!actor.membershipActive) return deny('NO_ACTIVE_MEMBERSHIP');
   if (actor.isOrgLead) return ALLOW;
   if (actor.permissions.has(permission)) return ALLOW;
   return deny('PERMISSION_NOT_HELD', permission);

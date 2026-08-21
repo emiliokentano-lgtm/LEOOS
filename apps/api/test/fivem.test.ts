@@ -158,6 +158,75 @@ async function handshake(credential: Credential): Promise<string> {
 
 // ── 1. Authentication ───────────────────────────────────────────────────────
 
+describe('replay protection is not reachable without a signature', () => {
+  /**
+   * REGRESSION — the nonce used to be consumed BEFORE the signature was checked.
+   *
+   * It sat at position 5 of 7, on a "cheapest check first" principle that is
+   * right for checks and wrong for a check that WRITES. The key id is a header,
+   * not a secret: it identifies the credential and proves nothing. So anyone who
+   * had seen one could, with no valid signature at all, insert into the
+   * in-process nonce store — and, more pointedly, PRE-BURN the nonce a genuine
+   * request was about to use, so the real request was then refused as a replay.
+   *
+   * A denial of service against a game server's telemetry, mounted from outside
+   * and past the rate limiter, which is applied per credential AFTER
+   * authentication and therefore never saw it.
+   */
+  it('a forged signature records nothing, so the genuine request still works', async () => {
+    const credential = await registerServer('nonceorder');
+    const nonce = 'the-nonce-the-real-request-will-use';
+
+    // The attacker's request: a key id they have seen, and a signature they
+    // could not produce.
+    const forged = await post(
+      credential,
+      '/api/v1/fivem/handshake',
+      { resourceVersion: '1.0.0', serverName: 'Forged', adapter: 'standalone' },
+      { nonce, secret: 'not-the-real-secret' },
+    );
+    expect(forged.statusCode, 'a forged signature must be refused').toBe(401);
+    expect(forged.json()).toMatchObject({ error: { code: 'FIVEM_BAD_SIGNATURE' } });
+
+    // The genuine request, using the very nonce the attacker tried to burn.
+    const genuine = await post(
+      credential,
+      '/api/v1/fivem/handshake',
+      { resourceVersion: '1.0.0', serverName: 'Genuine', adapter: 'standalone' },
+      { nonce },
+    );
+    expect(genuine.statusCode, genuine.body).toBe(200);
+  });
+
+  it('still refuses a genuine replay — the nonce is recorded once it verifies', async () => {
+    const credential = await registerServer('noncereplay');
+    const nonce = 'used-exactly-once';
+    const seq = 5_000n;
+
+    const first = await post(
+      credential,
+      '/api/v1/fivem/handshake',
+      { resourceVersion: '1.0.0', serverName: 'First', adapter: 'standalone' },
+      { nonce, seq },
+    );
+    expect(first.statusCode, first.body).toBe(200);
+
+    // Byte-for-byte the same request, which is what a captured replay is.
+    const replay = await post(
+      credential,
+      '/api/v1/fivem/handshake',
+      { resourceVersion: '1.0.0', serverName: 'First', adapter: 'standalone' },
+      { nonce, seq },
+    );
+    // 409, not 401: the request authenticated perfectly well — it is a
+    // CONFLICT with one already seen, which is a different thing from a bad
+    // credential and is worth saying differently.
+    expect(replay.statusCode).toBe(409);
+    expect(replay.json()).toMatchObject({ error: { code: 'FIVEM_REPLAYED_NONCE' } });
+  });
+});
+
+
 describe('ingest authentication', () => {
   it('refuses a request with no signature at all', async () => {
     const res = await h.app.inject({

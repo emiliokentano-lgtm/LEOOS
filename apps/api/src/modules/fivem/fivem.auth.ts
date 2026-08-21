@@ -19,13 +19,16 @@ import type { NonceStore } from './nonce-store.js';
  *   2. protocol version supported                  — integer compare
  *   3. timestamp within the skew window            — integer compare
  *   4. key id resolves to a live credential        — one indexed read
- *   5. nonce unseen                                — in-process map
  *   6. sequence strictly greater than the last     — already read in 4
- *   7. HMAC recomputed and compared constant-time  — the expensive one, last
+ *   7. HMAC recomputed and compared constant-time  — the expensive one
+ *   8. nonce unseen, and recorded                  — the only step that WRITES
  *
- * The signature check is LAST on purpose. It is the only step that costs real
- * CPU, and everything above it discards a malformed or replayed request without
- * ever reaching it.
+ * Cheapest first, so a flood of forged requests is rejected on a header
+ * comparison rather than after a database write. With ONE exception that
+ * overrides the ordering: the nonce check mutates shared state, so it runs after
+ * the signature. Ordering a write by its cost rather than by its trust
+ * requirement is what made an unauthenticated caller able to poison the store —
+ * see step 8.
  *
  * WHY BOTH A NONCE AND A SEQUENCE. The nonce catches an exact replay inside the
  * skew window and does not care about ordering. The sequence is persisted, so it
@@ -196,11 +199,6 @@ export async function verifyFiveMRequest(
   const secret = deps.secretBox.open(credential.secretEnc);
   if (secret === null) return { ok: false, reason: 'credential-unverifiable' };
 
-  // ── 5. Nonce ─────────────────────────────────────────────────────────────
-  if (!deps.nonces.remember(keyId, nonce, now)) {
-    return { ok: false, reason: 'replayed-nonce' };
-  }
-
   // ── 6. Sequence ──────────────────────────────────────────────────────────
   //
   // Strictly greater. Equality is a replay, not a retry — the resource assigns a
@@ -254,6 +252,38 @@ export async function verifyFiveMRequest(
   // expected length through an exception path. Checked first.
   if (provided.length !== expected.length) return { ok: false, reason: 'bad-signature' };
   if (!timingSafeEqual(provided, expected)) return { ok: false, reason: 'bad-signature' };
+
+  /**
+   * ── 8. Nonce ─────────────────────────────────────────────────────────────
+   *
+   * LAST, BECAUSE IT IS THE ONLY STEP THAT WRITES ANYTHING.
+   *
+   * It used to sit at position 5, on the "cheapest check first" principle. That
+   * principle is right for checks; it is wrong for a check that MUTATES SHARED
+   * STATE, and this one does — `remember` inserts.
+   *
+   * The key id is a header, not a secret: it travels in clear on every request
+   * and identifies the credential rather than proving anything. So anyone who
+   * had ever seen one could, with no valid signature at all:
+   *
+   *   · insert unlimited entries into the nonce store, which is in-process and
+   *     was unbounded — a memory exhaustion primitive requiring no credential;
+   *   · pre-burn the nonce of a request they could observe or predict, so the
+   *     GENUINE request was then refused as `replayed-nonce`. A denial of
+   *     service against a game server's telemetry, mounted from outside.
+   *
+   * Rate limiting did not help: it is applied per credential in the route, after
+   * this function returns, so it never saw these requests either.
+   *
+   * Consuming the nonce only after the HMAC verifies means a nonce can only be
+   * inserted by something holding the secret — and those requests are rate
+   * limited. Nothing is given up: an authentic replay still arrives with an
+   * authentic signature and is still refused here, which is what the nonce is
+   * for.
+   */
+  if (!deps.nonces.remember(keyId, nonce, now)) {
+    return { ok: false, reason: 'replayed-nonce' };
+  }
 
   return {
     ok: true,

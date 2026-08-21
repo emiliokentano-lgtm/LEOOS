@@ -245,6 +245,28 @@ export async function login(
 
   if (account.lockedUntil && account.lockedUntil.getTime() > Date.now()) {
     await verifyAgainstDummy(input.password, config);
+    /**
+     * AUDITED, which it was not before.
+     *
+     * Every other refusal on this path writes a row; this one returned silently,
+     * so an attack went DARK at precisely the moment it became interesting. The
+     * lockout engages after `LOGIN_MAX_ATTEMPTS`, and everything after that —
+     * the hours of continued attempts that distinguish a forgetful user from
+     * somebody working through a password list — left no trace at all.
+     *
+     * The password is not verified against the real hash here, so this row says
+     * an attempt was made, not whether it would have succeeded.
+     */
+    await db.transaction(async (tx) => {
+      await writeAudit(tx, {
+        action: AUDIT_ACTIONS.LOGIN_FAILED,
+        actorUserId: account.id,
+        actorLabel: account.username,
+        outcome: 'denied',
+        metadata: { reason: 'account_locked', lockedUntil: account.lockedUntil?.toISOString() },
+        ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
+      });
+    });
     throw new InvalidCredentialsError('account temporarily locked');
   }
 

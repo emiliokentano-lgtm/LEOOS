@@ -51,6 +51,17 @@ interface Person {
   memberId: string;
   organizationId: string;
   headers: Record<string, string>;
+  /**
+   * The REAL session behind this person's sign-in.
+   *
+   * A connection now has to name a live session — the hub re-checks it on every
+   * subscribe and every delivery, and sweeps for dead ones on the heartbeat, so
+   * a logout or a revocation closes the socket. A synthetic id would simply
+   * resolve to "not a live session" and the connection would be dropped, which
+   * is the correct behaviour and would make these tests wrong rather than
+   * failing for a reason worth reading.
+   */
+  sessionId: string;
 }
 
 async function member(prefix: string, orgKey: string, roleKey: string): Promise<Person> {
@@ -58,12 +69,19 @@ async function member(prefix: string, orgKey: string, roleKey: string): Promise<
   const creds = await createActiveUser(h, prefix);
   const m = await grantMembership(h.db, creds.username, { orgKey, roleKey });
   const auth = await signIn(h, creds);
+  const userId = await userIdByUsername(h.db, creds.username);
+  const [live] = await h.db.execute<{ id: string }>(sql`
+    SELECT id FROM "session"
+     WHERE user_id = ${userId} AND revoked_at IS NULL
+     ORDER BY created_at DESC LIMIT 1
+  `);
   return {
     username: creds.username,
-    userId: await userIdByUsername(h.db, creds.username),
+    userId,
     memberId: m.memberId,
     organizationId: m.organizationId,
     headers: auth.headers,
+    sessionId: live!.id,
   };
 }
 
@@ -275,6 +293,9 @@ describe('hub delivery', () => {
   function hubWith(actors: Record<string, ActorContext | null>): RealtimeHub {
     return new RealtimeHub({
       resolveActor: async (userId) => actors[userId] ?? null,
+      // These units exercise topic authorization, not session lifetime; the
+      // session-liveness path has its own tests.
+      isSessionLive: async () => true,
       visibleUnitsFor: async () => new Set(),
     });
   }
@@ -325,6 +346,7 @@ describe('hub delivery', () => {
         a: actor({ organizationId: ORG_A, permissions: new Set(['dispatch.view']) }),
       };
       const hub = new RealtimeHub({
+        isSessionLive: async () => true,
         resolveActor: async (userId) => live[userId] ?? null,
         visibleUnitsFor: async () => new Set(),
       });
@@ -357,6 +379,7 @@ describe('hub delivery', () => {
       a: actor({ organizationId: ORG_A, permissions: new Set(['dispatch.view']) }),
     };
     const hub = new RealtimeHub({
+      isSessionLive: async () => true,
       resolveActor: async (userId) => live[userId] ?? null,
       visibleUnitsFor: async () => new Set(),
     });
@@ -478,6 +501,7 @@ describe('hub delivery', () => {
 
   it('reaps a connection that has gone silent', () => {
     const hub = new RealtimeHub({
+      isSessionLive: async () => true,
       resolveActor: async () => actor(),
       visibleUnitsFor: async () => new Set(),
       heartbeatMs: 1_000,
@@ -505,7 +529,7 @@ describe('dispatch mutations publish', () => {
     const socket = fakeSocket();
     const connection = h.app.realtime.add({
       userId: person.userId,
-      sessionId: 'test-session',
+      sessionId: person.sessionId,
       organizationId: person.organizationId,
       socket,
     });
@@ -708,7 +732,7 @@ describe('organization scoping of the feed', () => {
 
     const socket = fakeSocket();
     const connection = h.app.realtime.add({
-      userId: pd.userId, sessionId: 'test', organizationId: pd.organizationId, socket,
+      userId: pd.userId, sessionId: pd.sessionId, organizationId: pd.organizationId, socket,
     });
 
     const result = await h.app.realtime.subscribe(connection.id, [

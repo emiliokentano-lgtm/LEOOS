@@ -248,10 +248,31 @@ export function toActorContext(
     ? identity.memberships.find((m) => m.organizationId === organizationId)
     : undefined;
 
-  const isOrgLead = membership?.isOrgLead ?? false;
+  const membershipActive = membership?.status === 'active';
+
+  /**
+   * A LEAD GRANT DOES NOT SURVIVE THE MEMBERSHIP IT LEADS.
+   *
+   * `organization_lead` and `organization_member.status` are separate rows
+   * changed by separate operations, so firing somebody does not revoke their
+   * lead grant — and `MembershipSummary.isOrgLead` reports the grant as it
+   * stands, which is right for a screen that wants to show "holds the lead
+   * grant, membership terminated".
+   *
+   * It is NOT right for an authorization context. Without this line a fired
+   * chief kept `isOrgLead: true` and `level: UNBOUNDED_LEVEL`, and every
+   * decision that reads either directly — the organization view checks, the
+   * role screen's disclosure rules, the personnel roster's — treated them as
+   * still running the organization. The kernel's `can()` and every mutating
+   * decision already guard on `membershipActive`, which is why this was a read
+   * exposure rather than a write one; the fix is to stop the context from
+   * asserting it in the first place, so a consumer that forgets the guard is no
+   * longer a hole.
+   */
+  const isOrgLead = membershipActive && (membership?.isOrgLead ?? false);
   const level = identity.account.isGlobalAdmin || isOrgLead
     ? UNBOUNDED_LEVEL
-    : (membership?.hierarchyLevel ?? 0);
+    : (membershipActive ? (membership?.hierarchyLevel ?? 0) : 0);
 
   return {
     userId: identity.account.userId,
@@ -261,7 +282,7 @@ export function toActorContext(
     level,
     permissions: new Set(membership?.permissions ?? []),
     globalCapabilities: new Set(identity.account.globalCapabilities),
-    membershipActive: membership?.status === 'active',
+    membershipActive,
   };
 }
 

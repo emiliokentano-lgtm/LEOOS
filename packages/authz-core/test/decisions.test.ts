@@ -3,6 +3,7 @@ import type { PermissionKey } from '@leoos/contracts';
 import {
   can, canAssignRole, canChangeRolePermissions, canCreateRole, canDeleteRole, canEditRole,
   canGrantPermissions, canManageMember, canMoveRole,
+  canEditOrganization, canViewOrganization, canViewOrganizationSection,
   effectiveLevel, effectivePermissions, outranks, UNBOUNDED_LEVEL,
   type ActorContext, type RoleRef, type TargetContext,
 } from '../src/index.js';
@@ -37,6 +38,11 @@ function target(overrides: Partial<TargetContext> = {}): TargetContext {
 
 function role(level: number, organizationId: string | null = ORG): RoleRef {
   return { id: `role-${level}`, organizationId, hierarchyLevel: level };
+}
+
+/** The refusal reason, or null when the decision allowed. */
+function reasonOf(decision: { allowed: boolean; reason?: string }): string | null {
+  return decision.allowed ? null : decision.reason ?? null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -476,5 +482,99 @@ describe('property: no role mutation ever escalates the actor', () => {
         expect(canCreateRole(a, roleLevel).allowed, `create ${roleLevel} as ${level}`).toBe(false);
       }
     }
+  });
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// An inactive membership confers nothing, including through a lead grant
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('an Organization Lead with an inactive membership holds nothing', () => {
+  /**
+   * REGRESSION — found by the security audit.
+   *
+   * `organization_lead` and `organization_member.status` are separate rows
+   * changed by separate operations: firing somebody does not revoke their lead
+   * grant. The API's actor context conferred `isOrgLead` and
+   * `level: UNBOUNDED_LEVEL` from the grant alone, and the three organization
+   * VIEW decisions read `isOrgLead` without checking `membershipActive` — so a
+   * fired chief kept reading the roster, the units and the vehicles of the
+   * organization that had just fired them.
+   *
+   * Asserted over EVERY decision that takes an actor, so a new one that forgets
+   * the guard shows up here rather than in production. The context no longer
+   * asserts a lead grant on an inactive membership either; this is the second
+   * lock on the same door.
+   */
+  const firedLead = actor({
+    isOrgLead: true,
+    membershipActive: false,
+    // The level a lead used to arrive with, so this test would pass for the
+    // wrong reason if the fix had only been to zero the level.
+    level: UNBOUNDED_LEVEL,
+  });
+
+  it('is refused by every organization decision', () => {
+    expect(canViewOrganization(firedLead, ORG).allowed).toBe(false);
+    expect(canEditOrganization(firedLead, ORG).allowed).toBe(false);
+    expect(
+      canViewOrganizationSection(firedLead, ORG, 'personnel.view').allowed,
+    ).toBe(false);
+    expect(canViewOrganizationSection(firedLead, ORG, 'roles.view').allowed).toBe(false);
+    expect(canViewOrganizationSection(firedLead, ORG, 'vehicles.view').allowed).toBe(false);
+    expect(canViewOrganizationSection(firedLead, ORG, 'dispatch.view').allowed).toBe(false);
+  });
+
+  it('is refused by every management decision', () => {
+    expect(canManageMember(firedLead, target()).allowed).toBe(false);
+    expect(canAssignRole(firedLead, role(10)).allowed).toBe(false);
+    expect(canEditRole(firedLead, role(10)).allowed).toBe(false);
+    expect(canCreateRole(firedLead, 10).allowed).toBe(false);
+    expect(canDeleteRole(firedLead, role(10)).allowed).toBe(false);
+    expect(canMoveRole(firedLead, role(10), 20).allowed).toBe(false);
+    expect(canGrantPermissions(firedLead, ['personnel.view']).allowed).toBe(false);
+    expect(canChangeRolePermissions(firedLead, role(10), ['personnel.view']).allowed).toBe(false);
+  });
+
+  it('holds no permission at all', () => {
+    expect(can(firedLead, 'personnel.view')).toBe(false);
+    expect(can(firedLead, 'dispatch.view')).toBe(false);
+    expect(can(firedLead, 'organization.edit')).toBe(false);
+  });
+
+  it('says NO_ACTIVE_MEMBERSHIP rather than blaming a permission', () => {
+    // The reason matters: "you lack organization.view" would send a fired chief
+    // to ask for a permission, when the answer is that they no longer work here.
+    expect(reasonOf(canViewOrganization(firedLead, ORG))).toBe('NO_ACTIVE_MEMBERSHIP');
+    expect(
+      reasonOf(canViewOrganizationSection(firedLead, ORG, 'personnel.view')),
+    ).toBe('NO_ACTIVE_MEMBERSHIP');
+  });
+
+  it('still allows an ACTIVE lead everything inside their organization', () => {
+    const lead = actor({ isOrgLead: true, membershipActive: true, level: UNBOUNDED_LEVEL });
+    expect(canViewOrganization(lead, ORG).allowed).toBe(true);
+    expect(canEditOrganization(lead, ORG).allowed).toBe(true);
+    expect(canViewOrganizationSection(lead, ORG, 'personnel.view').allowed).toBe(true);
+    expect(canManageMember(lead, target()).allowed).toBe(true);
+    expect(can(lead, 'personnel.view')).toBe(true);
+  });
+
+  it('and still refuses an active lead ANOTHER organization', () => {
+    const lead = actor({ isOrgLead: true, membershipActive: true, level: UNBOUNDED_LEVEL });
+    expect(reasonOf(canViewOrganization(lead, OTHER_ORG))).toBe('CROSS_ORGANIZATION');
+    expect(reasonOf(canViewOrganizationSection(lead, OTHER_ORG, 'personnel.view')))
+      .toBe('CROSS_ORGANIZATION');
+  });
+
+  /**
+   * A SUSPENDED member is not a lesser case of a terminated one — they are the
+   * same case, and the difference is only that a suspension is expected to end.
+   */
+  it('treats a suspended lead exactly as a terminated one', () => {
+    const suspended = actor({ isOrgLead: true, membershipActive: false, level: UNBOUNDED_LEVEL });
+    expect(canViewOrganization(suspended, ORG).allowed).toBe(false);
+    expect(canManageMember(suspended, target()).allowed).toBe(false);
   });
 });

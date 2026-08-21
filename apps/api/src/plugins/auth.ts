@@ -1,4 +1,5 @@
 import fp from 'fastify-plugin';
+import { timingSafeEqual } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { PermissionKey } from '@leoos/contracts';
 import { can, type ActorContext } from '@leoos/authz-core';
@@ -49,6 +50,22 @@ function readCookie(request: FastifyRequest, name: string): string | undefined {
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+/**
+ * Constant-time comparison for the internal service token.
+ *
+ * This token is a complete CSRF exemption, so it is a secret and is compared
+ * like one. `===` on a string short-circuits at the first differing byte; over a
+ * local network that is a narrow channel, but it costs nothing to close and the
+ * rule "secrets are never compared with ===" is easier to hold than a
+ * case-by-case judgement about how narrow is narrow enough.
+ */
+function matchesInternalToken(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
 export default fp(async (app) => {
   /**
    * CSRF defence, three independent layers:
@@ -64,7 +81,9 @@ export default fp(async (app) => {
     if (request.url.startsWith('/health')) return;
 
     const internal = request.headers['x-leoos-internal'];
-    if (typeof internal === 'string' && internal === app.config.INTERNAL_API_TOKEN) return;
+    if (typeof internal === 'string' && matchesInternalToken(internal, app.config.INTERNAL_API_TOKEN)) {
+      return;
+    }
 
     const origin = request.headers.origin;
     if (origin && !app.config.allowedOrigins.includes(origin)) {

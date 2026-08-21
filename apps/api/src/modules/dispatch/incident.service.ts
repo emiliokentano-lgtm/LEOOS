@@ -67,11 +67,17 @@ import { crewsOnIncident, dispatchersForIncident, unitCrew } from '../notificati
  * ────────────────────────────────────────────────────────────────────────────
  */
 
-/** Locks one incident and returns its current state, or null if out of scope. */
+/**
+ * Locks one incident and returns its current state, or null if out of scope.
+ *
+ * `intent` distinguishes reading a call from CHANGING one, and the difference
+ * only matters for a multi-agency call — see `mayMutate` below.
+ */
 async function lockIncident(
   tx: Database,
   scope: DispatchScope,
   incidentId: string,
+  intent: 'read' | 'mutate' = 'mutate',
 ) {
   const rows = await tx.execute<{
     id: string;
@@ -92,12 +98,62 @@ async function lockIncident(
 
   // SCOPE BEFORE PERMISSION, so a cross-organization attempt reads as exactly
   // that rather than as a missing permission. A multi-agency call
-  // (organization_id NULL) belongs to everyone.
+  // (organization_id NULL) is VISIBLE to everyone who can see dispatch: a joint
+  // call has to appear on the boards of the services that might have to work it.
   if (!scope.canViewAllOrganizations && row.organization_id !== null) {
     if (!scope.organizationIds.includes(row.organization_id)) return null;
   }
 
+  /**
+   * VISIBLE IS NOT THE SAME AS WRITABLE.
+   *
+   * "Belongs to everyone" was the rule for reads and, until this was found,
+   * for writes too — so any dispatcher in any organization could re-prioritise,
+   * note on, or CLOSE a joint operation their service had nothing to do with.
+   * A multi-agency call has no owning organization, so the ownership check that
+   * protects every other incident simply did not run.
+   *
+   * A joint call is writable by the people actually running it: whoever
+   * coordinates across organizations (`canViewAllOrganizations`), or an
+   * organization that currently has a unit on the call. That is the same
+   * "involved organizations" set the event topics and the notification audience
+   * are already derived from, so the three agree.
+   *
+   * ASSIGNING a unit is deliberately NOT routed through here — it is how an
+   * organization becomes involved in the first place, and it validates the unit
+   * against the actor's own organization itself.
+   */
+  if (
+    intent === 'mutate'
+    && row.organization_id === null
+    && !scope.canViewAllOrganizations
+    && !(await organizationIsOnIncident(tx, incidentId, scope.organizationIds))
+  ) {
+    return null;
+  }
+
   return row;
+}
+
+/** Does any of these organizations have a unit currently on the incident? */
+async function organizationIsOnIncident(
+  tx: Database,
+  incidentId: string,
+  organizationIds: readonly string[],
+): Promise<boolean> {
+  if (organizationIds.length === 0) return false;
+  const rows = await tx.execute<{ present: boolean }>(sql`
+    SELECT true AS present
+      FROM incident_assignment a
+      JOIN unit u ON u.id = a.unit_id
+     WHERE a.incident_id = ${incidentId}
+       AND a.released_at IS NULL
+       AND u.organization_id IN (${sql.join(
+    organizationIds.map((id) => sql`${id}::uuid`), sql`, `,
+  )})
+     LIMIT 1
+  `);
+  return rows.length > 0;
 }
 
 interface TimelineInput {
@@ -741,7 +797,16 @@ export async function assignUnit(
   meta: RequestMeta,
 ): Promise<DispatchOutcome> {
   return db.transaction(async (tx) => {
-    const current = await lockIncident(tx, scope, incidentId);
+    /**
+     * `read` intent: assigning is how an organization JOINS a joint call.
+     *
+     * Requiring prior involvement here would make a multi-agency call
+     * permanently unresponable — nobody could ever be the first unit on it. The
+     * unit itself is validated against the actor's own organization a few lines
+     * below, which is the check that actually matters: a dispatcher can only
+     * commit units they command.
+     */
+    const current = await lockIncident(tx, scope, incidentId, 'read');
     if (!current) throw new NotFoundError('incident');
     if (!scope.canAssignUnits) throw new ForbiddenError('You cannot assign units.');
     if (isTerminalIncidentStatus(current.status)) {

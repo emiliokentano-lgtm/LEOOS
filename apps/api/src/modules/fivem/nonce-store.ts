@@ -28,6 +28,18 @@ import { FIVEM_NONCE_TTL_SECONDS } from '@leoos/contracts';
  * order the checks are written in.
  */
 
+/**
+ * Hard ceiling on entries.
+ *
+ * A legitimate fleet cannot approach this: nonces are inserted only by requests
+ * that already passed the signature check, and those are rate limited per
+ * credential (180/min for telemetry). At the TTL below that is a few thousand
+ * entries for a busy server, so this bound is only ever reached by something
+ * going wrong — and when it is, the store must not be allowed to grow until the
+ * process dies.
+ */
+const MAX_ENTRIES = 100_000;
+
 export class NonceStore {
   private readonly seen = new Map<string, number>();
   private sweeper: NodeJS.Timeout | null = null;
@@ -45,6 +57,34 @@ export class NonceStore {
     const expiresAt = this.seen.get(key);
 
     if (expiresAt !== undefined && expiresAt > now) return false;
+
+    /**
+     * Bounded, and reclaimed in BATCHES rather than one entry at a time.
+     *
+     * Evicting exactly enough room for the current insert would mean every
+     * subsequent insert arrives at the ceiling again and pays for another full
+     * O(n) sweep — turning a memory bound into a CPU one, which is the same
+     * denial of service wearing a different hat. Reclaiming a tenth of the store
+     * at once amortises that: one sweep buys ten thousand inserts.
+     *
+     * The order is oldest-first, which `Map` gives for free by preserving
+     * insertion order, and it is the right order: the oldest nonces are the
+     * closest to expiring, and a request old enough to have its nonce evicted is
+     * already outside the timestamp window that would let it be replayed.
+     *
+     * Evicting rather than refusing is also the right failure direction.
+     * Refusing would reject a legitimate request that did nothing wrong.
+     */
+    if (this.seen.size >= MAX_ENTRIES) {
+      this.sweep(now);
+      if (this.seen.size >= MAX_ENTRIES) {
+        let toEvict = Math.ceil(MAX_ENTRIES / 10);
+        for (const oldest of this.seen.keys()) {
+          if (toEvict-- <= 0) break;
+          this.seen.delete(oldest);
+        }
+      }
+    }
 
     this.seen.set(key, now + this.ttlMs);
     return true;

@@ -72,6 +72,37 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
 
   /**
+   * The internal token is a COMPLETE CSRF BYPASS if it is guessable.
+   *
+   * `plugins/auth.ts` exempts any request carrying it from the origin check and
+   * from the double-submit check — correctly, because the web tier is not a
+   * browser and carries no ambient cookie. The consequence is that whoever knows
+   * this string can make state-changing requests from anywhere.
+   *
+   * The schema's `min(16)` accepts the value printed in `.env.example`
+   * (`change-me-at-least-16-chars`, 27 characters), so an installation that
+   * copied the example and never read it would ship with a publicly documented
+   * bypass. Refused here in production rather than trusted to a deployment
+   * checklist — this is the one variable where "we forgot" is indistinguishable
+   * from "there is no CSRF protection".
+   */
+  if (value.NODE_ENV === 'production') {
+    if (value.INTERNAL_API_TOKEN.length < 32) {
+      throw new Error(
+        'INTERNAL_API_TOKEN must be at least 32 characters in production. '
+        + 'Generate one with: node -e "console.log(require(\'crypto\')'
+        + '.randomBytes(32).toString(\'base64url\'))"',
+      );
+    }
+    if (/change-?me|example|placeholder|secret|password/i.test(value.INTERNAL_API_TOKEN)) {
+      throw new Error(
+        'INTERNAL_API_TOKEN looks like a placeholder. It is a full CSRF bypass '
+        + 'for anyone who can guess it — generate a random value.',
+      );
+    }
+  }
+
+  /**
    * Choosing the FiveM source without a key is a misconfiguration that would
    * otherwise present as "every game server is unauthenticated", which reads
    * like a bug in the resource rather than a missing variable here.

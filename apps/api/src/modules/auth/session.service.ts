@@ -114,6 +114,48 @@ export async function resolveSession(
 }
 
 /**
+ * Is this session still usable, by id?
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHY THIS EXISTS SEPARATELY FROM `resolveSession`
+ *
+ * `resolveSession` starts from a raw token, which is what an HTTP request
+ * carries. A LIVE WEBSOCKET does not: it authenticated once, with a single-use
+ * ticket, and holds only the session id from then on. Without a by-id check
+ * there was nothing on the socket path that noticed a logout, a revocation, an
+ * expiry, a password change or an account being disabled — so a fired
+ * operator's socket kept streaming live officer positions and panic alerts
+ * until the process restarted.
+ *
+ * The RULES ARE THE SAME as `resolveSession`'s, deliberately and in the same
+ * order, so the two answers cannot drift: revoked, expired, superseded by a
+ * password change, or attached to an account that is no longer active.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+export async function isSessionLive(db: Database, sessionId: string): Promise<boolean> {
+  const rows = await db
+    .select({
+      expiresAt: session.expiresAt,
+      revokedAt: session.revokedAt,
+      sessionCreatedAt: session.createdAt,
+      accountStatus: userAccount.status,
+      passwordChangedAt: userAccount.passwordChangedAt,
+    })
+    .from(session)
+    .innerJoin(userAccount, eq(userAccount.id, session.userId))
+    .where(eq(session.id, sessionId))
+    .limit(1);
+
+  const row = rows[0];
+  if (!row) return false;
+  if (row.revokedAt !== null) return false;
+  if (row.expiresAt.getTime() <= Date.now()) return false;
+  if (row.passwordChangedAt.getTime() > row.sessionCreatedAt.getTime()) return false;
+  if (row.accountStatus !== 'active') return false;
+  return true;
+}
+
+/**
  * Extends the sliding window.
  *
  * Throttled to once a minute: without that, a dispatcher's open map tab writes

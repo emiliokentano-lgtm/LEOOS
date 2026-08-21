@@ -176,6 +176,24 @@ is actually held.
 | 4 | The dashboard is composed from the dispatch reads and shares its revision, so its counts cannot drift from the board it links to. | [dashboard §3](docs/architecture/10-dashboard.md) |
 | 26 | Loading, error, degraded-feed and empty are all distinct states; a partial dashboard is never rendered as if whole. | [dashboard §6](docs/architecture/10-dashboard.md) |
 
+### Security audit findings
+
+Seven issues found by an adversarial review of the whole application. Each was
+confirmed against a running system before it was fixed, and each has a
+regression test that fails without the fix — see
+[security audit](docs/architecture/13-security-audit.md).
+
+| Rules | Mechanism | Location |
+| --- | --- | --- |
+| 9, 10, 11 | **F1** — a lead grant does NOT survive the membership it leads. `organization_lead` and `organization_member.status` are separate rows, so firing somebody left them an unbounded lead in the authorization context and reading the roster of the organization that fired them. Fixed at the root (the context no longer asserts it) AND in the kernel (the three view decisions check `membershipActive`, as the edit decision always did). | `apps/api/src/modules/auth/context.service.ts`, `packages/authz-core/src/decisions.ts` |
+| 10, 44 | **F2** — a WebSocket does not outlive its session. It authenticates once and then holds only a session id, so logout, revocation, password change and account disabling did nothing to a socket already streaming live positions. Session liveness is now re-read on every subscribe and every delivery, swept on the heartbeat for map-only subscribers, and the socket is CLOSED rather than merely silenced. | `apps/api/src/modules/auth/session.service.ts`, `apps/api/src/realtime/hub.ts` |
+| 11, 12 | **F3** — visible is not writable. A multi-agency incident has no owning organization, so the ownership check had nothing to compare against and any organization could close a joint call it had nothing to do with. Mutations now require cross-organization clearance or a unit actually on the call; assigning stays open, because it is how an organization JOINS one. | `apps/api/src/modules/dispatch/incident.service.ts` |
+| 18, 19, 21 | **F4** — the replay-protection store is written to only AFTER the signature verifies. The key id is a header, not a secret, so consuming the nonce at position 5 let anyone who had seen one pre-burn a genuine request's nonce or exhaust memory, past a rate limiter applied after authentication. Ordering a WRITE by its cost rather than by its trust requirement is the general lesson. | `apps/api/src/modules/fivem/fivem.auth.ts`, `nonce-store.ts` |
+| 23 | **F5** — TRUNCATE does not fire UPDATE/DELETE triggers, so `TRUNCATE audit_log` erased the legal record while the append-only guarantee did nothing. `BEFORE TRUNCATE` triggers on all three append-only tables. | [migration 0009](packages/db/migrations/0009_security_hardening.sql) |
+| 23 | **F6** — attempts against a LOCKED account are audited. Every other refusal on the login path wrote a row; this one returned silently, so the log went quiet at exactly the moment an attack became interesting. | `apps/api/src/modules/auth/auth.service.ts` |
+| 17, 44 | **F7** — `INTERNAL_API_TOKEN` is a complete CSRF bypass, and `min(16)` accepted the value printed in `.env.example`. Production refuses a short or placeholder token; the comparison is constant-time. | `apps/api/src/config.ts`, `apps/api/src/plugins/auth.ts` |
+| 31, 32 | Every finding has a regression test, verified to FAIL against the pre-fix code. | `apps/api/test/security.test.ts`, `packages/authz-core/test/decisions.test.ts`, `apps/api/test/fivem.test.ts` |
+
 ### Notifications
 
 | Rules | Mechanism | Location |

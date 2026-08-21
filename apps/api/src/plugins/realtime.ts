@@ -3,6 +3,7 @@ import websocket from '@fastify/websocket';
 import type { ActorContext } from '@leoos/authz-core';
 import type { AppConfig } from '../config.js';
 import { resolveIdentity, toActorContext } from '../modules/auth/context.service.js';
+import { isSessionLive as sessionIsLive } from '../modules/auth/session.service.js';
 import { RealtimeHub } from '../realtime/hub.js';
 import { LocationBroadcaster } from '../realtime/location-broadcaster.js';
 import { RealtimePublisher } from '../realtime/publisher.js';
@@ -87,8 +88,36 @@ export default fp<RealtimeOptions>(async (app, opts) => {
     return visibleUnitIdsFor(app.db, actor, userId);
   };
 
+  /**
+   * Session liveness, cached on the same short window as the actor context.
+   *
+   * One second is short enough that a logout or a revocation reaches an open
+   * socket within a tick, and long enough that a burst of events does not run
+   * this query once per event per subscriber. It is a SEPARATE cache from the
+   * actor's because the two answer different questions and expire for different
+   * reasons — an actor context is about permissions, this is about whether the
+   * connection should exist at all.
+   */
+  const sessionCache = new Map<string, { at: number; live: boolean }>();
+  const SESSION_TTL_MS = 1_000;
+
+  const isSessionLive = async (sessionId: string): Promise<boolean> => {
+    const now = Date.now();
+    const cached = sessionCache.get(sessionId);
+    if (cached !== undefined && now - cached.at < SESSION_TTL_MS) return cached.live;
+
+    const live = await sessionIsLive(app.db, sessionId);
+    // A dead session is never re-checked: nothing brings one back, and keeping
+    // the entry would be an unbounded map keyed by every session that ever
+    // opened a socket.
+    if (live) sessionCache.set(sessionId, { at: now, live });
+    else sessionCache.delete(sessionId);
+    return live;
+  };
+
   const hub = new RealtimeHub({
     resolveActor,
+    isSessionLive,
     visibleUnitsFor,
     log: (message) => app.log.warn(message),
     // Closing over the broadcaster declared below is safe: the callback only
