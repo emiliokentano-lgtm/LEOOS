@@ -246,8 +246,12 @@ resolves from the database; key rotation completes with no gap in telemetry.
 ## Phase 8 — Administration, audit & hardening
 *Estimate: 1.5–2 weeks*
 
-- Global admin: user management, org management, org-lead grants, game servers
-- Audit log viewer with filtering by actor, org, action, entity, and outcome
+- Global admin: user management, org management, org-lead grants, game servers ✅
+- Audit log viewer with filtering by actor, org, action, entity, and outcome ✅
+  — plus a derived severity and keyset paging; see
+  [11-administration](11-administration.md)
+- Permission overview: every permission, the roles granting it, who holds it ✅
+- System configuration report, read-only and honest about mocked adapters ✅
 - Lookup-volume reporting per user (A5 mitigation)
 - TOTP 2FA, enforced for high-risk permission holders
 - Alerting on high-risk and denied actions

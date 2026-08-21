@@ -32,7 +32,8 @@ export function AppShell({
 }: {
   sections: NavSection[];
   session: Session;
-  organization: OrganizationSummary;
+  /** Null for an administrator with no membership — see (app)/layout.tsx. */
+  organization: OrganizationSummary | null;
   organizations: OrganizationSummary[];
   /** Cosmetic client-side view of who is signed in — never authoritative. */
   authState: AuthState;

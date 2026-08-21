@@ -19,6 +19,7 @@ import dispatchRoutes from './modules/dispatch/dispatch.routes.js';
 import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
 import fivemRoutes from './modules/fivem/fivem.routes.js';
 import gameServerRoutes from './modules/fivem/gameserver.routes.js';
+import adminRoutes from './modules/admin/admin.routes.js';
 import realtimeTicketRoutes from './realtime/ticket.routes.js';
 import websocketRoutes from './realtime/ws.routes.js';
 import type { MailTransport } from './modules/auth/mail.js';
@@ -204,6 +205,14 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
    */
   await app.register(fivemRoutes, { prefix: '/api/v1/fivem' });
   await app.register(gameServerRoutes, { prefix: '/api/v1/game-servers' });
+  /**
+   * Global administration.
+   *
+   * Registered like any other module rather than behind a blanket guard: each
+   * route decides for itself which global capability it needs, so an audit
+   * viewer reaches the log without reaching the account register.
+   */
+  await app.register(adminRoutes, { prefix: '/api/v1/admin' });
   await app.register(realtimeTicketRoutes, { prefix: '/api/v1/realtime' });
   await app.register(websocketRoutes);
 

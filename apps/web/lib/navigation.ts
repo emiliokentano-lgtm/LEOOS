@@ -1,11 +1,21 @@
-import type { PermissionKey } from '@leoos/contracts';
+import type { GlobalCapabilityKey, PermissionKey } from '@leoos/contracts';
 
 /**
  * Navigation definition.
  *
- * Each item declares the permission it requires. The sidebar is filtered on the
- * SERVER, so items a user cannot access are never rendered and their existence is
- * not disclosed in the HTML payload.
+ * Each item declares what it requires. The sidebar is filtered on the SERVER, so
+ * items a user cannot access are never rendered and their existence is not
+ * disclosed in the HTML payload.
+ *
+ * TWO KINDS OF REQUIREMENT, because there are two kinds of authority.
+ * `permission` is organization-scoped and comes from the active membership's
+ * roles. `capabilities` is global and comes from `user_global_role` — an
+ * account administrator holds `user_admin` and no organization permission at
+ * all, so gating the administration area on a permission key alone would hide
+ * it from exactly the people it exists for.
+ *
+ * An item with both is shown when EITHER matches: they are alternative routes to
+ * the same screen, not conditions to be satisfied together.
  */
 
 export interface NavItem {
@@ -15,6 +25,8 @@ export interface NavItem {
   icon: string;
   /** null = always visible to an authenticated user. */
   permission: PermissionKey | null;
+  /** Any one of these global capabilities also reveals the item. */
+  capabilities?: GlobalCapabilityKey[];
   shortcut?: string;
   description?: string;
 }
@@ -57,9 +69,38 @@ export const NAVIGATION: NavSection[] = [
     id: 'system',
     label: 'System',
     items: [
-      { href: '/admin', label: 'Administration', icon: 'Settings', permission: 'admin.users' },
-      { href: '/admin/organizations', label: 'Organizations', icon: 'Building2', permission: 'admin.organizations' },
-      { href: '/audit', label: 'Audit Logs', icon: 'ScrollText', permission: 'admin.audit_logs' },
+      {
+        href: '/admin', label: 'Administration', icon: 'Settings', permission: 'admin.users',
+        capabilities: ['global_admin', 'user_admin', 'org_admin', 'audit_viewer', 'support'],
+      },
+      {
+        href: '/admin/users', label: 'User accounts', icon: 'Users', permission: 'admin.users',
+        capabilities: ['global_admin', 'user_admin', 'support'],
+      },
+      {
+        href: '/admin/organizations', label: 'Organizations', icon: 'Building2',
+        permission: 'admin.organizations', capabilities: ['global_admin', 'org_admin'],
+      },
+      {
+        href: '/admin/leads', label: 'Organization Leads', icon: 'ShieldCheck',
+        permission: 'admin.org_leads', capabilities: ['global_admin', 'org_admin'],
+      },
+      {
+        // Capability-only. Gating this on `roles.view` would put it in the
+        // sidebar of every officer who can read their own organization's
+        // roles, and the guard behind it would bounce them straight back.
+        href: '/admin/permissions', label: 'Permissions', icon: 'ShieldAlert',
+        permission: null,
+        capabilities: ['global_admin', 'org_admin', 'audit_viewer'],
+      },
+      {
+        href: '/audit', label: 'Audit Logs', icon: 'ScrollText', permission: 'admin.audit_logs',
+        capabilities: ['global_admin', 'audit_viewer'],
+      },
+      {
+        href: '/admin/system', label: 'System', icon: 'Server', permission: null,
+        capabilities: ['global_admin'],
+      },
     ],
   },
 ];
@@ -76,6 +117,10 @@ export const PAGE_META: Record<string, { title: string; parent?: string }> = {
   roles: { title: 'Roles', parent: 'Organization' },
   organization: { title: 'Organization', parent: 'Organization' },
   admin: { title: 'Administration', parent: 'System' },
+  users: { title: 'User accounts', parent: 'Administration' },
+  leads: { title: 'Organization Leads', parent: 'Administration' },
+  permissions: { title: 'Permissions', parent: 'Administration' },
+  system: { title: 'System', parent: 'Administration' },
   audit: { title: 'Audit Logs', parent: 'System' },
   design: { title: 'Design System', parent: 'System' },
 };

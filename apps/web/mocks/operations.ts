@@ -169,21 +169,4 @@ export const MOCK_ROLES: MockRole[] = [
   { id: 'r7', name: 'Cadet', hierarchyLevel: 10, memberCount: 7, permissionCount: 8, isDefault: true },
 ];
 
-export interface MockAuditEntry {
-  id: string;
-  at: Date;
-  actor: string;
-  action: string;
-  entity: string;
-  outcome: 'success' | 'denied' | 'error';
-  ip: string;
-}
 
-export const MOCK_AUDIT: MockAuditEntry[] = [
-  { id: 'au1', at: minutesAgo(3), actor: 'Marcus Boone', action: 'personnel.promote', entity: 'member/m3', outcome: 'success', ip: '10.0.4.21' },
-  { id: 'au2', at: minutesAgo(8), actor: 'Alex Reyes', action: 'personnel.promote', entity: 'member/m2', outcome: 'denied', ip: '10.0.4.55' },
-  { id: 'au3', at: minutesAgo(12), actor: 'Jordan Mercer', action: 'persons.view', entity: 'person/p1', outcome: 'success', ip: '10.0.4.31' },
-  { id: 'au4', at: minutesAgo(19), actor: 'Dana Whitfield', action: 'vehicles.flags.manage', entity: 'vehicle/v1', outcome: 'success', ip: '10.0.4.44' },
-  { id: 'au5', at: minutesAgo(26), actor: 'Alex Reyes', action: 'roles.edit', entity: 'role/r4', outcome: 'denied', ip: '10.0.4.55' },
-  { id: 'au6', at: minutesAgo(41), actor: 'System', action: 'session.revoke', entity: 'user/usr-0044', outcome: 'success', ip: '—' },
-];

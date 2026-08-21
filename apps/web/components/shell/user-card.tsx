@@ -25,7 +25,7 @@ export function UserCard({
   session, organization, collapsed,
 }: {
   session: Session;
-  organization: OrganizationSummary;
+  organization: OrganizationSummary | null;
   collapsed: boolean;
 }) {
   const { currentStatus, statuses, setStatus, self } = useDutyStatus();
@@ -61,7 +61,7 @@ export function UserCard({
       >
         <div className="flex justify-center">
           <span className="relative">
-            <Avatar name={session.displayName} size="md" ringColor={organization.color} />
+            <Avatar name={session.displayName} size="md" ringColor={organization?.color} />
             <span
               className={cn(
                 'absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-surface',
@@ -84,7 +84,7 @@ export function UserCard({
           'transition-colors hover:bg-hover',
         )}
       >
-        <Avatar name={session.displayName} size="md" ringColor={organization.color} />
+        <Avatar name={session.displayName} size="md" ringColor={organization?.color} />
         <div className="min-w-0 flex-1">
           <p className="truncate text-xs font-medium leading-tight text-text-primary">
             {session.displayName}

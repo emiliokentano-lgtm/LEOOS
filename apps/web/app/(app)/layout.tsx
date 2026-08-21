@@ -28,16 +28,43 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const organizations = session.memberships.map((m) => m.organization);
   const organization = organizations.find((o) => o.id === session.organizationId);
 
-  // A verified account with no membership is expected — registration grants
-  // nothing. Send them to the holding screen rather than an empty shell.
-  if (!organization) redirect('/no-organization');
+  /**
+   * No membership is not automatically a dead end.
+   *
+   * A verified account with no membership is expected — registration grants
+   * nothing — and the holding screen is the right answer for them. But a GLOBAL
+   * ADMINISTRATOR legitimately has no membership: administration is not
+   * organization-scoped, and a fresh installation's first administrator has
+   * nowhere to be a member of yet. Sending them to the holding screen would make
+   * the administration panel unreachable on exactly the installation that needs
+   * it most, which is a bootstrapping trap rather than a guard.
+   *
+   * So the shell renders without an organization for them, and the
+   * organization-scoped screens each refuse on their own terms.
+   */
+  const held = new Set(session.globalCapabilities);
+  if (!organization && held.size === 0 && !session.isGlobalAdmin) {
+    redirect('/no-organization');
+  }
 
+  /**
+   * Two routes to an item, because there are two kinds of authority.
+   *
+   * An organization permission reveals the operational screens; a global
+   * capability reveals the administration ones. An account administrator holds
+   * `user_admin` and no organization permission at all, so filtering on
+   * permissions alone would hide the account register from the one person who
+   * exists to use it — while a `null` permission plus a capability list keeps a
+   * screen like `/admin/system` hidden from everybody but a global admin.
+   */
   const sections: NavSection[] = NAVIGATION
     .map((section) => ({
       ...section,
-      items: section.items.filter(
-        (item) => item.permission === null || hasPermission(session, item.permission),
-      ),
+      items: section.items.filter((item) => {
+        if (item.capabilities?.some((c) => held.has(c))) return true;
+        if (item.permission === null) return item.capabilities === undefined;
+        return hasPermission(session, item.permission);
+      }),
     }))
     .filter((section) => section.items.length > 0);
 
@@ -45,7 +72,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <AppShell
       sections={sections}
       session={session}
-      organization={organization}
+      organization={organization ?? null}
       organizations={organizations}
       authState={{
         userId: session.userId,

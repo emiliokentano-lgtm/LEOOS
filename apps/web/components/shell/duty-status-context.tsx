@@ -92,12 +92,36 @@ export function DutyStatusProvider({ children }: { children: React.ReactNode }) 
   React.useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    /**
+     * `available: false` stops the poll. Everything else keeps it.
+     *
+     * The route reports "this caller has no dispatch state" as a successful
+     * empty answer rather than a 404, because that is what it is — and an
+     * account with no membership is exactly what a global administrator is. It
+     * is a STABLE fact: it cannot change without a new session, and a new
+     * session remounts this provider anyway. Polling it is a request that can
+     * never succeed.
+     *
+     * A transport failure or a 503 keeps polling: those are transient, and
+     * giving up on them would leave an operational shell blank after one blip.
+     */
+    const stopPolling = () => {
+      if (timer !== null) clearInterval(timer);
+      timer = null;
+    };
 
     const load = () => {
       fetch('/api/dispatch/self', { cache: 'no-store', signal: controller.signal })
         .then((response) => (response.ok ? response.json() : null))
-        .then((data: { self: DispatchSelfState; statuses: OperationalStatusMeta[] } | null) => {
+        .then((data: {
+          self: DispatchSelfState;
+          statuses: OperationalStatusMeta[];
+          available?: boolean;
+        } | null) => {
           if (cancelled) return;
+          if (data?.available === false) stopPolling();
           setSelf(data?.self ?? null);
           setStatuses(data?.statuses ?? []);
           setLoading(false);
@@ -109,7 +133,7 @@ export function DutyStatusProvider({ children }: { children: React.ReactNode }) 
     };
 
     load();
-    const timer = setInterval(() => {
+    timer = setInterval(() => {
       // A hidden tab does not poll. Nothing here is urgent enough to burn a
       // request behind someone's back.
       if (document.visibilityState === 'visible') load();
@@ -118,7 +142,7 @@ export function DutyStatusProvider({ children }: { children: React.ReactNode }) 
     return () => {
       cancelled = true;
       controller.abort();
-      clearInterval(timer);
+      stopPolling();
     };
   }, [token]);
 

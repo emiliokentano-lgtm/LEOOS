@@ -50,7 +50,7 @@ export function Sidebar({
 }: {
   sections: NavSection[];
   session: Session;
-  organization: OrganizationSummary;
+  organization: OrganizationSummary | null;
   organizations: OrganizationSummary[];
 }) {
   const pathname = usePathname();
@@ -70,26 +70,34 @@ export function Sidebar({
         collapsed ? 'w-(--spacing-sidebar-collapsed)' : 'w-(--spacing-sidebar)',
       )}
     >
-      {/* Brand + organization identity */}
+      {/*
+        * Brand + organization identity.
+        *
+        * An administrator with no membership gets the system identity instead of
+        * an organization's — stated as what it is rather than borrowing a colour
+        * and a short name from an agency they do not belong to.
+        */}
       <div className="flex h-(--spacing-topbar) shrink-0 items-center gap-2 border-b border-border-subtle px-3">
         <div
           className="flex size-6 shrink-0 items-center justify-center rounded-xs font-mono text-2xs font-bold"
-          style={{ backgroundColor: organization.color, color: '#0b0e14' }}
+          style={organization
+            ? { backgroundColor: organization.color, color: '#0b0e14' }
+            : { backgroundColor: 'var(--color-border-strong)', color: 'var(--color-text-primary)' }}
           aria-hidden
         >
-          {organization.shortName.slice(0, 2)}
+          {organization ? organization.shortName.slice(0, 2) : 'SY'}
         </div>
         {!collapsed ? (
           <div className="min-w-0 flex-1">
             <p className="truncate text-xs font-semibold leading-tight text-text-primary">LEOOS</p>
             <p className="truncate text-2xs leading-tight text-text-tertiary">
-              {organization.shortName}
+              {organization ? organization.shortName : 'System administration'}
             </p>
           </div>
         ) : null}
       </div>
 
-      {!collapsed ? (
+      {!collapsed && organization ? (
         <div className="border-b border-border-subtle p-2">
           <OrgSwitcher active={organization} organizations={organizations} />
         </div>

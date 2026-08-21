@@ -176,6 +176,21 @@ is actually held.
 | 4 | The dashboard is composed from the dispatch reads and shares its revision, so its counts cannot drift from the board it links to. | [dashboard §3](docs/architecture/10-dashboard.md) |
 | 26 | Loading, error, degraded-feed and empty are all distinct states; a partial dashboard is never rendered as if whole. | [dashboard §6](docs/architecture/10-dashboard.md) |
 
+### Global administration
+
+| Rules | Mechanism | Location |
+| --- | --- | --- |
+| 12, 13, 14, 15 | An Organization Lead reaches NO global administration, and not by a check: capabilities live in a table no organization operation writes to, `can()` excludes global-scope keys from a lead's implicit grant, and `canGrantPermissions` plus a DB trigger both refuse to attach one to an organization role. Asserted over the WHOLE catalogue. | [admin §1](docs/architecture/11-administration.md), `packages/authz-core/test/admin-decisions.test.ts` |
+| 12 | Only a `global_admin` may grant a capability. A `user_admin` that could would be one request from being an administrator — and may not disable a global administrator either, which is the same escalation by subtraction. | [admin §2](docs/architecture/11-administration.md) |
+| 10, 44 | The installation cannot be locked out: the last enabled global administrator cannot be disabled, the last `global_admin` grant cannot be revoked, and no administrator may act on their own account. The count runs INSIDE the transaction, under `FOR UPDATE`, so two administrators disabling each other cannot both succeed. | [admin §3](docs/architecture/11-administration.md), `apps/api/src/modules/admin/user.service.ts` |
+| 16 | Three walls between `user_account` and the browser: queries name their columns, DTOs have nowhere to put a credential, and a test searches every endpoint's output AND every rendered page for hashes and secrets. | [admin §7](docs/architecture/11-administration.md), `apps/api/test/admin.test.ts` |
+| 23 | Every administrative change is audited in its own transaction, and every REFUSAL is audited too — an account administrator repeatedly reaching for `global_admin` is the signal the log exists to surface. | `apps/api/src/modules/admin/user.service.ts` |
+| 34, 45 | Audit severity is DERIVED from the action and outcome, never stored, so it can always be recomputed from the row and cannot drift from what happened. The rule exists twice — SQL for the filter, TypeScript for the label — and a test proves the two select the same rows for every action. | [admin §5](docs/architecture/11-administration.md) |
+| 21, 22 | The audit log pages by KEYSET, not offset: it grows at the head while somebody reads it, and an offset silently repeats and skips rows. The total is bounded rather than a full scan for a figure that is stale on arrival. | `apps/api/src/modules/admin/audit.read.ts` |
+| 9, 10 | No blanket prefix guard: each route asks its own question with the same functions the UI's capability block is built from, so an `audit_viewer` reaches the log without reaching the register. The page guard is a redirect, not a boundary. | [admin §8](docs/architecture/11-administration.md) |
+| 35, 45 | System configuration is READ-ONLY and reports the state each component has — the mail screen says password resets are written to a log and not delivered, rather than showing a configured tick. | [admin §6](docs/architecture/11-administration.md) |
+| 26 | An unavailable action states its reason in words from the API's own `restrictions` list, rather than presenting a silently disabled control. | `apps/web/app/(app)/admin/users/[userId]/` |
+
 ---
 
 ## Standing conventions

@@ -36,7 +36,7 @@ export function StatusBar({
   session, organization,
 }: {
   session: Session;
-  organization: OrganizationSummary;
+  organization: OrganizationSummary | null;
 }) {
   const { currentStatus } = useDutyStatus();
   const realtime = useRealtimeStatus();
@@ -70,10 +70,14 @@ export function StatusBar({
       <span className="flex items-center gap-1.5">
         <span
           className="size-2 shrink-0 rounded-[1px]"
-          style={{ backgroundColor: organization.color }}
+          style={{ backgroundColor: organization?.color ?? 'var(--color-border-strong)' }}
           aria-hidden
         />
-        <span className="text-text-secondary">{organization.shortName}</span>
+        {/* An administrator with no membership is operating on the system, not
+            inside an agency. Saying so beats borrowing an agency's badge. */}
+        <span className="text-text-secondary">
+          {organization ? organization.shortName : 'System'}
+        </span>
       </span>
 
       <span className="flex items-center gap-1.5">

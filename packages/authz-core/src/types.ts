@@ -92,7 +92,20 @@ export type DenyReason =
   | 'ROLE_IS_SYSTEM'
   | 'ROLE_IN_USE'
   | 'ROLE_IS_DEFAULT'
-  | 'LEVEL_OUT_OF_RANGE';
+  | 'LEVEL_OUT_OF_RANGE'
+  /**
+   * The action would leave the installation with no way in.
+   *
+   * Disabling the last global administrator, or revoking the last
+   * `global_admin` grant, locks everyone out of administration permanently —
+   * there is no other path back, because the capability can only be granted by
+   * somebody who already holds it.
+   */
+  | 'LAST_GLOBAL_ADMIN'
+  /** Only a global administrator may confer `global_admin`. */
+  | 'CAPABILITY_NOT_GRANTABLE'
+  /** The action needs a global capability the actor does not hold. */
+  | 'GLOBAL_CAPABILITY_NOT_HELD';
 
 export type Decision =
   | { allowed: true }
