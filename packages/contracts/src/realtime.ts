@@ -189,7 +189,25 @@ export interface PersonnelPayload {
 
 export type NotificationTone = 'info' | 'success' | 'warning' | 'danger';
 
+/**
+ * A notification arriving live.
+ *
+ * Carries the notification's IDENTIFIERS and the handful of fields a client
+ * needs to decide what to do with it — no more. `id` is what a toast marks read;
+ * `type` is what picks the icon and answers `shouldPlaySound`, which tone cannot
+ * (tone says how alarming it looks, not whether the operator asked to hear it);
+ * `severity` is what decides whether the toast stays.
+ *
+ * `href` is deliberately ABSENT. Routing belongs to the web app, and the client
+ * refetches the head of its list on arrival anyway — which is also the only way
+ * the unread badge can be right, since a count computed here would be stale the
+ * moment the same person reads something in another tab.
+ */
 export interface NotificationPayload {
+  id: string;
+  /** A key from the notification catalogue. Unknown keys render generically. */
+  type: string;
+  severity: 'info' | 'warning' | 'critical';
   title: string;
   body: string | null;
   tone: NotificationTone;

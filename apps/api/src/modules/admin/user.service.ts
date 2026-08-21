@@ -13,6 +13,30 @@ import { bumpPermissionVersion, loadActorContextLocked } from '../auth/context.s
 import { revokeAllSessions } from '../auth/session.service.js';
 import type { RequestMeta } from '../auth/auth.service.js';
 import { countOtherEnabledGlobalAdmins, countOtherGlobalAdminGrants } from './user.read.js';
+import { createNotifications } from '../notifications/notification.service.js';
+import { singleRecipient } from '../notifications/recipients.js';
+
+/**
+ * ADMINISTRATIVE NOTIFICATIONS ARE WRITTEN, NOT PUSHED.
+ *
+ * Every action in this file revokes the subject's sessions — that is the point
+ * of a status change or a capability change. So the subject has no socket to
+ * deliver to, and there is nothing for the route to publish: the row is the
+ * whole mechanism. They read it when they sign back in, which is the only moment
+ * they could have read it anyway.
+ *
+ * Only some of these are worth writing at all:
+ *
+ *   · REINSTATEMENT is. The person can sign in again and should be told why the
+ *     last week did not work.
+ *   · SUSPENSION and DISABLING are NOT. A disabled account cannot sign in to
+ *     read its own notification, so the row would be one nobody will ever see —
+ *     and telling somebody they are suspended is a conversation, not a toast.
+ *     The audit row is where that fact lives.
+ *   · CAPABILITY changes are. The account stays active, and finding out that you
+ *     now hold — or no longer hold — an administrative capability by discovering
+ *     a screen has appeared or vanished is exactly the confusion worth avoiding.
+ */
 
 /**
  * Account administration.
@@ -204,6 +228,24 @@ export async function changeAccountStatus(
         ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
       });
 
+      if (input.status === 'active') {
+        await createNotifications(tx, singleRecipient(input.userId), {
+          type: 'admin.account_status',
+          title: 'Your account has been reinstated',
+          body: input.reason
+            ?? 'An administrator restored access to your account. You can sign in normally.',
+          severity: 'info',
+          href: '/dashboard',
+          entityType: 'user_account',
+          entityId: input.userId,
+          target: 'dashboard',
+          // The REASON is carried; the administrator is not. Who acted is in the
+          // audit log, where it belongs — a notification naming the person who
+          // suspended you is an invitation to go and argue with them.
+          metadata: { previousStatus: target.status, status: input.status },
+        });
+      }
+
       return {
         userId: input.userId,
         previousStatus: target.status as AccountStatus,
@@ -313,6 +355,17 @@ export async function grantGlobalCapability(
         ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
       });
 
+      await createNotifications(tx, singleRecipient(input.userId), {
+        type: 'admin.capability_granted',
+        title: `You were granted the ${input.capability} capability`,
+        body: input.reason
+          ?? 'Sign in again for it to take effect. Your current sessions were ended.',
+        href: '/admin',
+        entityType: 'user_account',
+        entityId: input.userId,
+        metadata: { capability: input.capability },
+      });
+
       return { userId: input.userId, capability: input.capability, granted: true, sessionsRevoked };
     }),
   );
@@ -379,6 +432,18 @@ export async function revokeGlobalCapability(
           sessionsRevoked,
         },
         ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
+      });
+
+      await createNotifications(tx, singleRecipient(input.userId), {
+        type: 'admin.capability_revoked',
+        title: `The ${input.capability} capability was removed from your account`,
+        body: input.reason
+          ?? 'Screens that relied on it are no longer available to you.',
+        href: '/dashboard',
+        entityType: 'user_account',
+        entityId: input.userId,
+        target: 'dashboard',
+        metadata: { capability: input.capability },
       });
 
       return {

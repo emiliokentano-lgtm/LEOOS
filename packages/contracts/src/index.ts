@@ -10,3 +10,4 @@ export * from './dashboard';
 export * from './realtime';
 export * from './fivem';
 export * from './admin';
+export * from './notifications';

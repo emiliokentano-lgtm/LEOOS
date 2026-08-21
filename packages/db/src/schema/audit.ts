@@ -182,6 +182,21 @@ export const AUDIT_ACTIONS = {
   GAME_SERVER_CREDENTIAL_REVOKED: 'game_server.credential_revoked',
   GAME_IDENTITY_LINKED: 'game_identity.linked',
   RECORD_PURGED: 'admin.record_purged',
+
+  /**
+   * An announcement is the one notification a human composes by hand.
+   *
+   * Everything else in the notification system is emitted by the domain event
+   * that caused it, so it cannot be forged. This one can, which is exactly why
+   * it is audited: "who put that on two hundred screens" has to be answerable.
+   *
+   * Named `announcement.sent` rather than `organization.announcement_sent`
+   * deliberately: the `organization.` prefix is one of the PRIVILEGED prefixes
+   * in `auditSeverityOf`, and classifying every routine shift announcement as a
+   * high-severity administrative act would bury the organization changes that
+   * prefix exists to surface. A refused one still rates `high`.
+   */
+  ANNOUNCEMENT_SENT: 'announcement.sent',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

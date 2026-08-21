@@ -6,7 +6,11 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '.
 import { writeAudit } from '../../lib/audit.js';
 import type { RequestMeta } from '../auth/auth.service.js';
 import type { DispatchScope } from './dispatch.scope.js';
-import type { DispatchEmission, DispatchOutcome } from './dispatch.events.js';
+import {
+  notificationEmissions, type DispatchEmission, type DispatchOutcome,
+} from './dispatch.events.js';
+import { createNotifications } from '../notifications/notification.service.js';
+import { unitCrew } from '../notifications/recipients.js';
 
 /**
  * Units and operational status.
@@ -240,6 +244,16 @@ export async function disbandUnit(
       );
     }
 
+    /**
+     * The crew is read BEFORE they are removed.
+     *
+     * A moment later `unit_member.left_at` is set for all of them and `unitCrew`
+     * answers nobody — so the people whose car was just taken away would be the
+     * only ones not told. This is the same ordering trap `closeIncident` has,
+     * and it is worth being explicit about in both places.
+     */
+    const crew = await unitCrew(tx, unitId, { excludeUserId: scope.actorUserId });
+
     const now = new Date();
     await tx.update(unit)
       .set({ status: 'disbanded', disbandedAt: now, currentIncidentId: null })
@@ -264,6 +278,26 @@ export async function disbandUnit(
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
 
+    /**
+     * Disbanding is the ONE crew change somebody else performs on you.
+     *
+     * Joining and leaving are self-actions, so they need no notification — a
+     * person does not have to be told what they just did. This one they do:
+     * their unit stopped existing while they were driving it.
+     */
+    const deliveries = await createNotifications(tx, crew, {
+      type: 'unit.released',
+      title: `${target.callsign} stood down`,
+      body: 'A supervisor disbanded your unit. You are no longer crewed.',
+      severity: 'warning',
+      href: '/dispatch',
+      entityType: 'unit',
+      entityId: unitId,
+      organizationId: target.organization_id,
+      target: 'dispatch',
+      metadata: { callsign: target.callsign, disbanded: true },
+    });
+
     return {
       result: null,
       events: [{
@@ -274,7 +308,7 @@ export async function disbandUnit(
           callsign: target.callsign,
           unitType: target.unit_type,
         },
-      }],
+      }, ...notificationEmissions(deliveries)],
     };
   });
 }
@@ -370,6 +404,32 @@ export async function joinUnit(
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
 
+    const joinerName = await memberDisplayName(tx, membership.id);
+
+    /**
+     * The people already in the car, not the person getting in.
+     *
+     * Crewing up is a self-action, so there is nothing to tell the joiner. Their
+     * new crewmates are a different matter: who is riding with you is
+     * operational information, and on a first join the audience is empty, which
+     * costs one query and no notification.
+     */
+    const deliveries = await createNotifications(
+      tx,
+      await unitCrew(tx, unitId, { excludeUserId: scope.actorUserId }),
+      {
+        type: 'unit.assigned',
+        title: `${joinerName} joined ${target!.callsign}`,
+        body: isLeader ? 'They have taken the lead.' : null,
+        href: '/dispatch',
+        entityType: 'unit',
+        entityId: unitId,
+        organizationId: membership.organization_id,
+        target: 'dispatch',
+        metadata: { callsign: target!.callsign, memberId: membership.id, isLeader },
+      },
+    );
+
     return {
       result: null,
       events: [{
@@ -379,10 +439,10 @@ export async function joinUnit(
           unitId,
           callsign: target!.callsign,
           memberId: membership.id,
-          memberName: await memberDisplayName(tx, membership.id),
+          memberName: joinerName,
           isLeader,
         },
-      }],
+      }, ...notificationEmissions(deliveries)],
     };
   });
 }
@@ -405,6 +465,7 @@ export async function leaveUnit(
     if (!crewing) throw new ConflictError('NOT_CREWED', 'You are not currently in a unit.');
 
     const left = await lockUnit(tx, crewing.unit_id);
+    const leaverName = await memberDisplayName(tx, membership.id);
     const now = new Date();
     await tx.update(unitMember).set({ leftAt: now }).where(eq(unitMember.id, crewing.id));
     await tx.update(memberStatus)
@@ -420,6 +481,27 @@ export async function leaveUnit(
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
 
+    /**
+     * Read AFTER the leave, deliberately — the opposite of `disbandUnit`.
+     *
+     * Here the departing member has already been marked `left_at`, so `unitCrew`
+     * answers exactly the people still in the car. Reading it first would
+     * include the leaver and send them a notification about their own action.
+     */
+    const remaining = await unitCrew(tx, crewing.unit_id, { excludeUserId: scope.actorUserId });
+
+    const deliveries = await createNotifications(tx, remaining, {
+      type: 'unit.released',
+      title: `${leaverName} left ${left?.callsign ?? 'your unit'}`,
+      body: null,
+      href: '/dispatch',
+      entityType: 'unit',
+      entityId: crewing.unit_id,
+      organizationId: membership.organization_id,
+      target: 'dispatch',
+      metadata: { callsign: left?.callsign ?? null, memberId: membership.id },
+    });
+
     return {
       result: null,
       events: [{
@@ -429,10 +511,10 @@ export async function leaveUnit(
           unitId: crewing.unit_id,
           callsign: left?.callsign ?? '',
           memberId: membership.id,
-          memberName: await memberDisplayName(tx, membership.id),
+          memberName: leaverName,
           isLeader: false,
         },
-      }],
+      }, ...notificationEmissions(deliveries)],
     };
   });
 }

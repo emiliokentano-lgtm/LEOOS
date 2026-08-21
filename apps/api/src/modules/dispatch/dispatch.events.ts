@@ -1,10 +1,11 @@
 import { sql } from 'drizzle-orm';
 import type { Database } from '@leoos/db';
 import type {
-  IncidentAssignedPayload, IncidentClosedPayload, IncidentPayload, PanicPayload,
-  PanicResolvedPayload, PersonnelPayload, RealtimeActor, UnitMemberPayload, UnitPayload,
-  UnitStatusPayload,
+  IncidentAssignedPayload, IncidentClosedPayload, IncidentPayload, NotificationPayload,
+  PanicPayload, PanicResolvedPayload, PersonnelPayload, RealtimeActor, UnitMemberPayload,
+  UnitPayload, UnitStatusPayload,
 } from '@leoos/contracts';
+import { deliveryPayload, type NotificationDelivery } from '../notifications/notification.service.js';
 import type { RealtimePublisher } from '../../realtime/publisher.js';
 
 /**
@@ -55,7 +56,22 @@ export type DispatchEmission =
   }
   | { kind: 'panic.triggered'; organizationId: string; payload: PanicPayload }
   | { kind: 'panic.resolved'; organizationId: string; payload: PanicResolvedPayload }
-  | { kind: 'personnel.updated'; organizationId: string; payload: PersonnelPayload };
+  | { kind: 'personnel.updated'; organizationId: string; payload: PersonnelPayload }
+  /**
+   * A notification for ONE person, addressed by user id.
+   *
+   * It travels in the same envelope as the board events for one reason: the row
+   * was written inside the service's transaction, so its delivery must not
+   * happen until that transaction commits — which is exactly the invariant this
+   * shape already enforces for everything else. A service that emitted
+   * notifications through a publisher of its own would be free to do it inside
+   * the transaction, and eventually would.
+   *
+   * There is no `organizationId`. The audience was decided when the rows were
+   * written, from membership and permission (see notifications/recipients.ts);
+   * by the time an emission exists the only question left is which socket.
+   */
+  | { kind: 'notification'; userId: string; payload: NotificationPayload };
 
 /**
  * The uniform return shape of every mutating dispatch service.
@@ -99,6 +115,23 @@ export async function incidentTopics(
   for (const row of rows) organizationIds.add(row.organization_id);
 
   return [...organizationIds].map((id) => `org:${id}:incidents`);
+}
+
+/**
+ * Turns the rows a service just wrote into emissions the route will publish.
+ *
+ * Called by the SERVICE, inside or after its transaction — it only rearranges
+ * values in memory. The publish itself still happens in the route, after the
+ * commit, like every other emission.
+ */
+export function notificationEmissions(
+  deliveries: readonly NotificationDelivery[],
+): DispatchEmission[] {
+  return deliveries.map((delivery) => ({
+    kind: 'notification' as const,
+    userId: delivery.userId,
+    payload: deliveryPayload(delivery),
+  }));
 }
 
 /**
@@ -160,6 +193,16 @@ export function publishDispatchEvents(
         break;
       case 'personnel.updated':
         publisher.personnelUpdated({ organizationId: event.organizationId, actor }, event.payload);
+        break;
+      case 'notification':
+        /**
+         * Addressed to the RECIPIENT, not to the actor.
+         *
+         * `publisher.notify` routes onto `user:<id>`, and topic authorization
+         * refuses that topic to everyone but its owner on every delivery — so a
+         * misrouted notification is not a leak, it is an undelivered message.
+         */
+        publisher.notify(event.userId, event.payload);
         break;
     }
   }

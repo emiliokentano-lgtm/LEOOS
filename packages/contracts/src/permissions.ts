@@ -92,6 +92,15 @@ export const PERMISSIONS = {
   // ── organization ─────────────────────────────────────────────────────────
   'organization.view': { category: 'organization', risk: 'low', label: 'View organization' },
   'organization.edit': { category: 'organization', risk: 'high', label: 'Edit organization' },
+  /**
+   * Sending an announcement writes a row into every member's notification list.
+   *
+   * `medium` rather than `low`: it is the only way one person can put text on
+   * everybody else's screen, and the audience cannot opt out of the
+   * organization category the way they can mute incident chatter. It sits below
+   * `organization.edit` because it changes nothing about the organization.
+   */
+  'organization.announce': { category: 'organization', risk: 'medium', label: 'Send announcements' },
 
   // ── admin (global scope) ─────────────────────────────────────────────────
   'admin.users': { category: 'admin', risk: 'high', scope: 'global', label: 'Manage user accounts' },

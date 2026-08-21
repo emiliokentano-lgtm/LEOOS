@@ -61,6 +61,7 @@ const SUPERVISOR: PermissionKey[] = [
 
 const COMMAND: PermissionKey[] = [
   ...SUPERVISOR,
+  'organization.announce',
   'personnel.hire', 'personnel.fire', 'personnel.promote', 'personnel.demote',
   'personnel.create',
   'roles.create', 'roles.edit', 'roles.assign', 'roles.permissions',
@@ -80,6 +81,7 @@ const MEDICAL_BASE: PermissionKey[] = [
 
 const MEDICAL_SENIOR: PermissionKey[] = [
   ...MEDICAL_BASE,
+  'organization.announce',
   'persons.create', 'persons.edit',
   'dispatch.manage', 'dispatch.assign', 'dispatch.close', 'dispatch.panic.acknowledge',
   'units.manage', 'map.markers.manage',
@@ -187,7 +189,7 @@ export const ORGANIZATION_SEEDS: OrganizationSeed[] = [
     category: 'civil_service',
     color: '#d99a2b',
     roles: [
-      { key: 'owner', name: 'Owner', level: 100, permissions: [...MECHANIC_BASE, 'organization.edit', 'personnel.hire', 'personnel.fire', 'personnel.promote', 'personnel.demote', 'roles.create', 'roles.edit', 'roles.delete', 'roles.assign', 'roles.permissions', 'personnel.edit', 'personnel.callsign', 'units.manage', 'dispatch.manage', 'dispatch.assign', 'dispatch.close'] },
+      { key: 'owner', name: 'Owner', level: 100, permissions: [...MECHANIC_BASE, 'organization.edit', 'organization.announce', 'personnel.hire', 'personnel.fire', 'personnel.promote', 'personnel.demote', 'roles.create', 'roles.edit', 'roles.delete', 'roles.assign', 'roles.permissions', 'personnel.edit', 'personnel.callsign', 'units.manage', 'dispatch.manage', 'dispatch.assign', 'dispatch.close'] },
       { key: 'manager', name: 'Manager', level: 70, permissions: [...MECHANIC_BASE, 'personnel.edit', 'personnel.callsign', 'units.manage', 'dispatch.manage', 'dispatch.assign', 'dispatch.close', 'roles.assign'] },
       { key: 'senior_mechanic', name: 'Senior Mechanic', level: 40, permissions: [...MECHANIC_BASE, 'vehicles.flags.manage', 'dispatch.manage'] },
       { key: 'mechanic', name: 'Mechanic', level: 20, permissions: MECHANIC_BASE },

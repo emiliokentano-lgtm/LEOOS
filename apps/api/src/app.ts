@@ -17,6 +17,7 @@ import searchRoutes from './modules/search/search.routes.js';
 import mapRoutes from './modules/map/map.routes.js';
 import dispatchRoutes from './modules/dispatch/dispatch.routes.js';
 import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
+import notificationRoutes from './modules/notifications/notification.routes.js';
 import fivemRoutes from './modules/fivem/fivem.routes.js';
 import gameServerRoutes from './modules/fivem/gameserver.routes.js';
 import adminRoutes from './modules/admin/admin.routes.js';
@@ -184,6 +185,19 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
    * reads and gated on the same permission — see modules/dashboard.
    */
   await app.register(dashboardRoutes, { prefix: '/api/v1/dashboard' });
+  /**
+   * Notifications.
+   *
+   * NOT nested under an organization, and not under dispatch: a person's
+   * notification list spans every organization they belong to and every module
+   * that can address them. Nesting it would make the URL claim a scope the
+   * resource does not have.
+   *
+   * Every route here resolves its subject from the session — there is no user id
+   * in any path, query or body — so the prefix carries no authorization meaning
+   * of its own.
+   */
+  await app.register(notificationRoutes, { prefix: '/api/v1/notifications' });
   /**
    * Real-time is TWO surfaces, deliberately separate.
    *

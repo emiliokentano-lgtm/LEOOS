@@ -6,7 +6,9 @@ import { ConflictError, ForbiddenError, NotFoundError } from '../../lib/errors.j
 import { writeAudit } from '../../lib/audit.js';
 import type { RequestMeta } from '../auth/auth.service.js';
 import type { DispatchScope } from './dispatch.scope.js';
-import type { DispatchOutcome } from './dispatch.events.js';
+import { notificationEmissions, type DispatchOutcome } from './dispatch.events.js';
+import { createNotifications } from '../notifications/notification.service.js';
+import { membersWithPermission } from '../notifications/recipients.js';
 
 /**
  * Panic.
@@ -191,6 +193,52 @@ export async function triggerPanic(
       ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
     });
 
+    /**
+     * Who is told.
+     *
+     * `dispatch.view` in the panic's own organization — the SAME predicate that
+     * gates the `org:<id>:panic` topic and the dispatch board above. A panic is a
+     * push of a covert unit's position to whoever receives it, so the audience
+     * has to be the set of people who could already have seen it by looking.
+     *
+     * DELIBERATELY NOT filtered by duty. "I had just marked myself off duty" is
+     * not a reason to miss one, and the dispatcher who is about to come back on
+     * shift should find it waiting in their centre.
+     *
+     * The actor is excluded: the person in trouble does not need a copy of their
+     * own alert, and on a panic the copy would sit at the top of the list of the
+     * one person who cannot act on it.
+     */
+    const audience = await membersWithPermission(
+      tx, membership.organization_id, 'dispatch.view',
+      { excludeUserId: scope.actorUserId },
+    );
+
+    const callerName = who[0]?.display_name ?? 'A member';
+    const label = who[0]?.callsign ?? unitCallsign;
+
+    const deliveries = await createNotifications(tx, audience, {
+      type: 'panic.triggered',
+      title: label === null ? `PANIC — ${callerName}` : `PANIC — ${label} (${callerName})`,
+      body: posX === null || posY === null
+        // Said plainly rather than omitted. A dispatcher reading "position
+        // unknown" starts asking; one reading nothing assumes the map knows.
+        ? 'Position unknown. Open dispatch for the alert.'
+        : 'Location on the map. Open dispatch for the alert.',
+      href: '/dispatch',
+      entityType: 'panic_event',
+      entityId: created.id,
+      organizationId: membership.organization_id,
+      target: 'dispatch',
+      metadata: {
+        memberId: membership.id,
+        unitId,
+        unitCallsign,
+        incidentId,
+        position: posX === null || posY === null ? null : { x: posX, y: posY },
+      },
+    });
+
     return {
       result: created,
       events: [{
@@ -208,7 +256,7 @@ export async function triggerPanic(
           // at a made-up coordinate is worse than no marker.
           position: posX === null || posY === null ? null : { x: posX, y: posY },
         },
-      }],
+      }, ...notificationEmissions(deliveries)],
     };
   });
 }
@@ -373,6 +421,36 @@ export async function resolvePanic(
        WHERE om.id = ${event.member_id}
     `);
 
+    /**
+     * The stand-down goes to the same audience as the alert.
+     *
+     * Not because anybody must act on it, but because an unresolved alert in a
+     * notification centre is an open question. Somebody who sees "PANIC — 1-ADAM-12"
+     * and never sees it end will go and check — which is the right instinct, and
+     * a waste of their shift if it ended twenty minutes ago.
+     *
+     * `info`, not `critical`: it is the ABSENCE of an emergency. It makes no
+     * sound and raises no sticky toast.
+     */
+    const audience = await membersWithPermission(
+      tx, event.organization_id, 'dispatch.view',
+      { excludeUserId: scope.actorUserId },
+    );
+
+    const deliveries = await createNotifications(tx, audience, {
+      type: 'panic.resolved',
+      title: `Panic stood down — ${who[0]?.display_name ?? 'a member'}`,
+      body: isOwnAlert
+        ? 'Stood down by the member who raised it.'
+        : 'Stood down by a dispatcher.',
+      href: '/dispatch',
+      entityType: 'panic_event',
+      entityId: panicId,
+      organizationId: event.organization_id,
+      target: 'dispatch',
+      metadata: { memberId: event.member_id, selfResolved: isOwnAlert, restoredStatus: restored },
+    });
+
     return {
       result: null,
       events: [{
@@ -384,7 +462,7 @@ export async function resolvePanic(
           memberName: who[0]?.display_name ?? 'Unknown',
           selfResolved: isOwnAlert,
         },
-      }],
+      }, ...notificationEmissions(deliveries)],
     };
   });
 }

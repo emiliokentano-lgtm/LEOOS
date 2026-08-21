@@ -1,6 +1,6 @@
 import { relations, sql } from 'drizzle-orm';
 import {
-  index, jsonb, pgTable, text, timestamp, uuid,
+  boolean, index, integer, jsonb, pgTable, text, timestamp, uuid,
 } from 'drizzle-orm/pg-core';
 import {
   createdAt, notificationChannelEnum, notificationSeverityEnum, primaryId,
@@ -66,5 +66,53 @@ export const notificationRelations = relations(notification, ({ one }) => ({
   organization: one(organization, {
     fields: [notification.organizationId],
     references: [organization.id],
+  }),
+}));
+
+/**
+ * Per-operator notification preferences.
+ *
+ * ONE ROW PER USER, created on first write. A missing row is not an error — it
+ * means "the defaults", which are defined once in
+ * `@leoos/contracts` (`DEFAULT_NOTIFICATION_PREFERENCES`) and read by both
+ * tiers. Seeding a row per account at registration would put the defaults in two
+ * places and guarantee they drift.
+ *
+ * NOT ORGANIZATION-SCOPED. A person crewing PD in the morning and MD in the
+ * evening does not want two sound settings; the preference is about the human at
+ * the keyboard, not about their membership.
+ *
+ * WHAT IS DELIBERATELY ABSENT: any preference that could suppress a panic.
+ * `muted_categories` is a text array, and the server refuses `panic` when
+ * writing it (`UNMUTABLE_CATEGORIES` in contracts). The column cannot be trusted
+ * to hold only what the UI offers — it is checked on the way in.
+ */
+export const notificationPreference = pgTable('notification_preference', {
+  /**
+   * The user IS the key.
+   *
+   * A primary key on `user_id` rather than a surrogate id with a unique index:
+   * two preference rows for one person is not a state the table should be able
+   * to represent, and a concurrent first-write from two tabs resolves as an
+   * upsert instead of two rows.
+   */
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(() => userAccount.id, { onDelete: 'cascade' }),
+
+  soundEnabled: boolean('sound_enabled').notNull().default(false),
+  soundCriticalOnly: boolean('sound_critical_only').notNull().default(true),
+  soundVolume: integer('sound_volume').notNull().default(60),
+  criticalToasts: boolean('critical_toasts').notNull().default(true),
+  mutedCategories: text('muted_categories').array().notNull().default(sql`'{}'::text[]`),
+
+  createdAt: createdAt(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const notificationPreferenceRelations = relations(notificationPreference, ({ one }) => ({
+  user: one(userAccount, {
+    fields: [notificationPreference.userId],
+    references: [userAccount.id],
   }),
 }));
