@@ -1,39 +1,30 @@
 'use client';
 
 import * as React from 'react';
+import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Bell, FlaskConical, Search, TriangleAlert } from 'lucide-react';
+import { Bell, CheckCheck, FlaskConical, Search, TriangleAlert } from 'lucide-react';
 import {
   Badge, Breadcrumb, Button, IconButton, Tooltip,
-  Dropdown, DropdownTrigger, DropdownContent, DropdownItem, DropdownLabel, DropdownSeparator,
+  Dropdown, DropdownTrigger, DropdownContent, DropdownLabel, DropdownSeparator,
   ConfirmationDialog, useToast, type Crumb,
 } from '@/components/ui';
 import { PAGE_META } from '@/lib/navigation';
 import { IS_DEMO_DATA } from '@/lib/mock-flag';
-import { cn, timeAgo } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { StatusChip } from '@/components/domain/status-chip';
+import { NotificationItem } from '@/components/domain/notification-item';
+import { useNow } from '@/lib/map/use-now';
 import { useDutyStatus } from './duty-status-context';
+import { useNotifications } from './notification-context';
 import { useCommandPalette } from './command-palette';
-import { MOCK_NOW } from '@/mocks/operations';
-
-interface Notification {
-  id: string;
-  title: string;
-  detail: string;
-  at: Date;
-  tone: 'default' | 'warning' | 'danger';
-}
-
-const MOCK_NOTIFICATIONS: Notification[] = [
-  { id: 'n1', title: 'Assigned to #2026-08-000431', detail: 'Armed robbery — Legion Square', at: new Date(MOCK_NOW.getTime() - 4 * 60000), tone: 'danger' },
-  { id: 'n2', title: 'Unit 2-LINCOLN-4 now available', detail: 'Cleared from #2026-08-000424', at: new Date(MOCK_NOW.getTime() - 18 * 60000), tone: 'default' },
-  { id: 'n3', title: 'Warrant issued', detail: 'D. Castellanos — arrest warrant active', at: new Date(MOCK_NOW.getTime() - 41 * 60000), tone: 'warning' },
-];
 
 export function TopBar() {
   const pathname = usePathname();
   const { currentStatus, panic, triggerPanic, clearPanic, self } = useDutyStatus();
+  const notifications = useNotifications();
   const { open: openPalette } = useCommandPalette();
+  const now = new Date(useNow());
   const [panicOpen, setPanicOpen] = React.useState(false);
   const [panicPending, setPanicPending] = React.useState(false);
   const toast = useToast();
@@ -67,8 +58,6 @@ export function TopBar() {
   for (const extra of segments.slice(1)) {
     crumbs.push({ label: decodeURIComponent(extra) });
   }
-
-  const unread = MOCK_NOTIFICATIONS.length;
 
   return (
     <header className="flex h-(--spacing-topbar) shrink-0 items-center gap-3 border-b border-border-subtle bg-surface px-3">
@@ -138,47 +127,102 @@ export function TopBar() {
           )
         ) : null}
 
-        {/* Notifications */}
+        {/*
+          * Notifications.
+          *
+          * The badge is a NUMBER, not a dot, and it turns red only when
+          * something critical is unread. A single indistinguishable dot for
+          * "there is something" makes a panic look exactly like a crew change,
+          * which is the failure this whole subsystem exists to avoid.
+          */}
         <Dropdown>
           <DropdownTrigger asChild>
             <span className="relative inline-flex">
-              <IconButton label="Notifications" size="sm" tooltip={false}>
+              <IconButton
+                label={
+                  notifications.unread.total === 0
+                    ? 'Notifications'
+                    : `Notifications — ${notifications.unread.total} unread`
+                }
+                size="sm"
+                tooltip={false}
+              >
                 <Bell aria-hidden />
               </IconButton>
-              {unread > 0 ? (
+              {notifications.unread.total > 0 ? (
                 <span
-                  className="pointer-events-none absolute right-0.5 top-0.5 size-1.5 rounded-full bg-danger"
+                  className={cn(
+                    'pointer-events-none absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5',
+                    'items-center justify-center rounded-full px-0.5',
+                    'font-mono text-[9px] font-semibold leading-none text-white',
+                    notifications.unread.critical > 0 ? 'bg-danger' : 'bg-accent',
+                  )}
                   aria-hidden
-                />
+                >
+                  {notifications.unread.total > 99 ? '99+' : notifications.unread.total}
+                </span>
               ) : null}
             </span>
           </DropdownTrigger>
-          <DropdownContent className="w-[300px] p-0">
+          <DropdownContent className="w-[340px] p-0">
             <div className="flex items-center justify-between px-2 py-1.5">
               <DropdownLabel className="px-0">Notifications</DropdownLabel>
-              <span className="font-mono text-2xs text-text-tertiary">{unread} new</span>
+              <span className="font-mono text-2xs text-text-tertiary">
+                {notifications.unread.total === 0
+                  ? 'all read'
+                  : `${notifications.unread.total} unread`}
+              </span>
             </div>
             <DropdownSeparator className="mx-0" />
-            {MOCK_NOTIFICATIONS.map((n) => (
-              <DropdownItem key={n.id} className="flex-col items-start gap-0.5 py-2">
-                <div className="flex w-full items-center gap-2">
-                  <span
-                    className={cn(
-                      'size-1.5 shrink-0 rounded-full',
-                      n.tone === 'danger' && 'bg-danger',
-                      n.tone === 'warning' && 'bg-warning',
-                      n.tone === 'default' && 'bg-text-disabled',
-                    )}
-                    aria-hidden
+
+            <div className="max-h-[360px] overflow-y-auto">
+              {notifications.error !== null ? (
+                <p className="px-2 py-4 text-center text-2xs text-warning">
+                  {notifications.error}
+                </p>
+              ) : notifications.loading ? (
+                <p className="px-2 py-4 text-center text-2xs text-text-tertiary">Loading…</p>
+              ) : notifications.notifications.length === 0 ? (
+                <p className="px-2 py-4 text-center text-2xs text-text-tertiary">
+                  Nothing yet. Alerts will appear here.
+                </p>
+              ) : (
+                // Capped at eight: the bell is a glance, the centre is the list.
+                notifications.notifications.slice(0, 8).map((n) => (
+                  <NotificationItem
+                    key={n.id}
+                    notification={n}
+                    now={now}
+                    density="compact"
+                    onOpen={(opened) => {
+                      if (opened.readAt === null) void notifications.markRead([opened.id]);
+                    }}
                   />
-                  <span className="truncate text-xs font-medium text-text-primary">{n.title}</span>
-                  <span className="ml-auto shrink-0 font-mono text-2xs text-text-tertiary">
-                    {timeAgo(n.at, MOCK_NOW)}
-                  </span>
-                </div>
-                <span className="pl-3.5 text-2xs text-text-tertiary">{n.detail}</span>
-              </DropdownItem>
-            ))}
+                ))
+              )}
+            </div>
+
+            <DropdownSeparator className="mx-0" />
+            <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+              <button
+                type="button"
+                disabled={notifications.unread.total === 0}
+                onClick={() => { void notifications.markAllRead(); }}
+                className={cn(
+                  'inline-flex items-center gap-1 text-2xs text-text-tertiary transition-colors',
+                  'hover:text-text-secondary disabled:opacity-40 disabled:hover:text-text-tertiary',
+                )}
+              >
+                <CheckCheck className="size-3" aria-hidden />
+                Mark all read
+              </button>
+              <Link
+                href="/notifications"
+                className="text-2xs text-accent transition-colors hover:underline"
+              >
+                Open notification centre
+              </Link>
+            </div>
           </DropdownContent>
         </Dropdown>
       </div>

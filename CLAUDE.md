@@ -176,6 +176,22 @@ is actually held.
 | 4 | The dashboard is composed from the dispatch reads and shares its revision, so its counts cannot drift from the board it links to. | [dashboard §3](docs/architecture/10-dashboard.md) |
 | 26 | Loading, error, degraded-feed and empty are all distinct states; a partial dashboard is never rendered as if whole. | [dashboard §6](docs/architecture/10-dashboard.md) |
 
+### Notifications
+
+| Rules | Mechanism | Location |
+| --- | --- | --- |
+| 9, 10, 11 | A notification is a PUSH of information, so its audience is exactly the set of people who could already have seen the thing by looking. Recipients are DERIVED from membership and permission inside the transaction; no contract type has anywhere to put a recipient list, and no endpoint accepts one. The permission checked is the one that gates the screen. | [notifications §1](docs/architecture/12-notifications.md), `apps/api/src/modules/notifications/recipients.ts` |
+| 3, 4, 23 | Rows are written inside the caller's transaction — a rolled-back assignment leaves no "you were assigned" in anybody's bell — and delivery travels in the EXISTING `DispatchEmission` envelope, published by the route after the commit. No new publisher, no second real-time path. | `apps/api/src/modules/dispatch/dispatch.events.ts` |
+| 5, 6, 7 | The type catalogue is data: icon, tone, category and audibility are table entries, so adding a type is one line rather than a branch in five components. An unknown type renders generically instead of crashing a shipped client. | `packages/contracts/src/notifications.ts` |
+| 16 | Event payloads carry identifiers and a headline — never a note body, a description or a caller's phone number. The walkthrough searches every rendered notification screen for the two the fixture deliberately plants. | `apps/web/scripts/notification-check.mjs` |
+| 12 | `user:<id>` is refused to everybody but its owner on every delivery. No capability grants access to another person's stream, including a global administrator's — there is no operational reason, and it would be pure surveillance. | `apps/api/src/realtime/topics.ts` |
+| 21, 22 | The badge is one partial-index scan and a different request from the page; the socket is the fast path with a 30-second backstop behind it; read notifications are purged past the window and unread ones never are. | [notifications §7](docs/architecture/12-notifications.md) |
+| 26, 43 | Panic reaches four surfaces, none of which is sound: a toast, the bell, the centre, and the unfilterable alert bar already on the map and the dashboard. Sound is OFF by default, gated twice, synthesised rather than shipped, and allowed to fail silently. | [notifications §5](docs/architecture/12-notifications.md), `apps/web/lib/notifications/alert-tone.ts` |
+| 9, 44 | Panic cannot be muted — refused in the contracts, stripped by the API on the way in AND on the way out, and blocked by a DB CHECK so a hand-edited row cannot silence an operator either. The screen says why rather than disabling a control. | [notifications §5](docs/architecture/12-notifications.md) |
+| 34, 45 | The announcement is the ONE notification a human composes, so it is the one that is narrowed: audience derived, organization from the path, `critical` refused by schema and by service, and audited. It reports the count the SERVER returned, not the roster the screen rendered. | `apps/api/src/modules/notifications/announcement.service.ts` |
+| 27 | One `NotificationItem`, shared by the bell and the centre at two densities. | `apps/web/components/domain/notification-item.tsx` |
+| 40, 41 | The walkthrough is a release gate, and it earned its keep: it found that an operator with a membership but no `dispatch.view` rendered a dashboard whose poll could only be refused, reporting "lost contact with the server" while nothing was wrong. A refusal is an ANSWER, not an outage. | [notifications §8](docs/architecture/12-notifications.md), `apps/web/lib/dashboard.ts` |
+
 ### Global administration
 
 | Rules | Mechanism | Location |

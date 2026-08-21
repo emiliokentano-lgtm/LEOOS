@@ -247,6 +247,10 @@ resolves from the database; key rotation completes with no gap in telemetry.
 *Estimate: 1.5–2 weeks*
 
 - Global admin: user management, org management, org-lead grants, game servers ✅
+- Notification and alert system ✅ — panic, critical calls, assignments, crew
+  changes, announcements and administrative events, with a derived audience, a
+  notification centre, and sound that is off by default and never load-bearing;
+  see [12-notifications](12-notifications.md)
 - Audit log viewer with filtering by actor, org, action, entity, and outcome ✅
   — plus a derived severity and keyset paging; see
   [11-administration](11-administration.md)

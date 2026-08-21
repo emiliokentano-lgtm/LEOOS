@@ -34,7 +34,18 @@ export default async function DashboardPage() {
     (m) => m.organization.id === session.organizationId && m.status === 'active',
   );
 
-  if (!hasOrganization) {
+  /**
+   * A membership is NOT enough — `dispatch.view` is what the dashboard needs.
+   *
+   * An active member whose `dispatch.view` is denied has a membership and no
+   * dashboard, and rendering the live view for them started a poll that could
+   * only ever be refused. It reported "lost contact with the server" every few
+   * seconds, on a screen that was working exactly as designed. So the first
+   * snapshot is fetched here and its REFUSAL is treated as the answer it is.
+   */
+  const access = hasOrganization ? await fetchDashboard() : { kind: 'not-permitted' as const };
+
+  if (!hasOrganization || access.kind === 'not-permitted') {
     return (
       <PageContainer>
         <Panel>
@@ -42,17 +53,23 @@ export default async function DashboardPage() {
             icon={<ShieldCheck />}
             title="You have no operational dashboard"
             description={
-              'The dashboard shows one organization\'s incidents, units and personnel, '
-              + 'and this account is not a member of one. That is normal for an '
-              + 'administrator: administration is not organization-scoped.'
+              hasOrganization
+                ? 'The dashboard shows one organization\'s incidents, units and '
+                  + 'personnel, and this account does not hold the permission to view '
+                  + 'dispatch. Ask your organization\'s command staff if you need it.'
+                : 'The dashboard shows one organization\'s incidents, units and '
+                  + 'personnel, and this account is not a member of one. That is normal '
+                  + 'for an administrator: administration is not organization-scoped.'
             }
             action={
-              <Link
-                href={'/admin' as Route}
-                className="text-xs text-accent hover:underline"
-              >
-                Go to administration
-              </Link>
+              hasOrganization ? null : (
+                <Link
+                  href={'/admin' as Route}
+                  className="text-xs text-accent hover:underline"
+                >
+                  Go to administration
+                </Link>
+              )
             }
           />
         </Panel>
@@ -60,7 +77,7 @@ export default async function DashboardPage() {
     );
   }
 
-  const snapshot = await fetchDashboard();
-
-  return <DashboardView initialSnapshot={snapshot} />;
+  return (
+    <DashboardView initialSnapshot={access.kind === 'ok' ? access.snapshot : null} />
+  );
 }

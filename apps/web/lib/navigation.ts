@@ -44,6 +44,12 @@ export const NAVIGATION: NavSection[] = [
     items: [
       { href: '/dashboard', label: 'Dashboard', icon: 'LayoutDashboard', permission: null, shortcut: 'G D' },
       { href: '/search', label: 'Search', icon: 'Search', permission: null, shortcut: 'G S' },
+      /*
+       * No permission. A notification feed belongs to its owner and to nobody
+       * else, so there is nothing to gate: every account has one, and every
+       * route behind this link resolves its subject from the session.
+       */
+      { href: '/notifications', label: 'Notifications', icon: 'Bell', permission: null, shortcut: 'G N' },
       { href: '/map', label: 'Map', icon: 'Map', permission: 'map.view', shortcut: 'G M' },
       { href: '/dispatch', label: 'Dispatch', icon: 'Radio', permission: 'dispatch.view', shortcut: 'G L' },
     ],
@@ -109,6 +115,7 @@ export const NAVIGATION: NavSection[] = [
 export const PAGE_META: Record<string, { title: string; parent?: string }> = {
   dashboard: { title: 'Dashboard' },
   search: { title: 'Search' },
+  notifications: { title: 'Notifications' },
   map: { title: 'Live Map' },
   dispatch: { title: 'Dispatch' },
   persons: { title: 'Persons', parent: 'Records' },

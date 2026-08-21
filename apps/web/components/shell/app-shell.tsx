@@ -10,6 +10,7 @@ import { Sidebar } from './sidebar';
 import { TopBar } from './top-bar';
 import { StatusBar } from './status-bar';
 import { DutyStatusProvider } from './duty-status-context';
+import { NotificationProvider } from './notification-context';
 import { CommandPaletteProvider } from './command-palette';
 
 /**
@@ -50,7 +51,13 @@ export function AppShell({
     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
       <DutyStatusProvider>
         <CommandPaletteProvider sections={sections}>
+          {/*
+            * Toasts are OUTSIDE the notification provider, because the provider
+            * raises them: a live alert arriving over the socket becomes a toast,
+            * and a provider cannot use a context declared inside itself.
+            */}
           <ToastProvider>
+          <NotificationProvider>
             <div className="flex h-dvh w-full overflow-hidden bg-base">
               <Sidebar
                 sections={sections}
@@ -64,6 +71,7 @@ export function AppShell({
                 <StatusBar session={session} organization={organization} />
               </div>
             </div>
+          </NotificationProvider>
           </ToastProvider>
         </CommandPaletteProvider>
       </DutyStatusProvider>

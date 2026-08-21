@@ -18,6 +18,8 @@ import type {
 import type { DutyStatusKey } from '@leoos/contracts';
 import { OrganizationSettingsForm } from './settings-form';
 import { LeadManager } from './lead-manager';
+import { AnnouncementComposer } from './announcement-composer';
+import { useAuth } from '@/components/shell/auth-context';
 
 /**
  * Organization admin screen.
@@ -39,6 +41,7 @@ export function OrganizationView({
   const { organization: org, stats, leads, capabilities } = detail;
   const [tab, setTab] = React.useState('overview');
   const category = ORGANIZATION_CATEGORIES[org.category];
+  const auth = useAuth();
 
   return (
     <PageContainer>
@@ -113,6 +116,7 @@ export function OrganizationView({
             <TabsTrigger value="roles" count={roles?.length}>Roles</TabsTrigger>
             <TabsTrigger value="units" count={units?.length}>Units</TabsTrigger>
             <TabsTrigger value="vehicles" count={vehicles?.length}>Vehicles</TabsTrigger>
+            <TabsTrigger value="announce">Announce</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
           </TabsList>
         </Tabs>
@@ -131,6 +135,14 @@ export function OrganizationView({
         {tab === 'roles' ? <RolesPanel rows={roles} /> : null}
         {tab === 'units' ? <UnitsPanel rows={units} /> : null}
         {tab === 'vehicles' ? <VehiclesPanel rows={vehicles} /> : null}
+        {tab === 'announce' ? (
+          <AnnouncementComposer
+            organizationId={org.id}
+            organizationName={org.name}
+            memberCount={stats.activeMembers}
+            canAnnounce={auth.can('organization.announce')}
+          />
+        ) : null}
         {tab === 'settings' ? (
           <OrganizationSettingsForm organization={org} canEdit={capabilities.canEdit} />
         ) : null}
