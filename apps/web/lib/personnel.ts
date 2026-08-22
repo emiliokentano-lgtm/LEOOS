@@ -53,7 +53,18 @@ export interface PersonnelProfile extends PersonnelListItem {
   terminatedByName: string | null;
   terminationReason: string | null;
   currentVehicle: { plate: string; displayName: string | null } | null;
+  overrides: PersonnelOverride[];
   activity: PersonnelActivity[];
+}
+
+/** One standing exception to what the member's roles say. */
+export interface PersonnelOverride {
+  permissionKey: string;
+  effect: 'grant' | 'deny';
+  reason: string;
+  grantedByName: string | null;
+  createdAt: string;
+  expiresAt: string | null;
 }
 
 export interface PersonnelCapabilities {
@@ -64,6 +75,9 @@ export interface PersonnelCapabilities {
   canAssignRoles: boolean;
   canEdit: boolean;
   canSetCallsign: boolean;
+  canSetOverrides: boolean;
+  /** What the CALLER may hand out — their own ceiling, never the target's. */
+  grantablePermissions: string[];
   actorLevel: number | 'unbounded';
   actorUserId: string;
 }

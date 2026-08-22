@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { PermissionKey } from '@leoos/contracts';
 import {
-  can, canAssignRole, canChangeRolePermissions, canCreateRole, canDeleteRole, canEditRole,
-  canGrantPermissions, canManageMember, canMoveRole,
+  can, canAssignRole, canChangeRolePermissions, canClearPermissionOverride,
+  canCreateRole, canDeleteRole, canEditRole, canGrantPermissions, canManageMember,
+  canMoveRole, canSetPermissionOverride,
   canEditOrganization, canViewOrganization, canViewOrganizationSection,
   effectiveLevel, effectivePermissions, outranks, UNBOUNDED_LEVEL,
   type ActorContext, type RoleRef, type TargetContext,
@@ -576,5 +577,183 @@ describe('an Organization Lead with an inactive membership holds nothing', () =>
     const suspended = actor({ isOrgLead: true, membershipActive: false, level: UNBOUNDED_LEVEL });
     expect(canViewOrganization(suspended, ORG).allowed).toBe(false);
     expect(canManageMember(suspended, target()).allowed).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// H8 — per-member permission overrides
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('H8 — granting a permission to one person', () => {
+  const MEDICAL = 'persons.medical.view' as PermissionKey;
+  const ADMIN_KEY = 'admin.users' as PermissionKey;
+
+  const chief = (extra: Partial<ActorContext> = {}) => actor({
+    level: 90, permissions: new Set<PermissionKey>([MEDICAL]), ...extra,
+  });
+
+  it('allows a senior member to grant a permission they hold', () => {
+    expect(canSetPermissionOverride(chief(), target(), MEDICAL, 'grant').allowed).toBe(true);
+  });
+
+  it('REFUSES granting a permission the actor does not hold', () => {
+    const withoutIt = actor({ level: 90, permissions: new Set<PermissionKey>() });
+    const decision = canSetPermissionOverride(withoutIt, target(), MEDICAL, 'grant');
+    expect(decision.allowed).toBe(false);
+    expect(reasonOf(decision)).toBe('PERMISSION_NOT_HELD_BY_ACTOR');
+  });
+
+  it('REFUSES an override on somebody of equal rank', () => {
+    // H1 is strictly-greater-than. Peers are mutually immune, and an override
+    // is a management action like any other.
+    const peer = target({ level: 90 });
+    const decision = canSetPermissionOverride(chief(), peer, MEDICAL, 'grant');
+    expect(decision.allowed).toBe(false);
+    expect(reasonOf(decision)).toBe('TARGET_RANK_NOT_LOWER');
+  });
+
+  it('REFUSES an override on somebody senior', () => {
+    const senior = target({ level: 95 });
+    expect(canSetPermissionOverride(chief(), senior, MEDICAL, 'grant').allowed).toBe(false);
+  });
+
+  it('REFUSES writing an override for YOURSELF, which is the whole game', () => {
+    const self = target({ userId: 'actor', level: 10 });
+    const decision = canSetPermissionOverride(chief(), self, MEDICAL, 'grant');
+    expect(decision.allowed).toBe(false);
+    expect(reasonOf(decision)).toBe('SELF_ACTION_FORBIDDEN');
+  });
+
+  it('REFUSES an override on a member of another organization', () => {
+    const foreign = target({ organizationId: OTHER_ORG });
+    const decision = canSetPermissionOverride(chief(), foreign, MEDICAL, 'grant');
+    expect(decision.allowed).toBe(false);
+    expect(reasonOf(decision)).toBe('CROSS_ORGANIZATION');
+  });
+
+  it('REFUSES a GLOBAL-scope permission, whatever the rank', () => {
+    // An organization role cannot carry one, so an override for one would be a
+    // row that reads like a control and does nothing.
+    for (const effect of ['grant', 'deny'] as const) {
+      const decision = canSetPermissionOverride(chief(), target(), ADMIN_KEY, effect);
+      expect(decision.allowed, effect).toBe(false);
+      expect(reasonOf(decision), effect).toBe('GLOBAL_PERMISSION_ON_ORG_ROLE');
+    }
+  });
+
+  it('REFUSES a global-scope override even to an Organization Lead', () => {
+    const lead = actor({ isOrgLead: true, level: UNBOUNDED_LEVEL });
+    expect(canSetPermissionOverride(lead, target(), ADMIN_KEY, 'grant').allowed).toBe(false);
+  });
+
+  it('REFUSES an override written by somebody with no active membership', () => {
+    const suspended = chief({ membershipActive: false });
+    expect(canSetPermissionOverride(suspended, target(), MEDICAL, 'grant').allowed).toBe(false);
+  });
+
+  it('lets an Organization Lead grant anything organization-scoped in their own org', () => {
+    const lead = actor({ isOrgLead: true, level: UNBOUNDED_LEVEL });
+    expect(canSetPermissionOverride(lead, target(), MEDICAL, 'grant').allowed).toBe(true);
+  });
+
+  it('REFUSES an override on a global administrator', () => {
+    const admin = target({ isGlobalAdmin: true, level: 10 });
+    expect(canSetPermissionOverride(chief(), admin, MEDICAL, 'grant').allowed).toBe(false);
+  });
+});
+
+describe('H8 — a deny is not a grant', () => {
+  const MEDICAL = 'persons.medical.view' as PermissionKey;
+
+  it('lets a senior member DENY a permission they do not themselves hold', () => {
+    /**
+     * The asymmetry, stated as a test because it looks like a hole and is not.
+     *
+     * A deny only ever REDUCES the target's authority. Requiring the actor to
+     * hold the key first would mean a chief who does not personally use medical
+     * records could not stop a subordinate from using them — backwards, and
+     * inconsistent with roles, where a removal-only change is already allowed
+     * without holding the key.
+     */
+    const withoutIt = actor({ level: 90, permissions: new Set<PermissionKey>() });
+    expect(canSetPermissionOverride(withoutIt, target(), MEDICAL, 'deny').allowed).toBe(true);
+  });
+
+  it('still refuses a deny against somebody at or above the actor', () => {
+    // The rank check is not relaxed. A deny is not an attack on somebody senior.
+    const withoutIt = actor({ level: 90, permissions: new Set<PermissionKey>() });
+    for (const level of [90, 95]) {
+      expect(canSetPermissionOverride(withoutIt, target({ level }), MEDICAL, 'deny').allowed)
+        .toBe(false);
+    }
+  });
+
+  it('still refuses a deny against yourself', () => {
+    const withoutIt = actor({ level: 90, permissions: new Set<PermissionKey>() });
+    const self = target({ userId: 'actor', level: 10 });
+    expect(canSetPermissionOverride(withoutIt, self, MEDICAL, 'deny').allowed).toBe(false);
+  });
+});
+
+describe('H8 — clearing an override', () => {
+  const MEDICAL = 'persons.medical.view' as PermissionKey;
+
+  it('needs rank and scope, but not the permission itself', () => {
+    /**
+     * Clearing a DENY restores authority the member's own role already carried,
+     * which looks like an escalation and is not: that permission was put in the
+     * role by somebody with the authority to write it. Refusing here would mean
+     * a deny applied by a chief could never be lifted by anyone who did not
+     * personally hold the key.
+     */
+    const withoutIt = actor({ level: 90, permissions: new Set<PermissionKey>() });
+    expect(canClearPermissionOverride(withoutIt, target()).allowed).toBe(true);
+  });
+
+  it('refuses across organizations, at equal rank, and on yourself', () => {
+    const chief = actor({ level: 90, permissions: new Set<PermissionKey>([MEDICAL]) });
+    expect(canClearPermissionOverride(chief, target({ organizationId: OTHER_ORG })).allowed)
+      .toBe(false);
+    expect(canClearPermissionOverride(chief, target({ level: 90 })).allowed).toBe(false);
+    expect(canClearPermissionOverride(chief, target({ userId: 'actor' })).allowed).toBe(false);
+  });
+});
+
+describe('H8 — property: an override can never escalate the actor', () => {
+  it('never lets an actor grant themselves anything, at any rank or permission set', () => {
+    const keys = [
+      'persons.medical.view', 'personnel.hire', 'dispatch.close', 'roles.edit',
+      'admin.users', 'admin.audit_logs',
+    ] as PermissionKey[];
+
+    for (const level of [0, 10, 50, 90, 100, UNBOUNDED_LEVEL]) {
+      for (const isOrgLead of [false, true]) {
+        for (const key of keys) {
+          for (const effect of ['grant', 'deny'] as const) {
+            const a = actor({ level, isOrgLead, permissions: new Set(keys) });
+            const self = target({ userId: a.userId, level: 0 });
+            expect(
+              canSetPermissionOverride(a, self, key, effect).allowed,
+              `level ${level} lead ${isOrgLead} ${effect} ${key}`,
+            ).toBe(false);
+          }
+        }
+      }
+    }
+  });
+
+  it('never lets an actor grant a key outside their own set to anybody', () => {
+    const held = ['dispatch.view'] as PermissionKey[];
+    const notHeld = ['persons.medical.view', 'personnel.hire', 'roles.edit'] as PermissionKey[];
+
+    for (const level of [10, 50, 90, 100]) {
+      const a = actor({ level, permissions: new Set(held) });
+      for (const key of notHeld) {
+        expect(
+          canSetPermissionOverride(a, target({ level: 0 }), key, 'grant').allowed,
+          `${key} at ${level}`,
+        ).toBe(false);
+      }
+    }
   });
 });

@@ -270,6 +270,81 @@ export function canChangeMemberRole(
 }
 
 /**
+ * H8 — a per-member permission override.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHY THIS IS A SEPARATE DECISION AND NOT JUST `canGrantPermissions`
+ *
+ * An override is the ONE place authority is handed to a person rather than to a
+ * rank. Everything else in this kernel routes through a role: promote somebody
+ * and they get the role's permissions; edit the role and every holder moves
+ * together. That is the property engineering rules 5–8 are about, and an
+ * override is a deliberate hole in it — the exception a chief writes when one
+ * detective needs medical records for one investigation.
+ *
+ * So it carries the same ceiling as a role grant AND the rank check a role grant
+ * does not need:
+ *
+ *   · `canManageMember` — H1 rank, H6 self, H7 scope, and the lead/global-admin
+ *     immunities. Without this an officer could write themselves an override,
+ *     which is the whole game.
+ *   · `canGrantPermissions` — H4 subset. An actor may only hand out what they
+ *     hold, so authority still cannot be bootstrapped from nothing, and a
+ *     global-scope key is refused outright.
+ *
+ * A DENY IS NOT A GRANT, and is deliberately treated differently.
+ *
+ * Denying a permission REDUCES the target's authority. Requiring the actor to
+ * hold a permission before they may take it away would mean a chief who does not
+ * personally hold `persons.medical.view` could not stop a subordinate from using
+ * it — which is backwards, and inconsistent with roles, where a removal-only
+ * change is already allowed without holding the key (`canChangeRolePermissions`).
+ * The rank check still applies, so a deny is never an attack on somebody senior.
+ *
+ * A global-scope key is refused for BOTH effects. Not because a deny would
+ * escalate anything, but because an organization role cannot carry one in the
+ * first place: storing a deny for a key that could never apply here would be a
+ * row that reads like a control and does nothing.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+export function canSetPermissionOverride(
+  actor: ActorContext,
+  target: TargetContext,
+  key: PermissionKey,
+  effect: 'grant' | 'deny',
+): Decision {
+  const manage = canManageMember(actor, target);
+  if (!manage.allowed) return manage;
+
+  if (isGlobalPermission(key)) {
+    return deny('GLOBAL_PERMISSION_ON_ORG_ROLE', key);
+  }
+  if (effect === 'deny') return ALLOW;
+  return canGrantPermissions(actor, [key]);
+}
+
+/**
+ * Clearing an override returns the member to what their ROLES say.
+ *
+ * Rank and scope only. The subset rule does not apply in either direction:
+ * clearing a grant takes authority away, and clearing a deny restores authority
+ * the member's own role already carried — in neither case is the actor handing
+ * out something of their own.
+ *
+ * That second case deserves stating, because it is the one that looks like an
+ * escalation and is not: the permission being restored was granted by a role
+ * somebody with the authority to write that role already approved. Refusing it
+ * here would mean a deny could be applied by a chief and then never lifted by
+ * anyone who did not personally hold the key.
+ */
+export function canClearPermissionOverride(
+  actor: ActorContext,
+  target: TargetContext,
+): Decision {
+  return canManageMember(actor, target);
+}
+
+/**
  * Effective hierarchy level from a set of assigned roles.
  *
  * MAXIMUM, not sum: holding a junior specialist role alongside Lieutenant must

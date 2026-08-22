@@ -1,16 +1,17 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
-  AUDIT_ACTIONS, memberRole, memberStatus, memberStatusHistory, organization,
-  organizationMember, role, rolePermission, unitMember, userAccount,
+  AUDIT_ACTIONS, memberPermissionOverride, memberRole, memberStatus, memberStatusHistory,
+  organization, organizationMember, role, rolePermission, unitMember, userAccount,
   type Database,
 } from '@leoos/db';
 import {
-  canAssignRole, canManageMember, effectiveLevel, requirePermission,
+  canAssignRole, canClearPermissionOverride, canManageMember, canSetPermissionOverride,
+  effectiveLevel, requirePermission,
   type ActorContext, type Decision, type TargetContext,
 } from '@leoos/authz-core';
-import type { PermissionKey } from '@leoos/contracts';
-import { ConflictError, ForbiddenError, NotFoundError } from '../../lib/errors.js';
+import { PERMISSION_KEYS, type PermissionKey } from '@leoos/contracts';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../../lib/errors.js';
 import { withDenialAudit, writeAudit } from '../../lib/audit.js';
 import { bumpPermissionVersion, loadActorContextLocked } from '../auth/context.service.js';
 import { revokeAllSessions } from '../auth/session.service.js';
@@ -798,6 +799,198 @@ export async function editMember(
           status: input.status ?? target.status,
         },
         metadata: { targetName: target.displayName },
+        ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
+      });
+    }),
+  );
+}
+
+// ── Per-member permission overrides ────────────────────────────────────────
+//
+// The exception to the role model, and the only place authority is handed to a
+// PERSON rather than to a rank. See `canSetPermissionOverride` in the kernel for
+// why it is a separate decision; this layer adds the things a kernel cannot
+// know — that the key exists, that the member is active, and that a reason was
+// written down.
+
+export interface SetOverrideInput {
+  memberId: string;
+  permissionKey: string;
+  effect: 'grant' | 'deny';
+  reason: string;
+  /** When the exception lapses. `null` means it stands until cleared. */
+  expiresAt: Date | null;
+}
+
+export async function setMemberPermissionOverride(
+  db: Database,
+  actorUserId: string,
+  input: SetOverrideInput,
+  meta: RequestMeta = {},
+): Promise<void> {
+  await withDenialAudit(
+    db,
+    () => ({
+      action: AUDIT_ACTIONS.PERMISSION_OVERRIDE_SET,
+      actorUserId, entityType: 'organization_member', entityId: input.memberId,
+      metadata: { permissionKey: input.permissionKey, effect: input.effect },
+      ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
+    }),
+    () => db.transaction(async (tx) => {
+      const pre = await loadTarget(tx, input.memberId);
+      if (!pre) throw new NotFoundError('member');
+
+      await lockMemberships(tx, [input.memberId]);
+      await lockMembershipsByUser(tx, pre.organizationId, [actorUserId]);
+
+      const actor = await loadActorContextLocked(tx, actorUserId, pre.organizationId);
+
+      const target = await loadTarget(tx, input.memberId);
+      if (!target) throw new NotFoundError('member');
+
+      /**
+       * The key is checked against the CATALOGUE, not merely against the foreign
+       * key. The column references `permission`, so an unknown key would fail as
+       * a constraint violation — a 500 describing a foreign key rather than a
+       * 400 naming the field, which is the same shape of problem as T1 and T2.
+       */
+      if (!(PERMISSION_KEYS as readonly string[]).includes(input.permissionKey)) {
+        throw new ValidationError({ permissionKey: `Unknown permission: ${input.permissionKey}` });
+      }
+      const key = input.permissionKey as PermissionKey;
+
+      enforce(canSetPermissionOverride(actor, toTargetContext(target), key, input.effect),
+        'set permission override');
+      enforce(requirePermission(actor, 'roles.permissions'), 'set permission override');
+
+      /**
+       * AN OVERRIDE ON A TERMINATED MEMBERSHIP IS INERT AND MISLEADING.
+       *
+       * `loadMemberships` gives a non-active member no permissions at all, so
+       * the row would sit in the table looking like a grant and doing nothing —
+       * and would silently come alive if they were ever reinstated. Refused
+       * rather than stored.
+       */
+      if (target.status !== 'active') {
+        throw new ConflictError(
+          'MEMBER_NOT_ACTIVE',
+          `${target.displayName} is ${target.status}. Reinstate them before writing an exception.`,
+        );
+      }
+
+      if (input.expiresAt !== null && input.expiresAt.getTime() <= Date.now()) {
+        throw new ValidationError({ expiresAt: 'The expiry must be in the future.' });
+      }
+
+      const existing = await tx
+        .select({
+          effect: memberPermissionOverride.effect,
+          expiresAt: memberPermissionOverride.expiresAt,
+        })
+        .from(memberPermissionOverride)
+        .where(and(
+          eq(memberPermissionOverride.memberId, input.memberId),
+          eq(memberPermissionOverride.permissionKey, key),
+        ))
+        .limit(1);
+
+      await tx
+        .insert(memberPermissionOverride)
+        .values({
+          memberId: input.memberId,
+          permissionKey: key,
+          effect: input.effect,
+          reason: input.reason,
+          grantedBy: actorUserId,
+          expiresAt: input.expiresAt,
+        })
+        .onConflictDoUpdate({
+          target: [memberPermissionOverride.memberId, memberPermissionOverride.permissionKey],
+          set: {
+            effect: input.effect,
+            reason: input.reason,
+            grantedBy: actorUserId,
+            expiresAt: input.expiresAt,
+          },
+        });
+
+      await bumpPermissionVersion(tx, target.userId);
+
+      await writeAudit(tx, {
+        action: AUDIT_ACTIONS.PERMISSION_OVERRIDE_SET,
+        actorUserId, organizationId: target.organizationId,
+        entityType: 'organization_member', entityId: input.memberId,
+        before: existing[0]
+          ? { effect: existing[0].effect, expiresAt: existing[0].expiresAt?.toISOString() ?? null }
+          : { effect: null },
+        after: { effect: input.effect, expiresAt: input.expiresAt?.toISOString() ?? null },
+        metadata: {
+          targetName: target.displayName,
+          targetUsername: target.username,
+          permissionKey: key,
+          reason: input.reason,
+          actorLevel: actor.level === Number.POSITIVE_INFINITY ? 'unbounded' : actor.level,
+        },
+        ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
+      });
+    }),
+  );
+}
+
+export async function clearMemberPermissionOverride(
+  db: Database,
+  actorUserId: string,
+  input: { memberId: string; permissionKey: string },
+  meta: RequestMeta = {},
+): Promise<void> {
+  await withDenialAudit(
+    db,
+    () => ({
+      action: AUDIT_ACTIONS.PERMISSION_OVERRIDE_CLEARED,
+      actorUserId, entityType: 'organization_member', entityId: input.memberId,
+      metadata: { permissionKey: input.permissionKey },
+      ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
+    }),
+    () => db.transaction(async (tx) => {
+      const pre = await loadTarget(tx, input.memberId);
+      if (!pre) throw new NotFoundError('member');
+
+      await lockMemberships(tx, [input.memberId]);
+      await lockMembershipsByUser(tx, pre.organizationId, [actorUserId]);
+
+      const actor = await loadActorContextLocked(tx, actorUserId, pre.organizationId);
+
+      const target = await loadTarget(tx, input.memberId);
+      if (!target) throw new NotFoundError('member');
+
+      enforce(canClearPermissionOverride(actor, toTargetContext(target)),
+        'clear permission override');
+      enforce(requirePermission(actor, 'roles.permissions'), 'clear permission override');
+
+      const removed = await tx
+        .delete(memberPermissionOverride)
+        .where(and(
+          eq(memberPermissionOverride.memberId, input.memberId),
+          eq(memberPermissionOverride.permissionKey, input.permissionKey),
+        ))
+        .returning({ effect: memberPermissionOverride.effect });
+
+      if (removed.length === 0) throw new NotFoundError('override');
+
+      await bumpPermissionVersion(tx, target.userId);
+
+      await writeAudit(tx, {
+        action: AUDIT_ACTIONS.PERMISSION_OVERRIDE_CLEARED,
+        actorUserId, organizationId: target.organizationId,
+        entityType: 'organization_member', entityId: input.memberId,
+        before: { effect: removed[0]!.effect },
+        after: { effect: null },
+        metadata: {
+          targetName: target.displayName,
+          targetUsername: target.username,
+          permissionKey: input.permissionKey,
+          actorLevel: actor.level === Number.POSITIVE_INFINITY ? 'unbounded' : actor.level,
+        },
         ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
       });
     }),

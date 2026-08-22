@@ -294,7 +294,30 @@ H6  A ≠ T for every management action, unless the action is on the
     explicit self-service allowlist
 H7  every check is scoped to O; membership in another organization
     contributes nothing
+H8  override(A, T, P, grant) requires H1 ∧ H6 ∧ H7 ∧ H4 ∧ P is org-scoped
+    override(A, T, P, deny)  requires H1 ∧ H6 ∧ H7      ∧ P is org-scoped
 ```
+
+**H8 is the only place authority is handed to a PERSON rather than to a rank**,
+so it carries every other rule at once — and the two effects differ deliberately.
+
+A **grant** confers authority, so the subset rule applies: an actor may only hand
+out what they hold. A **deny** only ever *reduces* the target's authority, so it
+does not. Requiring the actor to hold a permission before they may take it away
+would mean a chief who does not personally use medical records could not stop a
+subordinate from using them, which is backwards — and inconsistent with roles,
+where a removal-only change is already allowed without holding the key.
+
+Global-scope keys are refused for **both** effects. Not because a deny would
+escalate anything, but because an organization role cannot carry one at all: a
+stored deny for a key that could never apply here would be a row that reads like
+a control and does nothing.
+
+Clearing an override needs H1, H6 and H7 only. Clearing a *deny* restores a
+permission the member's own role already carried — put there by somebody with the
+authority to write that role — so requiring the subset rule would mean a deny
+applied by a chief could never be lifted by anyone who did not personally hold
+the key.
 
 Consequences worth stating explicitly, because each is a real attack:
 
@@ -305,6 +328,10 @@ Consequences worth stating explicitly, because each is a real attack:
 - **No permission manufacture.** H4 means a Sergeant with `roles.edit` can create
   a role, but only containing permissions the Sergeant already holds, at a level
   strictly below the Sergeant's own. They cannot bootstrap authority they lack.
+- **No exception laundering.** H8 stops "write myself an override" (H6), "write
+  one for a peer" (H1), and "hand out something I do not hold" (H4). The property
+  is asserted over the whole permission catalogue at every level, including
+  unbounded, rather than at a few sampled points.
 - **No role laundering.** H3 stops "edit the Chief role to add my permissions,
   then assign it to myself".
 - **No cross-org leverage.** H7 means being FIB Director grants nothing in PD.

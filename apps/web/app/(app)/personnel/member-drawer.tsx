@@ -4,13 +4,17 @@ import * as React from 'react';
 import {
   Building2, Car, IdCard, Mail, NotebookPen, Radio, ShieldCheck, UserMinus,
 } from 'lucide-react';
-import type { DutyStatusKey } from '@leoos/contracts';
 import {
-  Alert, Badge, Button, Drawer, DutyStatusBadge, LoadingState, Tooltip,
+  PERMISSION_KEYS, permissionMeta, type DutyStatusKey, type PermissionKey,
+} from '@leoos/contracts';
+import {
+  Alert, Badge, Button, Drawer, DutyStatusBadge, Field, Input, LoadingState, Select, Tooltip,
+  useToast,
 } from '@/components/ui';
 import { formatDateTime, timeAgo } from '@/lib/utils';
+import { clearOverrideAction, setOverrideAction } from '@/lib/personnel-actions';
 import type {
-  PersonnelCapabilities, PersonnelListItem, PersonnelProfile,
+  PersonnelCapabilities, PersonnelListItem, PersonnelOverride, PersonnelProfile,
 } from '@/lib/personnel';
 import type { PersonnelDialog } from './personnel-view';
 
@@ -47,6 +51,15 @@ export function MemberDrawer({
     { memberId: string; profile: PersonnelProfile | null } | null
   >(null);
 
+  /**
+   * Bumped by anything that changes the record from inside the drawer, so the
+   * profile is re-read rather than patched locally. The server is the only
+   * thing that knows what the change actually produced — a refused override
+   * leaves the list exactly as it was, and a local patch would show it applied.
+   */
+  const [revision, setRevision] = React.useState(0);
+  const reload = React.useCallback(() => { setRevision((n) => n + 1); }, []);
+
   React.useEffect(() => {
     if (!memberId) return;
 
@@ -59,7 +72,7 @@ export function MemberDrawer({
       .catch(() => { if (!cancelled) setLoaded({ memberId, profile: null }); });
 
     return () => { cancelled = true; };
-  }, [organizationId, memberId]);
+  }, [organizationId, memberId, revision]);
 
   const current = memberId && loaded?.memberId === memberId ? loaded : null;
   const profile = current?.profile ?? null;
@@ -88,12 +101,26 @@ export function MemberDrawer({
         </Alert>
       ) : null}
 
-      {profile ? <ProfileBody profile={profile} /> : null}
+      {profile ? (
+        <ProfileBody
+          profile={profile}
+          organizationId={organizationId}
+          capabilities={capabilities}
+          onChanged={reload}
+        />
+      ) : null}
     </Drawer>
   );
 }
 
-function ProfileBody({ profile }: { profile: PersonnelProfile }) {
+function ProfileBody({
+  profile, organizationId, capabilities, onChanged,
+}: {
+  profile: PersonnelProfile;
+  organizationId: string;
+  capabilities: PersonnelCapabilities;
+  onChanged: () => void;
+}) {
   const terminated = profile.status === 'terminated';
 
   return (
@@ -193,6 +220,15 @@ function ProfileBody({ profile }: { profile: PersonnelProfile }) {
         </section>
       ) : null}
 
+      <OverridesSection
+        organizationId={organizationId}
+        memberId={profile.memberId}
+        overrides={profile.overrides}
+        capabilities={capabilities}
+        isSelf={capabilities.actorUserId === profile.userId}
+        onChanged={onChanged}
+      />
+
       <section className="flex flex-col gap-2">
         <SectionTitle>Activity</SectionTitle>
         <p className="text-2xs text-text-tertiary">
@@ -287,6 +323,220 @@ function DrawerActions({
   );
 }
 
+/**
+ * Standing exceptions to what this member's roles say.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE SCREEN'S JOB HERE IS TO MAKE THE EXCEPTION VISIBLE, NOT TO ENFORCE IT
+ *
+ * Every rule below is decided server-side, inside the transaction, with both
+ * membership rows locked — the rank check, the subset rule, the global-scope
+ * refusal. Nothing here is a security control (engineering rule 9), and the
+ * list is deliberately shown to anyone who can read the profile even when they
+ * cannot change it: an exception nobody can see is how a quiet grant survives.
+ *
+ * What the screen DOES add is the ceiling. The permission picker offers only
+ * what the caller may actually hand out, and says so — offering a control the
+ * server will refuse is worse than offering none.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+function OverridesSection({
+  organizationId, memberId, overrides, capabilities, isSelf, onChanged,
+}: {
+  organizationId: string;
+  memberId: string;
+  overrides: PersonnelOverride[];
+  capabilities: PersonnelCapabilities;
+  isSelf: boolean;
+  onChanged: () => void;
+}) {
+  const toast = useToast();
+  const [adding, setAdding] = React.useState(false);
+  const [pending, setPending] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [permissionKey, setPermissionKey] = React.useState('');
+  const [effect, setEffect] = React.useState('grant');
+  const [reason, setReason] = React.useState('');
+  const [expiresAt, setExpiresAt] = React.useState('');
+
+  // H6 again, cosmetically: nobody writes an exception for themselves, and the
+  // form is not offered rather than being offered and refused.
+  const mayEdit = capabilities.canSetOverrides && !isSelf;
+
+  const options = React.useMemo(() => {
+    const held = new Set(overrides.map((o) => o.permissionKey));
+    return capabilities.grantablePermissions
+      .filter((key) => !held.has(key))
+      .map((key) => ({ value: key, label: labelFor(key) }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [capabilities.grantablePermissions, overrides]);
+
+  const reset = () => {
+    setAdding(false); setPermissionKey(''); setEffect('grant');
+    setReason(''); setExpiresAt(''); setError(null);
+  };
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true); setError(null);
+    const data = new FormData();
+    data.set('permissionKey', permissionKey);
+    data.set('effect', effect);
+    data.set('reason', reason);
+    data.set('expiresAt', expiresAt);
+    const result = await setOverrideAction(
+      organizationId, memberId, { status: 'idle' }, data,
+    );
+    setPending(false);
+    if (result.status === 'error') { setError(result.message ?? 'Request failed.'); return; }
+    toast.push({ tone: 'success', title: result.message ?? 'Exception saved.' });
+    reset();
+    onChanged();
+  }
+
+  async function remove(key: string) {
+    setPending(true); setError(null);
+    const result = await clearOverrideAction(organizationId, memberId, key);
+    setPending(false);
+    if (result.status === 'error') { setError(result.message ?? 'Request failed.'); return; }
+    toast.push({ tone: 'success', title: result.message ?? 'Exception removed.' });
+    onChanged();
+  }
+
+  return (
+    <section className="flex flex-col gap-2" data-section="overrides">
+      <div className="flex items-baseline justify-between gap-2">
+        <SectionTitle>Permission exceptions</SectionTitle>
+        {mayEdit && !adding ? (
+          <Button size="sm" variant="ghost" onClick={() => setAdding(true)}>Add</Button>
+        ) : null}
+      </div>
+      <p className="text-2xs text-text-tertiary">
+        Granted or withheld for this person specifically, on top of what their rank carries.
+      </p>
+
+      {overrides.length === 0 ? (
+        <p className="text-xs text-text-tertiary">None — this member holds exactly what their roles give them.</p>
+      ) : (
+        <ul className="flex flex-col gap-1.5">
+          {overrides.map((o) => (
+            <li
+              key={o.permissionKey}
+              className="flex flex-col gap-1 rounded-md border border-border-subtle bg-surface-raised p-2"
+            >
+              <div className="flex items-baseline gap-2">
+                <Badge size="sm" variant={o.effect === 'grant' ? 'success' : 'danger'}>
+                  {o.effect === 'grant' ? 'Granted' : 'Denied'}
+                </Badge>
+                <span className="min-w-0 flex-1 break-words text-xs text-text-primary">
+                  {labelFor(o.permissionKey)}
+                </span>
+                {mayEdit ? (
+                  <Button
+                    size="sm" variant="ghost" disabled={pending}
+                    onClick={() => { void remove(o.permissionKey); }}
+                  >
+                    Remove
+                  </Button>
+                ) : null}
+              </div>
+              <p className="break-words text-2xs text-text-secondary">{o.reason}</p>
+              <p className="text-2xs text-text-tertiary">
+                {o.grantedByName ? `by ${o.grantedByName} · ` : ''}
+                {timeAgo(o.createdAt)}
+                {o.expiresAt ? ` · lapses ${formatDateTime(o.expiresAt)}` : ' · until removed'}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {error ? <Alert tone="danger" title="Could not change the exception">{error}</Alert> : null}
+
+      {mayEdit && adding ? (
+        <form onSubmit={submit} className="flex flex-col gap-2 rounded-md border border-border-subtle p-2">
+          <Field label="Permission" htmlFor="override-permission" required>
+            <Select
+              id="override-permission"
+              value={permissionKey}
+              onValueChange={setPermissionKey}
+              placeholder={options.length === 0 ? 'Nothing left to add' : 'Choose a permission…'}
+              options={options}
+            />
+          </Field>
+          <Field
+            label="Effect"
+            htmlFor="override-effect"
+            hint="Deny removes it even when their rank carries it."
+          >
+            <Select
+              id="override-effect"
+              value={effect}
+              onValueChange={setEffect}
+              options={[
+                { value: 'grant', label: 'Grant to this person' },
+                { value: 'deny', label: 'Deny to this person' },
+              ]}
+            />
+          </Field>
+          <Field
+            label="Reason"
+            htmlFor="override-reason"
+            required
+            hint="Recorded in the audit log. Six months from now this is the only thing separating an approval from a mistake."
+          >
+            <Input
+              id="override-reason"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. Vinewood case, approved by the chief"
+            />
+          </Field>
+          <Field
+            label="Lapses"
+            htmlFor="override-expires"
+            hint="Optional. Left blank the exception stands until somebody removes it."
+          >
+            <Input
+              id="override-expires"
+              type="datetime-local"
+              value={expiresAt}
+              onChange={(e) => setExpiresAt(e.target.value)}
+            />
+          </Field>
+          <div className="flex justify-end gap-2">
+            <Button type="button" size="sm" variant="ghost" onClick={reset} disabled={pending}>
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" disabled={pending || !permissionKey}>
+              {pending ? 'Saving…' : 'Save exception'}
+            </Button>
+          </div>
+        </form>
+      ) : null}
+
+      {capabilities.canSetOverrides && isSelf ? (
+        <p className="text-2xs text-text-tertiary">
+          You cannot write an exception for your own record.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * The catalogue's own words where it has them, the raw key where it does not.
+ *
+ * A client can meet a key its catalogue does not know — a server ahead of a
+ * cached bundle — and showing the key is a worse label but a better outcome
+ * than crashing the drawer.
+ */
+const KNOWN_PERMISSIONS = new Set<string>(PERMISSION_KEYS);
+
+function labelFor(key: string): string {
+  return KNOWN_PERMISSIONS.has(key) ? permissionMeta(key as PermissionKey).label : key;
+}
+
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
     <h3 className="text-2xs font-semibold uppercase tracking-wide text-text-tertiary">
@@ -325,6 +575,8 @@ function humanizeAction(action: string): string {
     'personnel.callsign_changed': 'Callsign changed',
     'role.assigned': 'Role assigned',
     'role.unassigned': 'Role removed',
+    'permission.override_set': 'Permission exception set',
+    'permission.override_cleared': 'Permission exception removed',
   };
   return known[action] ?? action.replace(/^[a-z_]+\./, '').replace(/_/g, ' ');
 }

@@ -167,6 +167,22 @@ export interface PersonnelProfile extends PersonnelRow {
   terminatedByName: string | null;
   terminationReason: string | null;
   currentVehicle: { plate: string; displayName: string | null } | null;
+  /**
+   * The exceptions written against this person, as they STAND.
+   *
+   * Expired rows are excluded by the same predicate identity resolution uses, so
+   * the screen cannot show an exception that is no longer in force. They are
+   * kept in the table rather than deleted — an expired exception is a record of
+   * something that was once approved, and the audit trail refers to it.
+   */
+  overrides: {
+    permissionKey: string;
+    effect: 'grant' | 'deny';
+    reason: string;
+    grantedByName: string | null;
+    createdAt: string;
+    expiresAt: string | null;
+  }[];
   activity: {
     at: string;
     action: string;
@@ -265,6 +281,26 @@ export async function getPersonnelProfile(
     .orderBy(desc(auditLog.occurredAt))
     .limit(30);
 
+  const overrideRows = await db.execute<{
+    permission_key: string;
+    effect: 'grant' | 'deny';
+    reason: string;
+    granted_by_name: string | null;
+    // `db.execute` returns driver values, and postgres-js hands back timestamps
+    // as strings here rather than as Date objects — unlike the query builder,
+    // which maps them. Typed as what actually arrives.
+    created_at: string;
+    expires_at: string | null;
+  }>(sql`
+    SELECT po.permission_key, po.effect, po.reason,
+           u.display_name AS granted_by_name, po.created_at, po.expires_at
+      FROM member_permission_override po
+      LEFT JOIN user_account u ON u.id = po.granted_by
+     WHERE po.member_id = ${memberId}
+       AND (po.expires_at IS NULL OR po.expires_at > now())
+     ORDER BY po.permission_key
+  `);
+
   return {
     ...row,
     hierarchyLevel: Number(row.hierarchyLevel),
@@ -272,6 +308,14 @@ export async function getPersonnelProfile(
     leftAt: row.leftAt?.toISOString() ?? null,
     roles,
     currentVehicle,
+    overrides: overrideRows.map((o) => ({
+      permissionKey: o.permission_key,
+      effect: o.effect,
+      reason: o.reason,
+      grantedByName: o.granted_by_name,
+      createdAt: new Date(o.created_at).toISOString(),
+      expiresAt: o.expires_at === null ? null : new Date(o.expires_at).toISOString(),
+    })),
     activity: activity.map((a) => {
       const md = (a.metadata ?? {}) as Record<string, unknown>;
       const parts: string[] = [];

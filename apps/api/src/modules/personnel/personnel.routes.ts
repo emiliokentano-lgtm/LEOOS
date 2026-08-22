@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { canViewOrganizationSection, UNBOUNDED_LEVEL } from '@leoos/authz-core';
+import { PERMISSION_KEYS, isGlobalPermission } from '@leoos/contracts';
 import { NotFoundError } from '../../lib/errors.js';
 import type { RequestMeta } from '../auth/auth.service.js';
 import {
@@ -8,8 +9,8 @@ import {
   memberBelongsToOrganization,
 } from './personnel.read.js';
 import {
-  addMemberRole, changeMemberRank, editMember, hireMember, removeMemberRole,
-  terminateMember,
+  addMemberRole, changeMemberRank, clearMemberPermissionOverride, editMember, hireMember,
+  removeMemberRole, setMemberPermissionOverride, terminateMember,
 } from './personnel.service.js';
 import {
   toPersonnelListItemDto, toPersonnelProfileDto,
@@ -37,6 +38,33 @@ const memberParam = z.object({ organizationId: z.uuid(), memberId: z.uuid() });
 const memberRoleParam = z.object({
   organizationId: z.uuid(), memberId: z.uuid(), roleId: z.uuid(),
 });
+
+/**
+ * The permission key is a path segment, so it is bounded and pattern-checked
+ * rather than left as a free string: it reaches a `LIKE`-free equality on an
+ * indexed column, but an unbounded path segment is still an unbounded path
+ * segment. The catalogue membership check happens in the service, where the
+ * refusal can name the field.
+ */
+const memberOverrideParam = z.object({
+  organizationId: z.uuid(),
+  memberId: z.uuid(),
+  permissionKey: z.string().min(1).max(64).regex(/^[a-z0-9_.]+$/),
+});
+
+const overrideSchema = z.object({
+  effect: z.enum(['grant', 'deny']),
+  /**
+   * REQUIRED, and with a floor.
+   *
+   * An override is a deliberate exception to the rank model. Six months later
+   * the only thing separating "the chief approved this for the Vinewood case"
+   * from "somebody clicked the wrong row" is this sentence, so it is not
+   * optional and "x" is not an answer.
+   */
+  reason: z.string().trim().min(8).max(300),
+  expiresAt: z.iso.datetime().nullish(),
+}).strict();
 
 const listQuery = z.object({
   search: z.string().max(120).optional(),
@@ -151,6 +179,19 @@ export default async function personnelRoutes(app: FastifyInstance): Promise<voi
       canAssignRoles: actor.isGlobalAdmin || actor.isOrgLead || actor.permissions.has('roles.assign'),
       canEdit: actor.isGlobalAdmin || actor.isOrgLead || actor.permissions.has('personnel.edit'),
       canSetCallsign: actor.isGlobalAdmin || actor.isOrgLead || actor.permissions.has('personnel.callsign'),
+      canSetOverrides:
+        actor.isGlobalAdmin || actor.isOrgLead || actor.permissions.has('roles.permissions'),
+      /**
+       * A global administrator or an Organization Lead may hand out any
+       * ORGANIZATION-scoped key; everyone else is bounded by their own set. The
+       * global-scope keys are filtered out for all three, because an
+       * organization member cannot carry one at all — offering it would be
+       * offering a control the server refuses.
+       */
+      grantablePermissions: (actor.isGlobalAdmin || actor.isOrgLead
+        ? PERMISSION_KEYS
+        : PERMISSION_KEYS.filter((key) => actor.permissions.has(key))
+      ).filter((key) => !isGlobalPermission(key)),
       actorLevel: actor.level === UNBOUNDED_LEVEL ? 'unbounded' : actor.level,
       actorUserId: actor.userId,
     };
@@ -268,6 +309,41 @@ export default async function personnelRoutes(app: FastifyInstance): Promise<voi
       app.db, request.auth!.userId, { memberId, roleId }, meta(request),
     );
     return reply.send({ removed: true });
+  });
+
+  // ── Per-member permission overrides ──────────────────────────────────────
+  //
+  // PUT, not POST: an override is identified by (member, permission), so writing
+  // one twice is the same override with a new effect rather than a second row.
+  // Idempotent by construction, which matters for a control an operator may
+  // click twice on a slow connection.
+  app.put('/:memberId/overrides/:permissionKey', async (request, reply) => {
+    const { organizationId, memberId, permissionKey } = memberOverrideParam.parse(request.params);
+    const body = overrideSchema.parse(request.body);
+    await requireWriteScope(request, organizationId, memberId);
+
+    await setMemberPermissionOverride(
+      app.db, request.auth!.userId,
+      {
+        memberId,
+        permissionKey,
+        effect: body.effect,
+        reason: body.reason,
+        expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
+      },
+      meta(request),
+    );
+    return reply.send({ set: true });
+  });
+
+  app.delete('/:memberId/overrides/:permissionKey', async (request, reply) => {
+    const { organizationId, memberId, permissionKey } = memberOverrideParam.parse(request.params);
+    await requireWriteScope(request, organizationId, memberId);
+
+    await clearMemberPermissionOverride(
+      app.db, request.auth!.userId, { memberId, permissionKey }, meta(request),
+    );
+    return reply.send({ cleared: true });
   });
 
   // ── Edit details / callsign ──────────────────────────────────────────────

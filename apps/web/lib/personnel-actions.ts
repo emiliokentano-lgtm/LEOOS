@@ -214,3 +214,69 @@ export async function setCallsignAction(
   refresh();
   return { status: 'success', message: callsign ? `Callsign set to ${callsign}.` : 'Callsign cleared.' };
 }
+
+// ── Per-member permission overrides ────────────────────────────────────────
+//
+// The permission key travels in the PATH, like every other identifier here, and
+// the API re-decides the whole thing — rank, scope, the subset rule — inside the
+// transaction. What the browser sends is the effect, the reason and an optional
+// expiry.
+
+export async function setOverrideAction(
+  organizationId: string,
+  memberId: string,
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const permissionKey = String(formData.get('permissionKey') ?? '');
+  const effect = String(formData.get('effect') ?? '');
+  const reason = String(formData.get('reason') ?? '').trim();
+  const expires = String(formData.get('expiresAt') ?? '').trim();
+
+  if (!permissionKey) return { status: 'error', message: 'Choose a permission.' };
+  if (effect !== 'grant' && effect !== 'deny') {
+    return { status: 'error', message: 'Choose whether to grant or to deny it.' };
+  }
+  // Mirrored from the API's own rule rather than guessed at, so the operator is
+  // told before the round trip instead of after it. The API decides regardless.
+  if (reason.length < 8) {
+    return { status: 'error', message: 'Write down why — at least a few words.' };
+  }
+
+  const res = await apiFetch(
+    `${basePath(organizationId)}/${memberId}/overrides/${permissionKey}`,
+    {
+      method: 'PUT',
+      body: {
+        effect,
+        reason,
+        // `datetime-local` has no zone; the browser's own offset is the right
+        // interpretation, and `toISOString` applies it.
+        ...(expires ? { expiresAt: new Date(expires).toISOString() } : {}),
+      },
+      headers: await csrfHeader(),
+    },
+  );
+
+  if (!res.ok) return failure(res.error, res.requestId);
+  refresh();
+  return {
+    status: 'success',
+    message: effect === 'grant' ? 'Permission granted to this member.' : 'Permission denied for this member.',
+  };
+}
+
+export async function clearOverrideAction(
+  organizationId: string,
+  memberId: string,
+  permissionKey: string,
+): Promise<ActionState> {
+  const res = await apiFetch(
+    `${basePath(organizationId)}/${memberId}/overrides/${permissionKey}`,
+    { method: 'DELETE', headers: await csrfHeader() },
+  );
+
+  if (!res.ok) return failure(res.error, res.requestId);
+  refresh();
+  return { status: 'success', message: 'Exception removed.' };
+}

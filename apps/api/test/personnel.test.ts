@@ -4,8 +4,10 @@ import { createDatabase } from '@leoos/db';
 import { terminateMember } from '../src/modules/personnel/personnel.service.js';
 import {
   createActiveUser, createHarness, grantMembership, makeGlobalAdmin, makeOrgLead,
-  organizationIdByKey, resetAccounts, signIn, userIdByUsername, type TestHarness,
+  organizationIdByKey, resetAccounts, setPermissionOverride, signIn, userIdByUsername,
+  type TestHarness,
 } from './harness.js';
+import { clearIdentityCache } from '../src/modules/auth/context.service.js';
 
 /**
  * Personnel authorization — hierarchy abuse.
@@ -1081,5 +1083,323 @@ describe('TOCTOU — a permission check before the transaction is a statement ab
       await side.close().catch(() => {});
       await side.sql.end({ timeout: 5 }).catch(() => {});
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// H8 · Per-member permission overrides
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('permission overrides — the exception to the rank model', () => {
+  /**
+   * The key used throughout: PD's Chief holds `map.history`, and neither the
+   * Sergeant nor the Officer does. That separation is what lets these tests
+   * isolate the subset rule from the rank rule — a refusal cannot be blamed on
+   * the wrong one.
+   */
+  const EXCEPTION_KEY = 'map.history';
+  const REASON = 'Vinewood case, approved by the chief';
+
+  const url = (m: Person, key = EXCEPTION_KEY) =>
+    `/api/v1/organizations/${m.organizationId}/personnel/${m.memberId}/overrides/${key}`;
+
+  const set = (actor: Person, targetMember: Person, body: Record<string, unknown>, key = EXCEPTION_KEY) =>
+    h.app.inject({
+      method: 'PUT', url: url(targetMember, key), headers: actor.headers, payload: body,
+    });
+
+  const clear = (actor: Person, targetMember: Person, key = EXCEPTION_KEY) =>
+    h.app.inject({ method: 'DELETE', url: url(targetMember, key), headers: actor.headers });
+
+  /** The member's effective permissions, as the API itself reports them. */
+  async function effective(who: Person): Promise<string[]> {
+    const res = await h.app.inject({
+      method: 'GET', url: '/api/v1/auth/me', headers: who.headers,
+    });
+    const body = res.json() as {
+      session: { memberships: { organization: { id: string }; permissions: string[] }[] };
+    };
+    return body.session.memberships
+      .find((m) => m.organization.id === who.organizationId)?.permissions ?? [];
+  }
+
+  it('grants a permission to one person, and it takes effect immediately', async () => {
+    const chief = await member('ovchief', 'PD', 'chief');
+    const officer = await member('ovofficer', 'PD', 'officer');
+
+    expect(await effective(officer)).not.toContain(EXCEPTION_KEY);
+
+    const res = await set(chief, officer, { effect: 'grant', reason: REASON });
+    expect(res.statusCode, res.body).toBe(200);
+
+    // No wait: the override bumped the permission version the identity cache is
+    // keyed on, so it is visible on the very next request.
+    expect(await effective(officer)).toContain(EXCEPTION_KEY);
+  });
+
+  it('denies a permission the member’s own role carries', async () => {
+    const chief = await member('ovdenychief', 'PD', 'chief');
+    const sergeant = await member('ovdenysgt', 'PD', 'sergeant');
+
+    const held = await effective(sergeant);
+    const key = held.find((k) => k !== 'dispatch.view') ?? held[0]!;
+    expect(key, 'sergeant holds nothing to deny').toBeTruthy();
+    // The chief may deny it whether or not they hold it themselves — a deny
+    // only ever reduces authority. See `canSetPermissionOverride`.
+
+    expect((await set(chief, sergeant, { effect: 'deny', reason: REASON }, key)).statusCode)
+      .toBe(200);
+    expect(await effective(sergeant)).not.toContain(key);
+  });
+
+  it('clears an override, returning the member to what their roles say', async () => {
+    const chief = await member('ovclearchief', 'PD', 'chief');
+    const officer = await member('ovclearofficer', 'PD', 'officer');
+
+    await set(chief, officer, { effect: 'grant', reason: REASON });
+    expect(await effective(officer)).toContain(EXCEPTION_KEY);
+
+    expect((await clear(chief, officer)).statusCode).toBe(200);
+    expect(await effective(officer)).not.toContain(EXCEPTION_KEY);
+  });
+
+  it('is idempotent — writing it twice is the same exception, not two', async () => {
+    const chief = await member('ovtwice', 'PD', 'chief');
+    const officer = await member('ovtwiceoff', 'PD', 'officer');
+
+    expect((await set(chief, officer, { effect: 'grant', reason: REASON })).statusCode).toBe(200);
+    expect((await set(chief, officer, { effect: 'grant', reason: 'a second look' })).statusCode)
+      .toBe(200);
+
+    const rows = await h.db.execute<{ n: number; reason: string }>(sql`
+      SELECT count(*)::int AS n, max(reason) AS reason FROM member_permission_override
+       WHERE member_id = ${officer.memberId} AND permission_key = ${EXCEPTION_KEY}
+    `);
+    expect(rows[0]!.n).toBe(1);
+    expect(rows[0]!.reason).toBe('a second look');
+  });
+
+  // ── Escalation ───────────────────────────────────────────────────────────
+
+  it('REFUSES writing an override for YOURSELF', async () => {
+    const chief = await member('ovself', 'PD', 'chief');
+    const res = await set(chief, chief, { effect: 'grant', reason: REASON });
+    expect(res.statusCode).toBe(403);
+
+    // Asserted on the TABLE, not on the effective set: a chief already holds
+    // this key through their role, so "still has it" would be true either way
+    // and the test would pass without the refusal.
+    const [row] = await h.db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM member_permission_override
+       WHERE member_id = ${chief.memberId}
+    `);
+    expect(row!.n).toBe(0);
+  });
+
+  it('REFUSES granting a permission the actor does not hold', async () => {
+    const sergeant = await member('ovsubset', 'PD', 'sergeant');
+    const officer = await member('ovsubsetoff', 'PD', 'officer');
+
+    /**
+     * The sergeant is given `roles.permissions` DELIBERATELY.
+     *
+     * Without it the refusal would come from the route's coarse permission
+     * guard, and the test would pass while proving nothing about H4. Given it,
+     * the sergeant outranks the officer and holds the right to write overrides —
+     * the only thing they lack is the key itself, so a refusal can only be the
+     * subset rule.
+     */
+    await setPermissionOverride(h.db, sergeant.memberId, 'roles.permissions', 'grant');
+    expect(await effective(sergeant)).toContain('roles.permissions');
+    expect(await effective(sergeant)).not.toContain(EXCEPTION_KEY);
+
+    const res = await set(sergeant, officer, { effect: 'grant', reason: REASON });
+    expect(res.statusCode).toBe(403);
+    expect(await effective(officer)).not.toContain(EXCEPTION_KEY);
+  });
+
+  it('REFUSES an override on somebody of equal or higher rank', async () => {
+    const one = await member('ovpeera', 'PD', 'sergeant');
+    const two = await member('ovpeerb', 'PD', 'sergeant');
+    const senior = await member('ovsenior', 'PD', 'chief');
+
+    expect((await set(one, two, { effect: 'deny', reason: REASON })).statusCode).toBe(403);
+    expect((await set(one, senior, { effect: 'deny', reason: REASON })).statusCode).toBe(403);
+  });
+
+  it('REFUSES an override on a member of another organization, as a 404', async () => {
+    const chief = await member('ovcrossorg', 'PD', 'chief');
+    const foreign = await member('ovcrossmd', 'MD', 'doctor');
+
+    // The path names MD's organization, so it is out of the caller's scope and
+    // must not confirm the member exists.
+    const res = await h.app.inject({
+      method: 'PUT', url: url(foreign), headers: chief.headers,
+      payload: { effect: 'grant', reason: REASON },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('REFUSES a GLOBAL-scope permission, which no organization role can carry', async () => {
+    const chief = await member('ovglobal', 'PD', 'chief');
+    const officer = await member('ovglobaloff', 'PD', 'officer');
+
+    for (const key of ['admin.users', 'admin.audit_logs']) {
+      const res = await set(chief, officer, { effect: 'grant', reason: REASON }, key);
+      expect([400, 403], `${key} → ${res.statusCode}`).toContain(res.statusCode);
+    }
+    expect(await effective(officer)).not.toContain('admin.users');
+  });
+
+  it('REFUSES without roles.permissions, however senior the caller', async () => {
+    const chief = await member('ovnoperm', 'PD', 'chief');
+    const officer = await member('ovnopermoff', 'PD', 'officer');
+    await setPermissionOverride(h.db, chief.memberId, 'roles.permissions', 'deny');
+
+    const res = await set(chief, officer, { effect: 'grant', reason: REASON });
+    expect(res.statusCode).toBe(403);
+  });
+
+  // ── Validation ───────────────────────────────────────────────────────────
+
+  it('REFUSES an unknown permission key by name, not as a constraint violation', async () => {
+    const chief = await member('ovunknown', 'PD', 'chief');
+    const officer = await member('ovunknownoff', 'PD', 'officer');
+
+    const res = await set(chief, officer, { effect: 'grant', reason: REASON }, 'not.a.permission');
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.json())).toContain('permissionKey');
+  });
+
+  it('REQUIRES a reason, and will not take a token one', async () => {
+    const chief = await member('ovreason', 'PD', 'chief');
+    const officer = await member('ovreasonoff', 'PD', 'officer');
+
+    for (const reason of [undefined, '', 'x', '   ']) {
+      const res = await set(chief, officer,
+        reason === undefined ? { effect: 'grant' } : { effect: 'grant', reason });
+      expect(res.statusCode, JSON.stringify(reason)).toBe(400);
+    }
+  });
+
+  it('REFUSES an expiry in the past, which would be an override that never applied', async () => {
+    const chief = await member('ovpast', 'PD', 'chief');
+    const officer = await member('ovpastoff', 'PD', 'officer');
+
+    const res = await set(chief, officer, {
+      effect: 'grant', reason: REASON,
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('REFUSES an override on a membership that is not active', async () => {
+    // It would sit in the table looking like a grant, do nothing, and come alive
+    // silently if the person were ever reinstated.
+    const chief = await member('ovinactive', 'PD', 'chief');
+    const officer = await member('ovinactiveoff', 'PD', 'officer');
+    await h.db.execute(sql`
+      UPDATE organization_member SET status = 'suspended' WHERE id = ${officer.memberId}
+    `);
+
+    const res = await set(chief, officer, { effect: 'grant', reason: REASON });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: { code: 'MEMBER_NOT_ACTIVE' } });
+  });
+
+  it('clearing an override that is not there is a 404, not a silent success', async () => {
+    const chief = await member('ovmissing', 'PD', 'chief');
+    const officer = await member('ovmissingoff', 'PD', 'officer');
+    expect((await clear(chief, officer)).statusCode).toBe(404);
+  });
+
+  // ── Expiry ───────────────────────────────────────────────────────────────
+
+  it('stops applying once it has expired, without anything running', async () => {
+    /**
+     * The case the identity cache's TTL exists for.
+     *
+     * Nothing happens when an override reaches `expires_at`: no transaction
+     * commits, no version is bumped, no sweep runs. The permission simply stops
+     * being in force, because every read filters on the expiry. This test moves
+     * the expiry into the past directly — the alternative is waiting for real
+     * time to pass, which tests the clock rather than the predicate.
+     */
+    const chief = await member('ovexpiry', 'PD', 'chief');
+    const officer = await member('ovexpiryoff', 'PD', 'officer');
+
+    await set(chief, officer, {
+      effect: 'grant', reason: REASON,
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    expect(await effective(officer)).toContain(EXCEPTION_KEY);
+
+    await h.db.execute(sql`
+      UPDATE member_permission_override SET expires_at = now() - interval '1 minute'
+       WHERE member_id = ${officer.memberId} AND permission_key = ${EXCEPTION_KEY}
+    `);
+    // The row is still there — an expired exception is a record of something
+    // that was once approved.
+    const [row] = await h.db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM member_permission_override
+       WHERE member_id = ${officer.memberId} AND permission_key = ${EXCEPTION_KEY}
+    `);
+    expect(row!.n).toBe(1);
+
+    clearIdentityCache();
+    expect(await effective(officer)).not.toContain(EXCEPTION_KEY);
+  });
+
+  // ── The record ───────────────────────────────────────────────────────────
+
+  it('audits both the grant and the clearing, with the reason', async () => {
+    const chief = await member('ovaudit', 'PD', 'chief');
+    const officer = await member('ovauditoff', 'PD', 'officer');
+
+    await set(chief, officer, { effect: 'grant', reason: REASON });
+    await clear(chief, officer);
+
+    const rows = await h.db.execute<{ action: string; metadata: Record<string, unknown> }>(sql`
+      SELECT action, metadata FROM audit_log
+       WHERE entity_id = ${officer.memberId}
+         AND action IN ('permission.override_set', 'permission.override_cleared')
+       ORDER BY occurred_at
+    `);
+    expect(rows.map((r) => r.action))
+      .toEqual(['permission.override_set', 'permission.override_cleared']);
+    expect(rows[0]!.metadata).toMatchObject({ permissionKey: EXCEPTION_KEY, reason: REASON });
+  });
+
+  it('audits a REFUSED override, which is the signal the log exists to surface', async () => {
+    const sergeant = await member('ovdenied', 'PD', 'sergeant');
+    const officer = await member('ovdeniedoff', 'PD', 'officer');
+
+    await set(sergeant, officer, { effect: 'grant', reason: REASON });
+
+    const rows = await h.db.execute<{ outcome: string }>(sql`
+      SELECT outcome FROM audit_log
+       WHERE entity_id = ${officer.memberId} AND action = 'permission.override_set'
+       ORDER BY occurred_at DESC LIMIT 1
+    `);
+    expect(rows[0]?.outcome).toBe('denied');
+  });
+
+  it('shows the standing exception on the member’s profile', async () => {
+    const chief = await member('ovprofile', 'PD', 'chief');
+    const officer = await member('ovprofileoff', 'PD', 'officer');
+    await set(chief, officer, { effect: 'grant', reason: REASON });
+
+    const res = await h.app.inject({
+      method: 'GET',
+      url: `/api/v1/organizations/${officer.organizationId}/personnel/${officer.memberId}`,
+      headers: chief.headers,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      member: { overrides: { permissionKey: string; effect: string; reason: string }[] };
+    };
+    expect(body.member.overrides).toContainEqual(
+      expect.objectContaining({ permissionKey: EXCEPTION_KEY, effect: 'grant', reason: REASON }),
+    );
   });
 });

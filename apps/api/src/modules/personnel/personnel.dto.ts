@@ -122,7 +122,24 @@ export interface PersonnelProfileDto extends PersonnelListItemDto {
   terminatedByName: string | null;
   terminationReason: string | null;
   currentVehicle: { plate: string; displayName: string | null } | null;
+  overrides: PersonnelOverrideDto[];
   activity: PersonnelActivityDto[];
+}
+
+/**
+ * One standing exception.
+ *
+ * `reason` is carried deliberately, and is why the column is NOT NULL: an
+ * override is an exception to the rank model, and an exception nobody can
+ * explain six months later is indistinguishable from a mistake.
+ */
+export interface PersonnelOverrideDto {
+  permissionKey: string;
+  effect: 'grant' | 'deny';
+  reason: string;
+  grantedByName: string | null;
+  createdAt: string;
+  expiresAt: string | null;
 }
 
 export function toPersonnelProfileDto(
@@ -141,6 +158,7 @@ export function toPersonnelProfileDto(
     currentVehicle: row.currentVehicle
       ? { plate: row.currentVehicle.plate, displayName: row.currentVehicle.displayName }
       : null,
+    overrides: row.overrides,
     activity: row.activity.map((a) => ({
       at: a.at,
       action: a.action,
@@ -165,6 +183,25 @@ export interface PersonnelCapabilitiesDto {
   canAssignRoles: boolean;
   canEdit: boolean;
   canSetCallsign: boolean;
+  /**
+   * Whether the caller may write a per-member exception.
+   *
+   * `roles.permissions` — the same key that gates editing a role's permission
+   * set — because an override IS a permission grant, just one addressed to a
+   * person instead of a rank. Giving it a key of its own would make it possible
+   * to hold one without the other, which is a distinction with no operational
+   * meaning and one more thing to get wrong.
+   */
+  canSetOverrides: boolean;
+  /**
+   * The organization-scoped permissions the CALLER holds, so the override
+   * editor can show what they may hand out and grey out the rest rather than
+   * offering a control the server will refuse.
+   *
+   * Their own set, never the target's — this is the ceiling, not a disclosure
+   * about somebody else.
+   */
+  grantablePermissions: string[];
   /** The caller's own ceiling, so the UI can grey out roles it knows are refused. */
   actorLevel: number | 'unbounded';
   actorUserId: string;

@@ -265,6 +265,24 @@ see [testing §7](docs/architecture/15-testing.md).
 | 2, 24 | The shared test database keeps accounts and memberships ON PURPOSE, and that has a price paid three times: an interrupted run left a live lead grant that failed an unrelated assertion; an assertion about global state ("FIB has no leads at all") rotted; and a walkthrough that reached into `tbody` broke once the roster outgrew its page. Each fixed at the cause, not by loosening the assertion. | [testing §6](docs/architecture/15-testing.md), `apps/api/test/harness.ts` |
 | 34, 35 | Concurrency is tested BY CONSTRUCTION (every mutation decides under `FOR UPDATE`) rather than by racing, single-node caching is untested because nothing supports multi-instance yet, and load is measured but not sustained. Stated as risks rather than implied to be covered. | [testing §7](docs/architecture/15-testing.md) |
 
+### Per-member permission overrides (H8)
+
+The one place authority is handed to a PERSON rather than to a rank. The data
+model, the effective-permission arithmetic, the audit actions and the identity
+cache's TTL were all built for it; until now nothing could actually write one.
+
+| Rules | Mechanism | Location |
+| --- | --- | --- |
+| 7, 8 | An override is DATA, like everything else in the permission model: a row keyed on (member, permission) with an effect, a reason and an optional expiry. No component branches on which permission it is. | `member_permission_override` |
+| 12, 13, 14, 15 | H8 composes every other rule at once — H1 rank, H6 self, H7 scope, H4 subset — because handing authority to a person bypasses the rank ladder that normally carries it. Two property tests assert over the WHOLE catalogue, at every level including unbounded, that no actor can write one for themselves and none can hand out a key outside their own set. | [authz §B](docs/architecture/02-authorization.md), `packages/authz-core/src/decisions.ts` |
+| 15 | A DENY is deliberately not a grant: it only ever REDUCES authority, so the subset rule does not apply to it — a chief who does not personally use medical records must still be able to stop a subordinate using them, which is how roles already behave for removal-only edits. The rank check is not relaxed, so a deny is never an attack on somebody senior. | `canSetPermissionOverride` |
+| 12 | A GLOBAL-scope key is refused for BOTH effects, and the picker never offers one. Not because a deny would escalate, but because an organization role cannot carry one — a stored row for it would read like a control and do nothing. | `canSetPermissionOverride`, `personnel.routes.ts` |
+| 23 | Both the write and the clearing are audited, and so is a REFUSAL — an officer repeatedly reaching for an exception is the signal the log exists to surface. The reason is REQUIRED and carried into the audit metadata: six months later it is the only thing separating an approval from a mistake. | `apps/api/src/modules/personnel/personnel.service.ts` |
+| 9, 10 | The screen is cosmetic, as always. The picker offers only what the CALLER may hand out and the form is withheld on your own record, but every rule is re-decided server-side inside the transaction with both membership rows locked. | `apps/web/app/(app)/personnel/member-drawer.tsx` |
+| 26, 45 | An override on a non-active membership is REFUSED rather than stored: it would sit in the table looking like a grant, do nothing, and come alive silently if the person were reinstated. An unknown permission key is a 400 naming the field, not a foreign-key violation surfacing as a 500. | `personnel.service.ts` |
+| 21, 22 | Setting or clearing one bumps `permission_version`, so it takes effect on the very next request with no wait. EXPIRY is the one case no transaction can announce — nothing runs when the clock passes `expires_at` — which is precisely what the identity cache's five-second TTL is for, and both halves are tested. | [performance §4](docs/architecture/14-performance.md) |
+| 24 | An expired override is kept, not deleted: it is a record of something that was once approved, and the audit trail refers to it. Reads filter on the expiry rather than the row's existence. | `personnel.read.ts`, `context.service.ts` |
+
 ---
 
 ## Standing conventions
