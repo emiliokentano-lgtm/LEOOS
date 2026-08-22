@@ -107,7 +107,7 @@ export default async function AdminSystemPage() {
                 >
                   <span className={`mt-0.5 shrink-0 [&_svg]:size-3.5 ${
                     meta.tone === 'success' ? 'text-success'
-                      : meta.tone === 'warning' ? 'text-warning' : 'text-text-disabled'
+                      : meta.tone === 'warning' ? 'text-warning' : 'text-text-tertiary'
                   }`}>
                     {meta.icon}
                   </span>
@@ -120,7 +120,7 @@ export default async function AdminSystemPage() {
                     </div>
                     <p className="mt-0.5 text-2xs text-text-secondary">{component.detail}</p>
                     {component.source ? (
-                      <p className="mt-0.5 font-mono text-2xs text-text-disabled">
+                      <p className="mt-0.5 font-mono text-2xs text-text-tertiary">
                         {component.source}
                       </p>
                     ) : null}

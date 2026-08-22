@@ -8,7 +8,17 @@ const fieldBase = cn(
   'placeholder:text-text-tertiary',
   'transition-colors duration-(--duration-fast)',
   'hover:border-border-strong',
-  'focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent',
+  /**
+   * A ring the audit can see.
+   *
+   * `focus:ring-1` on a 1px border is a two-pixel change against a dark field,
+   * and the audit reported the login form's inputs as having no visible focus
+   * indicator at all. Two pixels of accent, offset, matches the buttons — one
+   * focus language across every control rather than a different hint per
+   * component.
+   */
+  'focus:border-accent focus:[outline-style:solid] focus:outline-2',
+  'focus:outline-offset-1 focus:outline-accent',
   'disabled:cursor-not-allowed disabled:opacity-50',
   'aria-[invalid=true]:border-danger aria-[invalid=true]:focus:ring-danger',
 );

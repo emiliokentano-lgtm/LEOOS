@@ -112,7 +112,7 @@ export function NotificationItem({
         ) : null}
 
         <span className="flex flex-wrap items-center gap-1.5 pt-0.5">
-          <span className="font-mono text-2xs uppercase tracking-wide text-text-disabled">
+          <span className="font-mono text-2xs uppercase tracking-wide text-text-tertiary">
             {meta.label}
           </span>
           {notification.severity !== 'info' ? (

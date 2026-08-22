@@ -420,9 +420,9 @@ function IncidentRow({
           {incident.locationText !== null ? (
             <span className="truncate text-text-tertiary">{incident.locationText}</span>
           ) : (
-            <span className="text-text-disabled">No location</span>
+            <span className="text-text-tertiary">No location</span>
           )}
-          <span aria-hidden className="text-text-disabled">·</span>
+          <span aria-hidden className="text-text-tertiary">·</span>
           {unassigned ? (
             <span className="font-medium text-warning">No units assigned</span>
           ) : (
@@ -556,7 +556,7 @@ function SelfPanel({
 
       {canOperate ? (
         <div className="p-3">
-          <p className="mb-1.5 text-2xs uppercase tracking-wide text-text-disabled">
+          <p className="mb-1.5 text-2xs uppercase tracking-wide text-text-tertiary">
             Set your status
           </p>
           <div className="grid grid-cols-2 gap-1.5">

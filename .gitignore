@@ -44,6 +44,7 @@ apps/web/public/map/tiles/
 # is how three of them ended up untracked-but-not-ignored and appearing in
 # `git status` after every run.
 .visual/
+.a11y/
 .admin/
 .dashboard/
 .dispatch/

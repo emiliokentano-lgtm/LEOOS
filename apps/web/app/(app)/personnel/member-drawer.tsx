@@ -171,7 +171,7 @@ function ProfileBody({
             label="Duty status"
             value={
               terminated
-                ? <span className="text-text-disabled">—</span>
+                ? <span className="text-text-tertiary">—</span>
                 : <DutyStatusBadge status={(profile.dutyStatus ?? 'off_duty') as DutyStatusKey} size="sm" />
             }
           />
@@ -262,7 +262,7 @@ function ProfileBody({
                   ) : null}
                 </span>
                 <Tooltip content={formatDateTime(entry.at)}>
-                  <span className="shrink-0 font-mono text-2xs text-text-disabled">
+                  <span className="shrink-0 font-mono text-2xs text-text-tertiary">
                     {timeAgo(entry.at)}
                   </span>
                 </Tooltip>

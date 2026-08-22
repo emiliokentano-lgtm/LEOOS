@@ -246,7 +246,7 @@ export function VehicleDrawer({
                       <li key={f.id}
                         className="flex items-start gap-2 rounded-md border border-border-subtle bg-surface-raised p-2">
                         <ShieldAlert
-                          className={`mt-0.5 size-3.5 shrink-0 ${f.resolvedAt ? 'text-text-disabled' : 'text-danger'}`}
+                          className={`mt-0.5 size-3.5 shrink-0 ${f.resolvedAt ? 'text-text-tertiary' : 'text-danger'}`}
                           aria-hidden
                         />
                         <span className="min-w-0 flex-1">
@@ -305,7 +305,7 @@ export function VehicleDrawer({
                           ) : null}
                         </span>
                         <Tooltip content={formatDateTime(entry.at)}>
-                          <span className="shrink-0 font-mono text-2xs text-text-disabled">
+                          <span className="shrink-0 font-mono text-2xs text-text-tertiary">
                             {timeAgo(entry.at)}
                           </span>
                         </Tooltip>

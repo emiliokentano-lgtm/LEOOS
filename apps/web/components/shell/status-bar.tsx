@@ -18,8 +18,8 @@ import { useDutyStatus } from './duty-status-context';
  * something to the person on the console; "idle" and "failed" do not.
  */
 const FEED_LABELS: Record<RealtimeState, { label: string; tone: string }> = {
-  idle: { label: 'Feed: polling', tone: 'text-text-disabled' },
-  connecting: { label: 'Feed: connecting', tone: 'text-text-disabled' },
+  idle: { label: 'Feed: polling', tone: 'text-text-tertiary' },
+  connecting: { label: 'Feed: connecting', tone: 'text-text-tertiary' },
   live: { label: 'Feed: live', tone: 'text-status-available' },
   reconnecting: { label: 'Feed: polling', tone: 'text-status-busy' },
   failed: { label: 'Feed: polling only', tone: 'text-status-panic' },
@@ -113,7 +113,7 @@ export function StatusBar({
 
         <Tooltip content={INTEGRATION_STATUS.fivem.detail}>
           <span className="flex items-center gap-1.5">
-            <Wifi className="size-3 text-text-disabled" aria-hidden />
+            <Wifi className="size-3 text-text-tertiary" aria-hidden />
             <span>FiveM not connected</span>
           </span>
         </Tooltip>

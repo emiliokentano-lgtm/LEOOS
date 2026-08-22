@@ -37,3 +37,17 @@ export async function fetchIncidentDetail(
   );
   return res.ok && res.data ? res.data : null;
 }
+
+/**
+ * The unit the caller is currently crewing, or null.
+ *
+ * Used by the map to mark the viewer's OWN marker. Deliberately narrow: the map
+ * needs one id, and pulling the whole dispatch board for it would fetch a queue
+ * of incidents the map does not draw. A refusal is `null` rather than an error —
+ * somebody with no dispatch access still gets a map, they simply have no unit on
+ * it to point at.
+ */
+export async function fetchOwnUnitId(): Promise<string | null> {
+  const res = await apiFetch<{ self: { unitId: string | null } }>('/api/v1/dispatch/self');
+  return res.ok && res.data ? res.data.self.unitId : null;
+}

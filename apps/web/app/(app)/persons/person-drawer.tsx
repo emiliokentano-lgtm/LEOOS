@@ -558,7 +558,7 @@ function Medical({ profile, onEdit }: { profile: PersonProfile; onEdit: () => vo
 function Withheld({ section, permission }: { section: string; permission: string }) {
   return (
     <div className="flex flex-col items-center gap-2 py-8 text-center">
-      <EyeOff className="size-6 text-text-disabled" aria-hidden />
+      <EyeOff className="size-6 text-text-tertiary" aria-hidden />
       <p className="text-sm font-medium text-text-secondary">{section} is not available to you</p>
       <p className="max-w-sm text-xs text-text-tertiary">
         This section requires the “{permission}” permission. It was not sent to your browser —

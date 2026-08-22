@@ -12,7 +12,7 @@ import {
   type UnitPositionDelta, type Viewport, type WorldPosition,
 } from '@leoos/contracts';
 import {
-  Alert, Badge, EmptyState, FilterBar, FilterChip, IconButton, Panel, PanelHeader,
+  Alert, Badge, EmptyState, FilterBar, FilterChip, IconButton, OrgTag, Panel, PanelHeader,
   SearchInput,
 } from '@/components/ui';
 import { Icon } from '@/components/icon';
@@ -50,7 +50,13 @@ import { UnitDetail, IncidentDetail, MarkerDetail } from './map-details';
  * was designed for — see lib/map/map-source.ts and lib/map/realtime-map-source.ts.
  */
 
-export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | null }) {
+export function MapView({
+  initialSnapshot, ownUnitId = null,
+}: {
+  initialSnapshot: MapSnapshot | null;
+  /** The unit the viewer is crewing, if any. See MapCanvas for how it is drawn. */
+  ownUnitId?: string | null;
+}) {
   const [snapshot, setSnapshot] = React.useState<MapSnapshot | null>(initialSnapshot);
   const [connection, setConnection] = React.useState<MapConnectionState>('connecting');
   const [connectionDetail, setConnectionDetail] = React.useState<string | null>(null);
@@ -279,6 +285,22 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
     setSelectedMarkerId(null);
   }, [store]);
 
+  /**
+   * Centre on the viewer's own unit.
+   *
+   * The single most-wanted action on a map this dense, and it was reachable only
+   * by finding your own callsign in a list of two hundred. Available as a
+   * control AND as `M`, because an operator with one hand on a radio is not
+   * hunting for a button.
+   */
+  const ownUnit = React.useMemo(
+    () => (ownUnitId === null ? null : units.find((u) => u.id === ownUnitId) ?? null),
+    [ownUnitId, units],
+  );
+  const locateOwnUnit = React.useCallback(() => {
+    if (ownUnit !== null) locateUnit(ownUnit);
+  }, [locateUnit, ownUnit]);
+
   // ── Selection ───────────────────────────────────────────────────────────
   const selectUnit = React.useCallback((unit: MapUnit | null) => {
     setSelectedUnitId(unit?.id ?? null);
@@ -297,7 +319,8 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
   /**
    * Dispatchers work by keyboard, not by mouse (05-map.md §6).
    *
-   * `F` follows, `Esc` deselects, `1`–`9` toggle organization filters in the
+   * `M` centres on your own unit, `F` follows, `Esc` deselects, `1`–`9` toggle
+   * organization filters in the
    * order they are drawn in the filter bar. Typing in an input is excluded, or
    * searching for a unit called "Fox" would start following something.
    */
@@ -311,6 +334,13 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
       if (event.key === 'Escape') {
         if (pendingMarker !== null) { setPendingMarker(null); return; }
         clearSelection();
+        return;
+      }
+
+      if (event.key === 'm' || event.key === 'M') {
+        if (ownUnit === null) return;
+        event.preventDefault();
+        locateOwnUnit();
         return;
       }
 
@@ -336,7 +366,7 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [clearSelection, organizations, pendingMarker, selectedUnitId]);
+  }, [clearSelection, locateOwnUnit, organizations, ownUnit, pendingMarker, selectedUnitId]);
 
   // ── Fullscreen ──────────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -402,7 +432,7 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
           </>
         }
       >
-        <span className="mr-1 flex items-center gap-1 text-2xs uppercase tracking-wide text-text-disabled">
+        <span className="mr-1 flex items-center gap-1 text-2xs uppercase tracking-wide text-text-tertiary">
           <Layers className="size-3" aria-hidden /> Organizations
         </span>
         {organizations.map((org, index) => (
@@ -425,7 +455,7 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
         {statusOptions.length > 0 ? (
           <>
             <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-            <span className="mr-1 text-2xs uppercase tracking-wide text-text-disabled">Status</span>
+            <span className="mr-1 text-2xs uppercase tracking-wide text-text-tertiary">Status</span>
             {statusOptions.map((status) => (
               <FilterChip
                 key={status.key}
@@ -449,7 +479,7 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
           * offline — which is exactly the combination worth being able to find.
           */}
         <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-        <span className="mr-1 text-2xs uppercase tracking-wide text-text-disabled">
+        <span className="mr-1 text-2xs uppercase tracking-wide text-text-tertiary">
           Tracking
         </span>
         {(['live', 'stale', 'offline'] as const).map((level) => (
@@ -467,7 +497,7 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
         {unitTypeOptions.length > 0 ? (
           <>
             <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-            <span className="mr-1 text-2xs uppercase tracking-wide text-text-disabled">Type</span>
+            <span className="mr-1 text-2xs uppercase tracking-wide text-text-tertiary">Type</span>
             {unitTypeOptions.map((type) => (
               <FilterChip
                 key={type}
@@ -484,7 +514,7 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
         {vehicleClassOptions.length > 0 ? (
           <>
             <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-            <span className="mr-1 text-2xs uppercase tracking-wide text-text-disabled">Vehicle</span>
+            <span className="mr-1 text-2xs uppercase tracking-wide text-text-tertiary">Vehicle</span>
             {vehicleClassOptions.map((cls) => (
               <FilterChip
                 key={cls}
@@ -531,6 +561,7 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
           />
           <MapCanvas
             ref={canvasRef}
+            ownUnitId={ownUnitId}
             store={store}
             filter={filter}
             onViewportChange={setViewport}
@@ -566,6 +597,17 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
               detail={connectionDetail}
               unavailable={snapshot === null}
             />
+            {ownUnit !== null && ownUnit.id !== selectedUnitId ? (
+              <button
+                type="button"
+                onClick={locateOwnUnit}
+                className="pointer-events-auto flex items-center gap-2 rounded-xs border border-border-strong bg-surface/95 px-2.5 py-1 text-xs text-text-primary hover:border-accent"
+              >
+                <Crosshair className="size-3 text-text-secondary" aria-hidden />
+                My unit <span className="font-mono">{ownUnit.callsign}</span>
+                <kbd className="rounded-xs border border-border px-1 text-[10px] text-text-tertiary">M</kbd>
+              </button>
+            ) : null}
             {followedUnit ? (
               <button
                 type="button"
@@ -574,7 +616,7 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
               >
                 <Crosshair className="size-3 text-accent" aria-hidden />
                 Following <span className="font-mono">{followedUnit.callsign}</span>
-                <kbd className="text-[10px] text-text-disabled">Esc</kbd>
+                <kbd className="text-[10px] text-text-tertiary">Esc</kbd>
               </button>
             ) : null}
           </div>
@@ -673,6 +715,7 @@ export function MapView({ initialSnapshot }: { initialSnapshot: MapSnapshot | nu
                       key={unit.id}
                       unit={unit}
                       selected={unit.id === selectedUnitId}
+                      isOwn={unit.id === ownUnitId}
                       freshness={roster.freshness.get(unit.id) ?? 'unknown'}
                       onSelect={selectUnit}
                     />
@@ -810,10 +853,12 @@ function MapLegend() {
  * render still walks every child even when no prop differs.
  */
 const MapUnitRow = React.memo(function MapUnitRow({
-  unit, selected, freshness, onSelect,
+  unit, selected, isOwn, freshness, onSelect,
 }: {
   unit: MapUnit;
   selected: boolean;
+  /** The viewer's own unit, marked in the list as well as on the canvas. */
+  isOwn: boolean;
   freshness: LocationFreshness;
   /**
    * Takes the unit, rather than being a closure over it.
@@ -841,6 +886,9 @@ const MapUnitRow = React.memo(function MapUnitRow({
         // A panic row is marked structurally, not only by colour: a left rule
         // survives a monochrome display and a colour-blind reader.
         unit.status.key === 'panic' && 'border-l-2 border-l-[var(--status-panic)] bg-danger-subtle',
+        // Structural again, and a different edge treatment from panic so the two
+        // are never confused when both are true.
+        isOwn && unit.status.key !== 'panic' && 'border-l-2 border-l-accent',
       )}
     >
       <span className="flex size-5 shrink-0 items-center justify-center text-text-tertiary">
@@ -850,14 +898,18 @@ const MapUnitRow = React.memo(function MapUnitRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="font-mono text-xs font-semibold text-text-primary">{unit.callsign}</span>
-          <span
-            className="rounded-[2px] border px-1 text-[9px] font-medium"
-            style={{ borderColor: unit.organization.color, color: unit.organization.color }}
-          >
-            {unit.organization.shortName}
-          </span>
+          <OrgTag
+            shortName={unit.organization.shortName}
+            color={unit.organization.color}
+            size="xs"
+          />
+          {isOwn ? (
+            <span className="rounded-[2px] border border-accent px-1 text-[9px] font-semibold text-accent">
+              YOU
+            </span>
+          ) : null}
           {unit.isCovert ? (
-            <span className="text-[9px] uppercase tracking-wide text-text-disabled">covert</span>
+            <span className="text-[9px] uppercase tracking-wide text-text-tertiary">covert</span>
           ) : null}
         </div>
         <p className="truncate text-2xs text-text-tertiary">
@@ -885,7 +937,7 @@ const MapUnitRow = React.memo(function MapUnitRow({
             freshness === 'live' && 'text-text-tertiary',
             freshness === 'stale' && 'text-warning',
             freshness === 'offline' && 'text-danger',
-            freshness === 'unknown' && 'text-text-disabled',
+            freshness === 'unknown' && 'text-text-tertiary',
           )}
         >
           {FRESHNESS_META[freshness].shortLabel}

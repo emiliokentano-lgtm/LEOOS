@@ -284,3 +284,95 @@ Not optional, and not expensive if done from the start:
 - `aria-live` regions for incoming incidents and panic alerts.
 - Respects `prefers-reduced-motion` — including the panic pulse, which becomes a
   static high-contrast ring.
+
+---
+
+## 7. The polish pass — what "AA contrast" turned out to mean
+
+§6 above said "WCAG AA contrast for all text" and had said it since the first
+sketch. It was not true, and it was not true in a way no reviewer was going to
+catch by looking: **179 findings across 20 page-visits**, of which 165 were
+contrast and 139 of those were a single token.
+
+That is the lesson worth keeping. A design principle with no instrument behind
+it is a wish, and "check the contrast" is not a task a person performs reliably
+across thirteen screens.
+
+### The instrument
+
+`apps/web/scripts/a11y-check.mjs` walks every page in a real browser, signed in
+as **two accounts** — a global administrator and an operator, because neither
+can reach every screen — and computes:
+
+| Check | How |
+| --- | --- |
+| Contrast | Every visible text node against the background actually painted behind it, walking up through transparent ancestors, at the AA threshold for its rendered size and weight |
+| Accessible names | Every control that a screen reader would announce as nothing |
+| Focus visibility | A real `Tab` press per stop, comparing the focused and resting computed style |
+| Colour independence | Anything marked as a status must render text, not only a hue |
+| Structure | One `h1`, a `main` landmark, no duplicate ids, no positive `tabindex`, no horizontal body scroll |
+
+It is a release gate. It runs to **zero findings**, and it earned that status by
+being wrong twice itself:
+
+- It measured focus with `element.focus()`, which does not match `:focus-visible`
+  in Chromium, and reported every button in the product as having no indicator.
+- It labelled findings with the URL it requested rather than the one it landed
+  on, so three findings on the holding screen were reported against
+  `/personnel`, `/roles` and `/organization`.
+
+### What actually changed
+
+**The token ladder, not 179 call sites.** `--color-text-tertiary` was `#6b7686`
+— 3.93:1 on the sidebar, 3.70:1 on a panel — and it carries most of the meta
+text in the product. Raising the tokens fixed 78% of the findings at once.
+
+Every text and status token now meets 4.5:1 on **every** surface including the
+hovered and selected row states. The full matrix is in `globals.css`.
+
+**Row states came down, and selection moved to a rule.** `--color-hover` and
+`--color-active` were light enough that meta text on a selected row fell to
+3.3:1. They are now subtle, and a selected row carries a 2px accent rule on its
+leading edge. That is the better signal on a dense list anyway: it survives
+greyscale, and a bright band across thirty rows drags the eye away from the
+priority column, which is the thing that matters.
+
+**Two values per semantic colour.** The plain token is text and borders, light
+enough for AA. The `-solid` token is a button fill dark enough to carry white
+text — the primary button measured **3.31:1**, on the single control every
+operator presses most.
+
+**`text-disabled` is now only for inactive controls.** WCAG exempts them, which
+is why the token stays dim — but it had been used for sidebar section headings,
+an off-duty status, "no location", em-dashes standing in for missing values and
+30 other pieces of *information*. Those are `tertiary` now. The one deliberate
+exception is the permission editor: a permission the actor cannot grant is
+dimmed but **readable**, because the entire point of showing the row is that the
+operator can see which permission is out of their reach.
+
+**Organization colours are data, and data does not meet contrast rules.**
+`organization.color` was passed straight into `color:` on 9px text in seven
+places. It cannot be constrained at the source — it is the department's identity
+and is also used as a fill, where it is fine. `lib/readable-colour.ts` lightens
+it only as far as legibility requires, and the seven inline copies became one
+`OrgTag`.
+
+**One focus language.** Buttons had no `focus-visible` rule at all and relied on
+a browser default the base reset removes; inputs and selects used a 1px ring
+that was two pixels of change on a dark field. All three now use the same 2px
+offset accent outline. (`outline-none` sets `outline-style: none`, so the ring
+also needs the style back — `focus-visible:outline-2` alone renders nothing.)
+
+### Operational UX
+
+**The map answers "which one am I".** Nothing on a screen carrying two hundred
+markers did. The viewer's own unit is drawn with a static double ring and a
+`YOU` tag — a shape no other marker uses — is marked in the unit list with an
+accent rule, and has a *My unit* control bound to **M**.
+
+**The call queue works from the keyboard.** ↑/↓ (or J/K) move through it in the
+order it is already sorted — worst priority first, unassigned ahead of assigned,
+oldest first within a tie — so "down" always means "next most important". Enter
+opens, Esc clears, and the selection scrolls into view. The shortcut is printed
+in the panel header, because a keyboard path nobody knows about is a keyboard
+path nobody uses.

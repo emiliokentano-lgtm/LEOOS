@@ -63,7 +63,7 @@ export function EmptyState({
         className,
       )}
     >
-      <span className="text-text-disabled [&_svg]:size-6">{icon ?? defaultIcon}</span>
+      <span className="text-text-tertiary [&_svg]:size-6">{icon ?? defaultIcon}</span>
       <p className="text-sm font-medium text-text-secondary">{title}</p>
       {description ? <p className="max-w-sm text-xs text-text-tertiary">{description}</p> : null}
       {action ? <div className="mt-1">{action}</div> : null}

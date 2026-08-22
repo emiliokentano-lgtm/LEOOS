@@ -125,7 +125,7 @@ export function AdminUsersView({
     {
       id: 'capabilities', header: 'Global', width: '170px',
       cell: (u) => (u.globalCapabilities.length === 0
-        ? <span className="text-text-disabled">—</span>
+        ? <span className="text-text-tertiary">—</span>
         : (
           <span className="flex flex-wrap gap-1">
             {u.globalCapabilities.map((key) => (
@@ -160,7 +160,7 @@ export function AdminUsersView({
       id: 'lastLogin', header: 'Last login', mono: true, width: '150px', hideBelow: 'lg',
       cell: (u) => (u.lastLoginAt
         ? formatDateTime(u.lastLoginAt)
-        : <span className="text-text-disabled">never</span>),
+        : <span className="text-text-tertiary">never</span>),
     },
     {
       id: 'created', header: 'Created', mono: true, width: '110px', align: 'right', hideBelow: 'xl',

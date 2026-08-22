@@ -32,7 +32,7 @@ export function Breadcrumb({ items, className }: { items: Crumb[]; className?: s
                 </span>
               )}
               {!last ? (
-                <ChevronRight className="size-3 shrink-0 text-text-disabled" aria-hidden />
+                <ChevronRight className="size-3 shrink-0 text-text-tertiary" aria-hidden />
               ) : null}
             </li>
           );

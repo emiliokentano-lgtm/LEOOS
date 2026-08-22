@@ -197,7 +197,7 @@ export function PersonnelView({
     },
     {
       id: 'callsign', header: 'Callsign', mono: true, width: '110px', hideBelow: 'md',
-      cell: (m) => m.callsign ?? <span className="text-text-disabled">—</span>,
+      cell: (m) => m.callsign ?? <span className="text-text-tertiary">—</span>,
     },
     {
       id: 'membership', header: 'Membership', width: '120px', hideBelow: 'lg',
@@ -210,13 +210,13 @@ export function PersonnelView({
     {
       id: 'duty', header: 'Duty', width: '130px', cell: (m) => (
         m.status === 'terminated'
-          ? <span className="text-2xs text-text-disabled">—</span>
+          ? <span className="text-2xs text-text-tertiary">—</span>
           : <DutyStatusBadge status={(m.dutyStatus ?? 'off_duty') as DutyStatusKey} size="sm" />
       ),
     },
     {
       id: 'unit', header: 'Unit', mono: true, width: '90px', hideBelow: 'xl',
-      cell: (m) => m.unitCallsign ?? <span className="text-text-disabled">—</span>,
+      cell: (m) => m.unitCallsign ?? <span className="text-text-tertiary">—</span>,
     },
     {
       id: 'joined', header: 'Joined', sortable: true, align: 'right', width: '120px', hideBelow: 'xl',
@@ -415,7 +415,7 @@ function RowActions({
   if (!member.manageable) {
     return (
       <Tooltip content={lockReason}>
-        <span className="inline-flex items-center gap-1 text-2xs text-text-disabled">
+        <span className="inline-flex items-center gap-1 text-2xs text-text-tertiary">
           <Lock className="size-3" aria-hidden />
           Locked
         </span>
@@ -435,7 +435,7 @@ function RowActions({
   if (!items) {
     return (
       <Tooltip content="You hold no personnel permissions in this organization">
-        <span className="inline-flex items-center gap-1 text-2xs text-text-disabled">
+        <span className="inline-flex items-center gap-1 text-2xs text-text-tertiary">
           <Lock className="size-3" aria-hidden />
           Locked
         </span>

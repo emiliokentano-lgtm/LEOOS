@@ -315,8 +315,18 @@ function PermissionsForm({
 
                   const row = (
                     <label
+                      /**
+                       * A permission the actor cannot grant is DIMMED, not made
+                       * illegible. WCAG exempts an inactive control from the
+                       * contrast rule, and taking that exemption here would be
+                       * reading it backwards: the whole point of showing the
+                       * row is that the operator can see WHICH permission is
+                       * out of their reach. The checkbox being disabled and the
+                       * tooltip saying why carry the state; the label only has
+                       * to be readable.
+                       */
                       className={`flex items-start gap-2 py-1 text-xs ${
-                        disabled ? 'text-text-disabled' : 'text-text-secondary'
+                        disabled ? 'text-text-tertiary' : 'text-text-secondary'
                       }`}
                     >
                       <Checkbox

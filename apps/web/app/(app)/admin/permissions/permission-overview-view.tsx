@@ -6,6 +6,7 @@ import type { PermissionOverview, PermissionOverviewEntry } from '@leoos/contrac
 import {
   Badge, EmptyState, FilterBar, FilterChip, Panel, PanelHeader, SearchInput, Select, Tooltip,
 } from '@/components/ui';
+import { readableOn } from '@/lib/readable-colour';
 
 /**
  * The permission overview.
@@ -200,7 +201,7 @@ function PermissionRow({ entry }: { entry: PermissionOverviewEntry }) {
               className="flex items-center gap-1 rounded-xs border border-border px-1.5 py-0.5 text-2xs"
             >
               {grant.organization ? (
-                <span style={{ color: grant.organization.color }}>
+                <span style={{ color: readableOn(grant.organization.color) }}>
                   {grant.organization.shortName}
                 </span>
               ) : (
@@ -210,7 +211,7 @@ function PermissionRow({ entry }: { entry: PermissionOverviewEntry }) {
               )}
               <span className="text-text-secondary">{grant.roleName}</span>
               <span className="font-mono text-text-tertiary">L{grant.hierarchyLevel}</span>
-              <span className="font-mono text-text-disabled">· {grant.memberCount}</span>
+              <span className="font-mono text-text-tertiary">· {grant.memberCount}</span>
             </span>
           ))}
         </div>

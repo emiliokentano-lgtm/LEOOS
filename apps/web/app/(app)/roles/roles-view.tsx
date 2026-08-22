@@ -314,7 +314,7 @@ function RoleActions({
   if (!anything) {
     return (
       <Tooltip content={c.lockedReason ?? 'You hold no role permissions in this organization'}>
-        <span className="inline-flex items-center gap-1 text-2xs text-text-disabled">
+        <span className="inline-flex items-center gap-1 text-2xs text-text-tertiary">
           <Lock className="size-3" aria-hidden />
           Locked
         </span>

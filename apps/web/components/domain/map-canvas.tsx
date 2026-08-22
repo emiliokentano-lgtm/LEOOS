@@ -69,6 +69,15 @@ export interface MapCanvasProps {
   incidents: MapIncidentMarker[];
   markers: MapMarker[];
   selectedUnitId: string | null;
+  /**
+   * The viewer's OWN unit, marked so it can be found at a glance.
+   *
+   * "Which one am I" is the first question anybody asks of a map carrying two
+   * hundred markers, and nothing on the screen answered it. Drawn as a static
+   * double ring plus a YOU tag — a shape no other marker uses, so it survives
+   * greyscale, peripheral vision and a colour-blind operator.
+   */
+  ownUnitId: string | null;
   selectedIncidentId: string | null;
   selectedMarkerId: string | null;
   /** Locks the viewport to this unit. */
@@ -130,7 +139,7 @@ function useTokenResolver(): (token: string, fallback: string) => string {
 
 export const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function MapCanvas({
   store, filter, incidents, markers, onViewportChange,
-  selectedUnitId, selectedIncidentId, selectedMarkerId, followUnitId,
+  selectedUnitId, ownUnitId, selectedIncidentId, selectedMarkerId, followUnitId,
   onSelectUnit, onSelectIncident, onSelectMarker, onContextMenu, className,
 }, ref) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -446,7 +455,7 @@ export const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(funct
     drawMarkers(ctx, viewportForFrame, markers, selectedMarkerId, targets, resolveToken);
     drawIncidents(ctx, viewportForFrame, incidents, selectedIncidentId, targets, resolveToken);
     drawUnits(
-      ctx, viewportForFrame, unitsRef.current, selectedUnitId, interpolator.current,
+      ctx, viewportForFrame, unitsRef.current, selectedUnitId, ownUnitId, interpolator.current,
       now, wallClock, targets, resolveToken,
     );
 
@@ -457,7 +466,7 @@ export const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(funct
     // subscription, and depending on it would be depending on nothing.
   }, [
     effectiveViewport, size, incidents, markers,
-    selectedUnitId, selectedIncidentId, selectedMarkerId, resolveToken, requestDraw,
+    selectedUnitId, ownUnitId, selectedIncidentId, selectedMarkerId, resolveToken, requestDraw,
   ]);
 
   React.useEffect(() => {
@@ -779,6 +788,7 @@ function drawUnits(
   vp: Viewport,
   units: readonly MapUnit[],
   selectedId: string | null,
+  ownUnitId: string | null,
   interpolator: MapInterpolator,
   now: number,
   wallClock: number,
@@ -813,7 +823,8 @@ function drawUnits(
 
   const base = resolve('--color-base', '#0b0e14');
   const accent = resolve('--color-accent', '#4d8ee8');
-  const panic = resolve('--status-panic', '#ff3b3b');
+  const panic = resolve('--status-panic', '#ff5252');
+  const own = resolve('--color-text-primary', '#e6eaf2');
   const labelColor = resolve('--color-text-primary', '#e6eaf2');
 
   for (const entry of singles) {
@@ -825,6 +836,7 @@ function drawUnits(
 
     const freshness = freshnessOf(unit.location, wallClock);
     const selected = unit.id === selectedId;
+    const isOwn = unit.id === ownUnitId;
     const orgColor = unit.organization.color;
 
     ctx.save();
@@ -935,9 +947,39 @@ function drawUnits(
       ctx.stroke();
     }
 
+    /**
+     * THE VIEWER'S OWN UNIT.
+     *
+     * A double ring and a tag, drawn under the selection ring so the two can be
+     * true at once — the operator selecting their own marker must not lose
+     * either signal. Static, like the panic emphasis and for the same reasons:
+     * no animation is load-bearing anywhere on this map.
+     *
+     * The tag says YOU rather than relying on the ring alone, so the meaning
+     * survives a greyscale display and does not have to be learned.
+     */
+    if (isOwn) {
+      for (const [radius, width] of [[13, 2], [17, 1]] as const) {
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = own;
+        ctx.lineWidth = width;
+        ctx.stroke();
+      }
+      ctx.save();
+      ctx.font = '700 8px ui-monospace, SFMono-Regular, Menlo, monospace';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = base;
+      ctx.strokeText('YOU', point.x, point.y - 21);
+      ctx.fillStyle = own;
+      ctx.fillText('YOU', point.x, point.y - 21);
+      ctx.restore();
+    }
+
     if (selected) {
       ctx.beginPath();
-      ctx.arc(point.x, point.y, 18, 0, Math.PI * 2);
+      ctx.arc(point.x, point.y, 21, 0, Math.PI * 2);
       ctx.strokeStyle = accent;
       ctx.lineWidth = 1.5;
       ctx.stroke();
@@ -950,7 +992,7 @@ function drawUnits(
     // A panic unit is ALWAYS labelled. Zoomed out is exactly when an operator
     // needs to know which unit it is, and the decluttering rule is the wrong
     // trade for the one marker on the map that matters most.
-    if (showLabels || selected || unit.status.key === 'panic') {
+    if (showLabels || selected || isOwn || unit.status.key === 'panic') {
       ctx.save();
       if (freshness === 'stale') ctx.globalAlpha = 0.5;
       if (freshness === 'offline') ctx.globalAlpha = 0.4;

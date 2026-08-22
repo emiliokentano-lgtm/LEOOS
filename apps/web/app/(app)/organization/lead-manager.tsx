@@ -84,7 +84,7 @@ export function LeadManager({
                     Since {formatDateTime(lead.grantedAt)}
                   </p>
                   {lead.grantedBy ? (
-                    <p className="text-2xs text-text-disabled">by {lead.grantedBy}</p>
+                    <p className="text-2xs text-text-tertiary">by {lead.grantedBy}</p>
                   ) : null}
                 </div>
                 {canManage ? (

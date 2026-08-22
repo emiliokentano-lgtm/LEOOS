@@ -119,7 +119,7 @@ export function StatusControl({
 
         {/* Unit */}
         <div className="flex flex-col gap-1.5 border-t border-border-subtle pt-2.5">
-          <p className="text-2xs uppercase tracking-wide text-text-disabled">Unit</p>
+          <p className="text-2xs uppercase tracking-wide text-text-tertiary">Unit</p>
           {myUnit ? (
             <div className="flex items-center gap-2">
               <span className="font-mono text-sm font-semibold text-text-primary">

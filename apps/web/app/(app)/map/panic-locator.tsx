@@ -6,7 +6,7 @@ import {
   formatWorldPosition, projectToScreen,
   type MapUnit, type Viewport,
 } from '@leoos/contracts';
-import { Button } from '@/components/ui';
+import { Button, OrgTag } from '@/components/ui';
 import type { MapUnitStore } from '@/lib/map/unit-store';
 import { useUnitPosition } from '@/lib/map/use-unit-store';
 import { cn } from '@/lib/utils';
@@ -85,12 +85,11 @@ function PanicEntry({
   return (
     <span className="flex items-center gap-1.5 text-xs">
       <span className="font-mono font-semibold text-text-primary">{unit.callsign}</span>
-      <span
-        className="rounded-[2px] border px-1 text-[9px]"
-        style={{ borderColor: unit.organization.color, color: unit.organization.color }}
-      >
-        {unit.organization.shortName}
-      </span>
+      <OrgTag
+        shortName={unit.organization.shortName}
+        color={unit.organization.color}
+        size="xs"
+      />
       {unit.crew.length > 0 ? (
         <span className="text-text-secondary">{unit.crew.map((c) => c.name).join(', ')}</span>
       ) : null}

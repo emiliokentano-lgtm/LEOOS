@@ -12,6 +12,7 @@ export { Select, type SelectOption, type SelectProps } from './select';
 export { Checkbox, type CheckboxProps } from './checkbox';
 export { Toggle, type ToggleProps } from './toggle';
 export { Badge, badgeVariants, type BadgeProps } from './badge';
+export { OrgTag } from './org-tag';
 export {
   DutyStatusBadge, IncidentStatusBadge, PriorityBadge, OrgBadge,
   type DutyStatusBadgeProps, type PriorityBadgeProps,

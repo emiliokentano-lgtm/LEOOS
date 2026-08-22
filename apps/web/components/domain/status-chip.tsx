@@ -20,7 +20,7 @@ export function StatusChip({
 }) {
   if (status === null) {
     return (
-      <span className={cn('text-2xs text-text-disabled', className)}>Off duty</span>
+      <span className={cn('text-2xs text-text-tertiary', className)}>Off duty</span>
     );
   }
 

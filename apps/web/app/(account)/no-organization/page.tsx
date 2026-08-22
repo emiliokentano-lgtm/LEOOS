@@ -20,8 +20,11 @@ export default async function NoOrganizationPage() {
   if (session.organizationId) redirect('/dashboard');
 
   return (
-    <div className="flex min-h-dvh flex-col items-center justify-center p-6">
+    <main className="flex min-h-dvh flex-col items-center justify-center p-6">
       <div className="w-full max-w-lg">
+        {/* The page's own heading, for a screen reader that has no shell to
+            read one from — this screen renders outside the app chrome. */}
+        <h1 className="sr-only">Awaiting organization assignment</h1>
         <Panel flush>
           <PanelHeader title="Awaiting organization assignment" icon={<Building2 />} />
           <div className="flex flex-col gap-3 p-4">
@@ -52,6 +55,6 @@ export default async function NoOrganizationPage() {
           </div>
         </Panel>
       </div>
-    </div>
+    </main>
   );
 }

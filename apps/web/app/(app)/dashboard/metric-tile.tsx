@@ -38,7 +38,7 @@ export function MetricTile({
     </>
   ) : (
     <>
-      <span className="font-mono text-lg font-semibold text-text-disabled" aria-hidden>—</span>
+      <span className="font-mono text-lg font-semibold text-text-tertiary" aria-hidden>—</span>
       <span className="text-2xs text-text-tertiary">{explainUnavailable(metric)}</span>
     </>
   );
@@ -49,7 +49,7 @@ export function MetricTile({
         {label}
         {hint !== undefined ? (
           <Tooltip content={hint}>
-            <HelpCircle className="size-3 text-text-disabled" aria-hidden />
+            <HelpCircle className="size-3 text-text-tertiary" aria-hidden />
           </Tooltip>
         ) : null}
       </span>

@@ -124,17 +124,17 @@ export function PersonsView({
       id: 'dob', header: 'Date of birth', mono: true, width: '130px', hideBelow: 'md',
       cell: (p) => (p.dateOfBirth
         ? formatDate(p.dateOfBirth)
-        : <span className="text-text-disabled">—</span>),
+        : <span className="text-text-tertiary">—</span>),
     },
     {
       id: 'phone', header: 'Phone', mono: true, width: '130px', hideBelow: 'lg',
-      cell: (p) => p.phoneNumber ?? <span className="text-text-disabled">—</span>,
+      cell: (p) => p.phoneNumber ?? <span className="text-text-tertiary">—</span>,
     },
     {
       id: 'address', header: 'Address', hideBelow: 'xl',
       cell: (p) => (
         <span className="truncate text-text-secondary">
-          {p.address ?? <span className="text-text-disabled">—</span>}
+          {p.address ?? <span className="text-text-tertiary">—</span>}
         </span>
       ),
     },

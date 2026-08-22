@@ -20,8 +20,19 @@
   --color-surface: #12161f;     /* sidebar, panels                           */
   --color-raised: #171c27;      /* cards, table headers, inputs              */
   --color-overlay: #1d2330;     /* dialogs, popovers, dropdowns              */
-  --color-hover: #232a3a;       /* interactive hover                         */
-  --color-active: #2b3346;      /* interactive pressed / selected row        */
+  /**
+   * Row states are deliberately SUBTLE.
+   *
+   * These were #232a3a and #2b3346 — a lift big enough that the meta text on a
+   * hovered or selected row dropped to 3.3:1 and stopped meeting AA. In a dense
+   * table the background lift is also the noisiest way to say "this row": at
+   * thirty rows a bright band drags the eye away from the priority column,
+   * which is the thing that actually matters. The selected row now carries a
+   * 2px accent bar on its leading edge and only a slight tint, so the state is
+   * unambiguous AND every token on it still passes.
+   */
+  --color-hover: #1e2532;       /* interactive hover                         */
+  --color-active: #232a39;      /* interactive pressed / selected row        */
 
   /* ── Borders ──────────────────────────────────────────────────────────── */
   --color-border-subtle: #1e2532;
@@ -29,10 +40,31 @@
   --color-border-strong: #3a4459;
 
   /* ── Text ─────────────────────────────────────────────────────────────── */
+  /**
+   * EVERY LEVEL EXCEPT `disabled` MEETS WCAG AA (4.5:1) ON EVERY SURFACE ABOVE,
+   * including the hovered and selected row states. Measured, not asserted:
+   * `scripts/a11y-check.mjs` computes the rendered ratio of every text node on
+   * every page against the background actually painted behind it.
+   *
+   * `tertiary` was #6b7686 — 3.93:1 on the sidebar, 3.70:1 on a panel — and it
+   * carries most of the meta text in the product: timestamps, locations, hints,
+   * counts. 111 of the 179 findings in the first audit were that one value.
+   *
+   * Raising it costs some of the lightness gap to `secondary` (1.28:1 apart
+   * now, was 1.85). Hierarchy is therefore carried by SIZE AND WEIGHT as well
+   * as colour — tertiary is 11–12px against a 13px base — which is sturdier
+   * anyway: a hierarchy that exists only in one channel disappears for anyone
+   * who cannot see that channel.
+   *
+   * `disabled` stays dim on purpose. WCAG 1.4.3 exempts inactive controls, and
+   * a disabled button that reads as active is its own bug. It is ONLY for
+   * inactive controls — where it had been used for information (sidebar section
+   * headings, an off-duty status) that text now uses `tertiary`.
+   */
   --color-text-primary: #e6eaf2;
   --color-text-secondary: #9aa5b8;
-  --color-text-tertiary: #6b7686;
-  --color-text-disabled: #4a5260;
+  --color-text-tertiary: #88919e;
+  --color-text-disabled: #606774;
   --color-text-inverse: #0b0e14;
 
   /* ── Operational status ───────────────────────────────────────────────────
@@ -42,30 +74,42 @@
      status also carries a label and an icon.                                */
   --color-status-available: #2ea86b;
   --color-status-busy: #d99a2b;
-  --color-status-onscene: #3b82d9;
-  --color-status-operation: #8b5cf6;
+  --color-status-onscene: #5593de;
+  --color-status-operation: #a079f8;
   --color-status-transport: #14b8a6;
-  --color-status-hq: #64748b;
-  --color-status-hold: #a16207;
-  --color-status-panic: #ff3b3b;
-  --color-status-offline: #5a6474;
+  --color-status-hq: #8591a4;
+  --color-status-hold: #bb8b47;
+  --color-status-panic: #ff5252;
+  --color-status-offline: #8a919c;
 
   /* ── Incident priority ────────────────────────────────────────────────── */
-  --color-priority-1: #ff3b3b;
+  --color-priority-1: #ff5252;
   --color-priority-2: #ff7a2f;
   --color-priority-3: #d99a2b;
-  --color-priority-4: #3b82d9;
-  --color-priority-5: #6b7686;
+  --color-priority-4: #5593de;
+  --color-priority-5: #8591a4;
 
   /* ── Semantic feedback ────────────────────────────────────────────────── */
-  --color-danger: #d94141;
+  /**
+   * Two values per semantic colour, and the distinction is load-bearing.
+   *
+   * The plain token is the TEXT and border colour, light enough to meet AA on
+   * every surface. The `-solid` token is the FILL of a button that carries
+   * white text, dark enough that the white on it meets AA — the primary button
+   * was 3.31:1 before, which is the single control every operator uses most.
+   */
+  --color-danger: #e37070;
+  --color-danger-solid: #c23b3b;
   --color-danger-strong: #ef4444;
   --color-warning: #d99a2b;
+  --color-warning-solid: #8a5f10;
   --color-success: #2ea86b;
-  --color-info: #3b82d9;
+  --color-success-solid: #1f7a4c;
+  --color-info: #5593de;
 
   /* ── Accent — used only for focus and the active nav marker ───────────── */
-  --color-accent: #4d8ee8;
+  --color-accent: #5291e9;
+  --color-accent-solid: #3f74bd;   /* fill under white text — 4.73:1          */
   --color-accent-muted: #1e3a5f;
 
   /* ── Typography ───────────────────────────────────────────────────────────

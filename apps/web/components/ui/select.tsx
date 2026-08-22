@@ -45,7 +45,9 @@ export function Select({
         className={cn(
           'flex w-full items-center justify-between gap-2 rounded-xs border border-border bg-raised',
           'px-2.5 text-text-primary transition-colors duration-(--duration-fast)',
-          'hover:border-border-strong focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent',
+                    // Matches the button and the input: one focus language, not three.
+          'hover:border-border-strong focus:border-accent focus:[outline-style:solid]',
+          'focus:outline-2 focus:outline-offset-1 focus:outline-accent',
           'disabled:cursor-not-allowed disabled:opacity-50',
           'aria-[invalid=true]:border-danger',
           'data-[placeholder]:text-text-tertiary',

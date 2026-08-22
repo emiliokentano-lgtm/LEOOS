@@ -182,7 +182,7 @@ export function AuditView({
               'from', e.target.value ? new Date(`${e.target.value}T00:00:00Z`).toISOString() : '',
             )}
           />
-          <span className="text-2xs text-text-disabled">→</span>
+          <span className="text-2xs text-text-tertiary">→</span>
           <Input
             type="date"
             inputSize="sm"
@@ -270,7 +270,7 @@ export function AuditView({
                     </span>
                   </span>
 
-                  <ChevronRight className="mt-0.5 size-3.5 shrink-0 text-text-disabled" aria-hidden />
+                  <ChevronRight className="mt-0.5 size-3.5 shrink-0 text-text-tertiary" aria-hidden />
                 </button>
               ))
             )}
@@ -348,14 +348,14 @@ function AuditDetail({ entry, onClose }: { entry: AuditEntry; onClose: () => voi
                 </span>
               </span>
             ) : (
-              <span className="text-text-disabled">—</span>
+              <span className="text-text-tertiary">—</span>
             )}
           </Detail>
 
           <Detail label="Organization">
             {entry.organization
               ? entry.organization.name
-              : <span className="text-text-disabled">none — this action was not organization-scoped</span>}
+              : <span className="text-text-tertiary">none — this action was not organization-scoped</span>}
           </Detail>
 
           <Detail label="Source address">

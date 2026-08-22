@@ -12,7 +12,7 @@ import {
   type GlobalCapabilityMeta,
 } from '@leoos/contracts';
 import {
-  Alert, Badge, Button, Field, Input, Modal, Panel, PanelHeader, Select, Tooltip,
+  Alert, Badge, Button, Field, Input, Modal, OrgTag, Panel, PanelHeader, Select, Tooltip,
 } from '@/components/ui';
 import { PageContainer } from '@/components/shell/page-container';
 import { IDLE } from '@/lib/auth-action-types';
@@ -139,7 +139,7 @@ export function AdminUserDetailView({
             <Row label="Last login">
               {user.lastLoginAt
                 ? <span className="font-mono">{formatDateTime(user.lastLoginAt)}</span>
-                : <span className="text-text-disabled">never signed in</span>}
+                : <span className="text-text-tertiary">never signed in</span>}
             </Row>
             {user.lastLoginIp ? (
               <Row label="Last login from"><span className="font-mono">{user.lastLoginIp}</span></Row>
@@ -226,12 +226,12 @@ export function AdminUserDetailView({
                   key={m.memberId}
                   className="flex items-start gap-3 border-b border-border-subtle px-3 py-2.5 last:border-b-0"
                 >
-                  <span
-                    className="mt-0.5 rounded-[2px] border px-1 text-[10px] font-medium"
-                    style={{ borderColor: m.organization.color, color: m.organization.color }}
-                  >
-                    {m.organization.shortName}
-                  </span>
+                  <OrgTag
+                    className="mt-0.5"
+                    shortName={m.organization.shortName}
+                    name={m.organization.name}
+                    color={m.organization.color}
+                  />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-xs font-medium text-text-primary">

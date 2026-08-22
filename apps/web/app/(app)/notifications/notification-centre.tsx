@@ -374,6 +374,7 @@ function SoundSettings() {
               value={preferences.soundVolume}
               disabled={saving || !preferences.soundEnabled}
               onChange={(e) => { void update({ soundVolume: Number(e.target.value) }); }}
+              aria-label="Alert tone volume"
               className="h-1 flex-1 accent-accent disabled:opacity-40"
             />
             <span className="w-10 shrink-0 text-right font-mono text-2xs text-text-tertiary">

@@ -9,7 +9,7 @@ import {
   type DispatchUnit, type IncidentPriority, type IncidentStatusKey,
 } from '@leoos/contracts';
 import {
-  Button, IconButton, Input, Panel, PanelHeader, Select, useToast,
+  Button, IconButton, Input, OrgTag, Panel, PanelHeader, Select, useToast,
 } from '@/components/ui';
 import {
   addIncidentNote, assignUnit, closeIncident, releaseUnit, reopenIncident,
@@ -279,7 +279,7 @@ export function IncidentDetailPanel({
 
         {/* Assigned units */}
         <div className="border-b border-border-subtle p-3">
-          <p className="mb-1.5 text-2xs uppercase tracking-wide text-text-disabled">
+          <p className="mb-1.5 text-2xs uppercase tracking-wide text-text-tertiary">
             Assigned units
           </p>
           {assignedUnits.length === 0 ? (
@@ -291,12 +291,11 @@ export function IncidentDetailPanel({
                   <span className="font-mono font-semibold text-text-primary">
                     {unit.callsign}
                   </span>
-                  <span
-                    className="rounded-[2px] border px-1 text-[9px]"
-                    style={{ borderColor: unit.organization.color, color: unit.organization.color }}
-                  >
-                    {unit.organization.shortName}
-                  </span>
+                  <OrgTag
+                    shortName={unit.organization.shortName}
+                    color={unit.organization.color}
+                    size="xs"
+                  />
                   <span className="truncate text-text-tertiary">
                     {unit.crew.map((c) => c.name).join(', ') || 'Uncrewed'}
                   </span>
@@ -306,7 +305,7 @@ export function IncidentDetailPanel({
                       disabled={pending !== null}
                       onClick={() => { void run('release', () => releaseUnit(summary.id, unit.id)); }}
                       aria-label={`Release ${unit.callsign}`}
-                      className="ml-auto text-text-disabled transition-colors hover:text-danger disabled:opacity-50"
+                      className="ml-auto text-text-tertiary transition-colors hover:text-danger disabled:opacity-50"
                     >
                       <X className="size-3.5" aria-hidden />
                     </button>
@@ -330,7 +329,7 @@ export function IncidentDetailPanel({
 
         {/* Timeline */}
         <div className="p-3">
-          <p className="mb-1.5 text-2xs uppercase tracking-wide text-text-disabled">Timeline</p>
+          <p className="mb-1.5 text-2xs uppercase tracking-wide text-text-tertiary">Timeline</p>
           {loading && detail === null ? (
             <p className="text-xs text-text-tertiary">Loading…</p>
           ) : detail === null ? (
@@ -462,7 +461,7 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
 function ControlRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-start gap-2">
-      <span className="w-14 shrink-0 pt-1 text-2xs uppercase tracking-wide text-text-disabled">
+      <span className="w-14 shrink-0 pt-1 text-2xs uppercase tracking-wide text-text-tertiary">
         {label}
       </span>
       <div className="min-w-0 flex-1">{children}</div>

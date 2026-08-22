@@ -126,6 +126,58 @@ export function DispatchView({
    */
   const selected = incidents.find((i) => i.id === selectedId) ?? null;
 
+  /**
+   * KEYBOARD NAVIGATION OF THE QUEUE.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * A dispatcher works this board with one hand on a radio. Every call had to
+   * be reached by pointing at it, which is the wrong instrument for the busiest
+   * list in the product — and the reason a control room uses a keyboard at all.
+   *
+   *   ↑ / ↓   move through the queue, in the order it is already sorted:
+   *           worst priority first, unassigned ahead of assigned, oldest first
+   *           within a tie. So "down" always means "next most important".
+   *   Enter   opens the highlighted call's detail — which is where it already
+   *           goes on selection, so this is really about not losing the
+   *           selection when the list re-sorts under a live update.
+   *   Esc     clears the selection.
+   *   J / K   the same as ↓ / ↑, for anyone who expects them.
+   *
+   * Typing in a field is excluded, or filtering the queue for a street called
+   * "Kearny" would walk the selection while you spell it.
+   * ────────────────────────────────────────────────────────────────────────
+   */
+  React.useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      if (target?.isContentEditable) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+      const down = event.key === 'ArrowDown' || event.key === 'j';
+      const up = event.key === 'ArrowUp' || event.key === 'k';
+      if (!down && !up && event.key !== 'Escape') return;
+
+      if (event.key === 'Escape') {
+        setSelectedId(null);
+        return;
+      }
+      if (queue.length === 0) return;
+      event.preventDefault();
+
+      const index = queue.findIndex((i) => i.id === selectedId);
+      // No selection yet: down starts at the top of the queue — the most
+      // important call — and up starts at the bottom.
+      const next = index === -1
+        ? (down ? 0 : queue.length - 1)
+        : Math.min(queue.length - 1, Math.max(0, index + (down ? 1 : -1)));
+      setSelectedId(queue[next]!.id);
+    }
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [queue, selectedId]);
+
   const counts = board?.counts ?? null;
   const activeFilters = countActiveDispatchFilters(filter);
 
@@ -190,7 +242,7 @@ export function DispatchView({
           </>
         }
       >
-        <span className="mr-1 text-2xs uppercase tracking-wide text-text-disabled">Priority</span>
+        <span className="mr-1 text-2xs uppercase tracking-wide text-text-tertiary">Priority</span>
         {PRIORITY_LIST.map((p) => (
           <FilterChip
             key={p.value}
@@ -220,7 +272,18 @@ export function DispatchView({
         <Panel flush className="min-h-0">
           <PanelHeader
             title="Call queue"
-            actions={<Badge variant="neutral" mono>{queue.length}</Badge>}
+            actions={
+              <span className="flex items-center gap-2">
+                {/* The shortcut is stated where it applies. A keyboard path
+                    nobody knows about is a keyboard path nobody uses. */}
+                <span className="hidden items-center gap-1 text-2xs text-text-tertiary lg:flex">
+                  <kbd className="rounded-xs border border-border px-1">↑</kbd>
+                  <kbd className="rounded-xs border border-border px-1">↓</kbd>
+                  to move
+                </span>
+                <Badge variant="neutral" mono>{queue.length}</Badge>
+              </span>
+            }
           />
           <div className="border-b border-border-subtle px-2 pb-2">
             <Tabs value={tab} onValueChange={setTab}>
@@ -363,19 +426,37 @@ function QueueRow({
   isMine: boolean;
   onSelect: () => void;
 }) {
+  /**
+   * Keep the selected call on screen.
+   *
+   * Arrowing through a queue longer than the panel is pointless if the
+   * selection walks off the bottom. `block: 'nearest'` scrolls only when it has
+   * to, so clicking a row that is already visible does not jump the list under
+   * the pointer.
+   */
+  const rowRef = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => {
+    if (selected) rowRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [selected]);
+
   const status = INCIDENT_STATUSES[incident.status];
   const priority = PRIORITY_LIST[incident.priority - 1]!;
   const unassigned = incident.assignedUnitIds.length === 0 && status.isOpen;
 
   return (
     <button
+      ref={rowRef}
       type="button"
       onClick={onSelect}
       aria-current={selected ? 'true' : undefined}
       className={cn(
         'flex w-full items-start gap-2 border-b border-border-subtle px-3 py-2 text-left',
         'transition-colors duration-(--duration-fast)',
-        selected ? 'bg-active' : 'hover:bg-hover',
+        // The selected row is marked by a LEADING RULE as well as a tint. The
+        // tint had to come down for contrast (see globals.css), and a rule is
+        // the clearer signal on a dense list anyway — it survives greyscale and
+        // does not compete with the priority stripe for attention.
+        selected ? 'border-l-2 border-l-accent bg-active pl-[10px]' : 'hover:bg-hover',
       )}
     >
       {/* A priority stripe, so the queue is scannable by shape before colour. */}

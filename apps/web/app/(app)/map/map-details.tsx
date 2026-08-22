@@ -9,7 +9,7 @@ import {
   type MapIncidentMarker, type MapMarker, type MapUnit,
 } from '@leoos/contracts';
 import {
-  Badge, Button, IconButton, Panel, PanelHeader, PriorityBadge, useToast,
+  Badge, Button, IconButton, OrgTag, Panel, PanelHeader, PriorityBadge, useToast,
 } from '@/components/ui';
 import { Icon } from '@/components/icon';
 import { removeMapMarker } from '@/lib/map-actions';
@@ -36,17 +36,6 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <dt className="shrink-0 text-text-tertiary">{label}</dt>
       <dd className="min-w-0 text-right text-text-primary">{children}</dd>
     </div>
-  );
-}
-
-function OrgTag({ shortName, color }: { shortName: string; color: string }) {
-  return (
-    <span
-      className="rounded-[2px] border px-1 text-[10px] font-medium"
-      style={{ borderColor: color, color }}
-    >
-      {shortName}
-    </span>
   );
 }
 

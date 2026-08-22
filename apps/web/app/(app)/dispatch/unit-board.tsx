@@ -4,7 +4,7 @@ import * as React from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { UNIT_TYPES, type DispatchUnit } from '@leoos/contracts';
 import {
-  Badge, Button, EmptyState, Field, Input, Modal, Panel, PanelHeader, useToast,
+  Badge, Button, EmptyState, Field, Input, Modal, OrgTag, Panel, PanelHeader, useToast,
 } from '@/components/ui';
 import { Icon } from '@/components/icon';
 import { createUnit, disbandUnit } from '@/lib/dispatch-actions';
@@ -177,12 +177,11 @@ function UnitRow({
           <span className="font-mono text-xs font-semibold text-text-primary">
             {unit.callsign}
           </span>
-          <span
-            className="rounded-[2px] border px-1 text-[9px] font-medium"
-            style={{ borderColor: unit.organization.color, color: unit.organization.color }}
-          >
-            {unit.organization.shortName}
-          </span>
+          <OrgTag
+            shortName={unit.organization.shortName}
+            color={unit.organization.color}
+            size="xs"
+          />
           {isMine ? (
             <span className="text-[9px] uppercase tracking-wide text-accent">you</span>
           ) : null}
@@ -219,7 +218,7 @@ function UnitRow({
             onClick={() => { void remove(); }}
             disabled={pending}
             aria-label={`Disband ${unit.callsign}`}
-            className="text-text-disabled transition-colors hover:text-danger disabled:opacity-50"
+            className="text-text-tertiary transition-colors hover:text-danger disabled:opacity-50"
           >
             <Trash2 className="size-3" aria-hidden />
           </button>

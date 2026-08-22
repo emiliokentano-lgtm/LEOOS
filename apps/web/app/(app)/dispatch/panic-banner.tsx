@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { TriangleAlert } from 'lucide-react';
 import { formatWorldPosition, type PanicAlert } from '@leoos/contracts';
-import { Button, useToast } from '@/components/ui';
+import { Button, OrgTag, useToast } from '@/components/ui';
 import { acknowledgePanic, resolvePanic } from '@/lib/dispatch-actions';
 import { useNow } from '@/lib/map/use-now';
 import { formatElapsed } from '@/lib/utils';
@@ -57,12 +57,10 @@ export function PanicBanner({
           {panic.callsign ? (
             <span className="font-mono text-text-secondary">{panic.callsign}</span>
           ) : null}
-          <span
-            className="rounded-[2px] border px-1 text-[10px]"
-            style={{ borderColor: panic.organization.color, color: panic.organization.color }}
-          >
-            {panic.organization.shortName}
-          </span>
+          <OrgTag
+            shortName={panic.organization.shortName}
+            color={panic.organization.color}
+          />
           {panic.unitCallsign ? (
             <span className="text-text-secondary">in <span className="font-mono">{panic.unitCallsign}</span></span>
           ) : null}

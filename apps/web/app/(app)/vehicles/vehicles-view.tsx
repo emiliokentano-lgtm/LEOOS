@@ -132,7 +132,7 @@ export function VehiclesView({
         }
         return v.ownerName
           ? <span className="truncate">{v.ownerName}</span>
-          : <span className="text-text-disabled">Unregistered owner</span>;
+          : <span className="text-text-tertiary">Unregistered owner</span>;
       },
     },
     {
@@ -162,7 +162,7 @@ export function VehiclesView({
           ) : null}
           {!v.manageable && v.lockedReason ? (
             <Tooltip content={v.lockedReason}>
-              <Lock className="size-3 text-text-disabled" aria-label="Read only" />
+              <Lock className="size-3 text-text-tertiary" aria-label="Read only" />
             </Tooltip>
           ) : null}
         </span>

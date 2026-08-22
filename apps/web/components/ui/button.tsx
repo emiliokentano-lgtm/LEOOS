@@ -12,15 +12,36 @@ const buttonVariants = cva(
     'font-medium transition-colors duration-(--duration-fast)',
     'disabled:pointer-events-none disabled:opacity-50',
     '[&_svg]:pointer-events-none [&_svg]:shrink-0',
+    /**
+     * An EXPLICIT focus ring, offset from the control.
+     *
+     * There was none: the button relied on the browser default, which the base
+     * layer's reset suppresses, so tabbing through a dialog moved an invisible
+     * cursor. Offset rather than inset so it reads on a filled button as well
+     * as an outlined one, and `focus-visible` rather than `focus` so a mouse
+     * click does not leave a ring behind.
+     */
+    'outline-none focus-visible:[outline-style:solid] focus-visible:outline-2',
+    'focus-visible:outline-offset-2 focus-visible:outline-accent',
   ),
   {
     variants: {
       variant: {
-        primary: 'bg-accent text-white hover:bg-accent/85 active:bg-accent/75',
+        /**
+         * `accent-solid`, not `accent`. White on the lighter accent measured
+         * 3.31:1 — on the single control every operator presses most. The solid
+         * fill carries white at 4.73:1, and hover DARKENS rather than fading:
+         * lowering the fill's opacity would have walked the contrast back down
+         * exactly when the pointer is on it.
+         */
+        primary:
+          'bg-accent-solid text-white hover:bg-accent-solid/90 hover:brightness-110 '
+          + 'active:brightness-95',
         secondary:
           'bg-raised text-text-primary border border-border hover:bg-hover hover:border-border-strong',
         ghost: 'text-text-secondary hover:bg-hover hover:text-text-primary',
-        danger: 'bg-danger text-white hover:bg-danger-strong active:bg-danger',
+        danger:
+          'bg-danger-solid text-white hover:brightness-110 active:brightness-95',
         /** For destructive actions that need weight without shouting. */
         'danger-outline':
           'border border-danger/50 text-danger hover:bg-danger/10 hover:border-danger',
