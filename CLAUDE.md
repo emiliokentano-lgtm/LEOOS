@@ -101,7 +101,7 @@ is actually held.
 | 11 | Organization scope is derived from the resource or the actor's membership, never read from the request body. DB trigger blocks cross-org role assignment. | [authz §B](docs/architecture/02-authorization.md), [data-model §8](docs/architecture/01-data-model.md) |
 | 13, 14, 15 | Hierarchy rules H1–H7, evaluated under `SELECT … FOR UPDATE`. | [authz §B.3](docs/architecture/02-authorization.md) |
 | 16 | Explicit DTO serialization boundary — API responses are built from typed DTOs, never from ORM rows. Lint bans returning a `db.select()` result directly. | [authz §A.7](docs/architecture/02-authorization.md) |
-| 17 | `.env*` gitignored; secret scanning in CI; FiveM secret read from a convar, never a file. | `.gitignore`, CI |
+| 17 | `.env*` gitignored (`!.env.example` the sole exception); FiveM secret read from a convar, never a file. **Secret scanning is NOT wired up — there is no CI pipeline in this repository**, so this rule is held by review and by the gitignore alone. Recorded rather than claimed. | `.gitignore`, [report §16](docs/PROJECT-REPORT.md) |
 | 18, 19 | Zod schema on every route and every ingest payload; unvalidated `request.body` access is a lint error. | [overview §7](docs/architecture/00-overview.md) |
 | 20 | All FiveM coordinates come from server-side natives. Org, rank, callsign, and permissions always resolve from the LEOOS database. | [fivem §1](docs/architecture/04-fivem-integration.md) |
 | 36, 37 | The bridge's whole framework surface is four fields in `server/adapters/`; **standalone is what ships**, and nothing outside that directory may name a framework global. | [fivem §8](docs/architecture/04-fivem-integration.md), `resources/leoos_bridge/server/adapters/` |

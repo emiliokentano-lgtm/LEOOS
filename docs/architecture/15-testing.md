@@ -340,6 +340,6 @@ retention policy is a policy for a hypothesis until the downsample flush lands.
 
 **Rate limits make repeated local runs interfere.** Login is capped at 30 per IP
 per 15 minutes, which is correct, and means running the walkthroughs back to back
-exhausts it. In CI each job is a fresh process; locally the API has to be
+exhausts it. There is no CI today; locally the API has to be
 restarted between batches. This is the limiter working, not a defect, and it is
 recorded here so the next person does not diagnose it as one.

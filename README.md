@@ -12,8 +12,12 @@ seventh agency is a seed insert, never a deployment of new logic.
 
 ## What is actually built
 
-Every row below is implemented **and** covered by tests that run in CI. Nothing
-is listed as complete on the strength of a screen existing.
+Every row below is implemented **and** covered by the automated tests named
+beside it. Nothing is listed as complete on the strength of a screen existing.
+
+There is **no CI pipeline in this repository** — the suites are run locally with
+`pnpm test`. Wiring them into CI is the first item under *Recommended next
+steps* in the [project report](docs/PROJECT-REPORT.md).
 
 | Area | State | Evidence |
 | --- | --- | --- |
@@ -94,6 +98,7 @@ grant takes up to five seconds to apply instead of applying on the next request.
 
 | Topic | Where |
 | --- | --- |
+| **Project report — what is built, what is not, what is next** | [`docs/PROJECT-REPORT.md`](docs/PROJECT-REPORT.md) |
 | **Operations — deploy, configure, troubleshoot** | [`docs/OPERATIONS.md`](docs/OPERATIONS.md) |
 | **FiveM resource — install, configure, endpoints** | [`resources/leoos_bridge/README.md`](resources/leoos_bridge/README.md) |
 | Engineering rules and how each is enforced | [`CLAUDE.md`](CLAUDE.md) |
