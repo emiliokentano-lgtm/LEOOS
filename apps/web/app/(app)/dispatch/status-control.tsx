@@ -216,6 +216,9 @@ function UnitPicker({
         options={options}
         placeholder="Select a unit…"
         className="flex-1"
+        // Distinguished from the incident detail's assign control, which reads
+        // identically without a label of its own.
+        aria-label="Join a unit"
       />
       <Button
         size="sm"

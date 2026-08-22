@@ -298,6 +298,16 @@ cache's TTL were all built for it; until now nothing could actually write one.
 | 21, 22 | Setting or clearing one bumps `permission_version`, so it takes effect on the very next request with no wait. EXPIRY is the one case no transaction can announce — nothing runs when the clock passes `expires_at` — which is precisely what the identity cache's five-second TTL is for, and both halves are tested. | [performance §4](docs/architecture/14-performance.md) |
 | 24 | An expired override is kept, not deleted: it is a record of something that was once approved, and the audit trail refers to it. Reads filter on the expiry rather than the row's existence. | `personnel.read.ts`, `context.service.ts` |
 
+### Production readiness
+
+| Rules | Mechanism | Location |
+| --- | --- | --- |
+| 34, 45 | Nothing in the shell asserts a state it cannot observe. The status bar's hard-coded "FiveM not connected" chip — still saying "Bridge lands in Phase 7" two phases after the bridge shipped — is gone; bridge state is reported by `MapSourceStatus`, which is derived from heartbeats that actually arrived. | `apps/web/components/shell/status-bar.tsx` |
+| 40, 41 | The browser walkthroughs are release gates, so they have to be RUNNABLE. Their cast and fixtures are provisioned by scripts in the repository rather than assumed to exist in one developer's database, which is how they had been failing on a clean checkout with a `waitForURL` timeout that named nothing. | `packages/db/scripts/setup-ui-cast.mjs`, `setup-records.mjs` |
+| 26 | Two comboboxes on the dispatch screen both read "Select a unit…" — one dispatches to a call, one joins a crew — and neither carried a programmatic label, because the caption beside them is a plain span. Both now name themselves. | `apps/web/app/(app)/dispatch/` |
+| 43 | Contrast is measured on the STATE THAT RENDERS, not the default one: the unread badge and the audit log's organization chip both escaped the earlier pass because an empty inbox and an unfiltered log do not draw them. Both now use the `*-solid` fills that exist for text on colour. | `apps/web/scripts/a11y-check.mjs` |
+| 17, 42 | Deployment, the full environment-variable reference, database setup, API authentication and troubleshooting are documented with placeholders only — and the README no longer describes a product that does not exist. | [OPERATIONS](docs/OPERATIONS.md) |
+
 ---
 
 ## Standing conventions

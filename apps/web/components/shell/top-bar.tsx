@@ -155,7 +155,14 @@ export function TopBar() {
                     'pointer-events-none absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5',
                     'items-center justify-center rounded-full px-0.5',
                     'font-mono text-[9px] font-semibold leading-none text-white',
-                    notifications.unread.critical > 0 ? 'bg-danger' : 'bg-accent',
+                    /* The *-solid tokens, not the plain ones. `bg-accent` and
+                       `bg-danger` are tuned to be legible AS TEXT on the dark
+                       surface; underneath white text at 9px they measure 3.19:1
+                       and 3.08:1. The solid variants exist for exactly this
+                       case and clear AA at 4.73:1 and 5.27:1. The badge escaped
+                       the earlier pass because an account with nothing unread
+                       does not render it. */
+                    notifications.unread.critical > 0 ? 'bg-danger-solid' : 'bg-accent-solid',
                   )}
                   aria-hidden
                 >

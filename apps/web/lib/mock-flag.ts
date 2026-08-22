@@ -1,28 +1,25 @@
 /**
  * Demo-mode flag (engineering rules 34, 35, 45).
  *
- * While true, every screen is backed by fixtures from `apps/web/mocks` and the
- * top bar shows a persistent "Demo data" indicator. It is never enabled in a
- * production build: the value is inlined at build time, and the production
- * deployment does not set the variable.
+ * While true, the shell shows a persistent "Demo data" indicator. It is never
+ * enabled in a production build: the value is inlined at build time and the
+ * production deployment does not set the variable.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT WAS REMOVED, AND WHY IT MATTERED
+ *
+ * This file also exported an `INTEGRATION_STATUS` catalogue describing each
+ * integration's state. It was written in the UI phase and never revisited, so
+ * by the time the product was finished it was asserting:
+ *
+ *   api    'No backend — UI phase'      (the API had shipped)
+ *   fivem  'Bridge lands in Phase 7'    (the bridge had shipped)
+ *
+ * and the status bar was rendering the second one as a permanent
+ * "FiveM not connected" chip on every page. A hard-coded status is not a status.
+ * Every surface that reports an integration now reads its ACTUAL state from the
+ * API — `MapSourceStatus` for the bridge, the socket's own state for the feed,
+ * the admin system screen for the mail transport.
+ * ────────────────────────────────────────────────────────────────────────────
  */
 export const IS_DEMO_DATA = process.env.NEXT_PUBLIC_LEOOS_DEMO === '1';
-
-/** Integrations that exist only as placeholders in this phase. Surfaced in the
- *  UI as their real state rather than as a success indicator. */
-export const INTEGRATION_STATUS = {
-  api: { label: 'API', state: 'not-connected', detail: 'No backend — UI phase' },
-  /**
-   * The WebSocket transport has shipped, so this is no longer a fixed label —
-   * the status bar reads the connection's actual state and prints that. This
-   * entry survives as the tooltip text, and says what the fallback is rather
-   * than implying the socket is the only path.
-   */
-  liveFeed: {
-    label: 'Feed',
-    state: 'partial',
-    detail: 'Live updates over WebSocket, with revision polling as the fallback.',
-  },
-  fivem: { label: 'FiveM bridge', state: 'not-connected', detail: 'Bridge lands in Phase 7' },
-  mail: { label: 'Mail', state: 'not-connected', detail: 'Console transport — not delivering' },
-} as const;

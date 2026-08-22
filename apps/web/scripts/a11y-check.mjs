@@ -281,6 +281,12 @@ async function auditPage(page, name) {
     await page.keyboard.press('Tab');
     const focused = await page.evaluate(focusStyle);
     if (!focused || focused.tag === 'body') break;
+    // `nextjs-portal` is the DEV-TOOLS OVERLAY the framework injects into
+    // `next dev`. It is focusable, has no ring of ours, and does not exist in a
+    // production build — so reporting it told the reader there were nine
+    // problems in the product when there were none. An audit that cannot be
+    // brought to zero stops being read.
+    if (focused.tag === 'nextjs-portal') continue;
     if (visited.has(focused.key)) continue;
     visited.add(focused.key);
 

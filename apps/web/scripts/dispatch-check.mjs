@@ -101,7 +101,18 @@ if (await row.count()) {
   // Assign a unit.
   const dispatchBtn = sgt.page.getByRole('button', { name: /^dispatch$/i });
   if (await dispatchBtn.count()) {
-    const select = sgt.page.locator('button[role="combobox"]').last();
+    /**
+     * BY NAME, not by position.
+     *
+     * This used to be `.locator('button[role="combobox"]').last()`, and there
+     * are two comboboxes on this screen that both read "Select a unit…" — the
+     * one that dispatches to the call, and the one in the right rail that joins
+     * a crew. `.last()` picked the wrong one, opened it, and then failed on a
+     * disabled option, which reported as "the product will not let a sergeant
+     * assign a unit". Both controls now carry an aria-label, which the walkthrough
+     * selects on and a screen reader reads out.
+     */
+    const select = sgt.page.getByRole('combobox', { name: /assign a unit/i });
     await select.click();
     await sgt.page.waitForTimeout(300);
     const option = sgt.page.locator('[role="option"]').first();

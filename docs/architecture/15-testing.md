@@ -180,6 +180,24 @@ contained breakpoint logic (`top-bar.tsx` hides the organization label below
 seated dispatcher's console, and claiming a phone layout the product does not
 have would be worse than not claiming one.
 
+#### The cast is provisioned, not assumed
+
+Nine of the walkthroughs sign in as a fixed name — `ui.admin`, `ui.chief`,
+`ui.commander`, `ui.sergeant`, `ui.officer1`, `ui.cadet1`, `ui.medic` — because a
+screenshot comparison wants the same account every run. For a long time nothing
+in the repository created them: they existed in one developer's database, and a
+clean checkout got a `waitForURL` timeout at the login form with no explanation.
+
+`packages/db/scripts/setup-ui-cast.mjs` now creates them, idempotently, and
+**repairs** them — a rerun after the admin walkthrough disabled an account puts
+it back, which is the failure mode that would otherwise return. It refuses a
+production database, and it copies a password hash the API has already verified
+rather than writing one, so a change to the Argon2 parameters cannot leave it
+minting logins that do not work.
+
+The other three casts (`setup-admin`, `setup-notifications`, `setup-live-map`)
+are tagged per run and print `export` lines to source.
+
 ---
 
 ## 5 — What this phase found

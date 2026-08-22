@@ -259,6 +259,12 @@ export function IncidentDetailPanel({
                     }))}
                     placeholder={assignable.length === 0 ? 'No units free' : 'Select a unit…'}
                     className="flex-1"
+                    /* The "ASSIGN" caption beside this control is a plain span,
+                       so it labels the control visually and not programmatically.
+                       Two comboboxes on this screen read "Select a unit…" — this
+                       one dispatches to the call, the other joins a crew — and to
+                       a screen reader they were indistinguishable. */
+                    aria-label="Assign a unit to this call"
                   />
                   <Button
                     size="sm"

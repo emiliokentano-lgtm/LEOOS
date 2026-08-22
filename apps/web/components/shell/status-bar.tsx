@@ -5,7 +5,6 @@ import { Radio, Wifi, WifiOff } from 'lucide-react';
 import type { OrganizationSummary } from '@leoos/contracts';
 import { cn, formatTime } from '@/lib/utils';
 import { Tooltip } from '@/components/ui';
-import { INTEGRATION_STATUS } from '@/lib/mock-flag';
 import type { Session } from '@/lib/session';
 import { useRealtimeStatus } from '@/lib/realtime/realtime-context';
 import type { RealtimeState } from '@/lib/realtime/realtime-client';
@@ -17,6 +16,10 @@ import { useDutyStatus } from './duty-status-context';
  * Plain words rather than protocol states: "reconnecting" and "polling" mean
  * something to the person on the console; "idle" and "failed" do not.
  */
+/** Shown when the client has no detail of its own to report. */
+const FEED_FALLBACK_DETAIL =
+  'Live updates over WebSocket, with revision polling as the fallback.';
+
 const FEED_LABELS: Record<RealtimeState, { label: string; tone: string }> = {
   idle: { label: 'Feed: polling', tone: 'text-text-tertiary' },
   connecting: { label: 'Feed: connecting', tone: 'text-text-tertiary' },
@@ -31,6 +34,26 @@ const FEED_LABELS: Record<RealtimeState, { label: string; tone: string }> = {
  * Shows organization, unit, duty status, live-feed state and the clock. An
  * operator must never have to navigate to find out whether the system still
  * thinks they are on duty, or whether the live feed is actually live.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * WHAT IS DELIBERATELY *NOT* HERE: A FIVEM INDICATOR
+ *
+ * This bar used to carry a hard-coded "FiveM not connected" chip, with a
+ * tooltip reading "Bridge lands in Phase 7". The bridge shipped, and the chip
+ * did not change — so on an installation with a live game server the shell told
+ * every operator the opposite of the truth, on the one screen furniture that is
+ * visible from every page.
+ *
+ * The API does report the real state: `MapSourceStatus` carries `kind`,
+ * `connected`, a label and a detail derived from heartbeats that actually
+ * arrived. The map and the dashboard render it. The status bar has no map
+ * snapshot and would need a request of its own on every page load to get one.
+ *
+ * So the rule applied here is the one that governs this whole product: an
+ * indicator that has not earned its state does not get to show one. The feed
+ * indicator beside this comment reports the socket, which this component
+ * genuinely knows about. Bridge state is reported where the data lives.
+ * ────────────────────────────────────────────────────────────────────────────
  */
 export function StatusBar({
   session, organization,
@@ -102,7 +125,7 @@ export function StatusBar({
         {/* Transport state — reported honestly, never a green light it has not
             earned. Per-screen connection health is shown on the screen that has
             a connection; this says which transport is carrying it. */}
-        <Tooltip content={realtime.detail ?? INTEGRATION_STATUS.liveFeed.detail}>
+        <Tooltip content={realtime.detail ?? FEED_FALLBACK_DETAIL}>
           <span className="flex items-center gap-1.5">
             {realtime.state === 'live'
               ? <Wifi className="size-3 text-status-available" aria-hidden />
@@ -111,12 +134,6 @@ export function StatusBar({
           </span>
         </Tooltip>
 
-        <Tooltip content={INTEGRATION_STATUS.fivem.detail}>
-          <span className="flex items-center gap-1.5">
-            <Wifi className="size-3 text-text-tertiary" aria-hidden />
-            <span>FiveM not connected</span>
-          </span>
-        </Tooltip>
 
         <span className="font-mono tabular text-text-secondary" suppressHydrationWarning>
           {clock ?? '--:--'}

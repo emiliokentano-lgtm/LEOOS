@@ -10,8 +10,8 @@ import {
   type AuditEntry, type AuditPage, type OrganizationSummary,
 } from '@leoos/contracts';
 import {
-  Alert, Badge, EmptyState, FilterBar, Input, Modal, Panel, PanelHeader, SearchInput, Select,
-  Button, Tooltip,
+  Alert, Badge, EmptyState, FilterBar, Input, Modal, OrgTag, Panel, PanelHeader, SearchInput,
+  Select, Button, Tooltip,
 } from '@/components/ui';
 import { formatDateTime } from '@/lib/utils';
 
@@ -250,16 +250,17 @@ export function AuditView({
                           {entry.outcome}
                         </Badge>
                       ) : null}
+                      {/* `OrgTag`, not an inline copy of it. This screen held
+                          the eighth copy of the borderColor/color pair, and it
+                          was the one still failing contrast at 9px — which is
+                          exactly the drift the shared component exists to stop. */}
                       {entry.organization ? (
-                        <span
-                          className="rounded-[2px] border px-1 text-[9px]"
-                          style={{
-                            borderColor: entry.organization.color,
-                            color: entry.organization.color,
-                          }}
-                        >
-                          {entry.organization.shortName}
-                        </span>
+                        <OrgTag
+                          shortName={entry.organization.shortName}
+                          name={entry.organization.name}
+                          color={entry.organization.color}
+                          size="xs"
+                        />
                       ) : null}
                     </span>
                     <span className="mt-0.5 block truncate text-2xs text-text-tertiary">
