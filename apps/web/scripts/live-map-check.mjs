@@ -913,6 +913,21 @@ if (offline[0]) {
         `the drawn cordon did not come back as a four-point area: ${JSON.stringify(drawn)}`,
         'the drawn cordon came back from the server as a four-point area',
       );
+
+      /**
+       * It belongs to the ORGANIZATION THAT DREW IT.
+       *
+       * This is the assertion that caught the bug: the scope field defaulted to
+       * the first organization on the caller's map — which for a PD sergeant is
+       * LSMD — so the API refused the save, correctly, after the cordon had
+       * already been drawn.
+       */
+      check(
+        drawn?.organization?.shortName === 'LSPD',
+        `the cordon a PD sergeant drew was scoped to `
+        + `${drawn?.organization?.shortName ?? 'nothing'}, not to their own agency`,
+        'the cordon a PD sergeant drew belongs to their own agency',
+      );
       await shot(pd.page, '18-shape-drawn');
 
       /**

@@ -16,10 +16,23 @@ import { drawMapShape } from '@/lib/map-actions';
  * operator can check at a glance — how many points, and how big it is — so a
  * mis-click that produced a two-metre area is obvious before it is saved.
  *
- * Scope is a genuine choice only for a caller cleared to see every organization.
- * Everyone else draws for the organization they are acting in, and the API
- * enforces exactly that — this field is a convenience, not the decision
- * (engineering rule 11).
+ * ────────────────────────────────────────────────────────────────────────────
+ * SCOPE IS ONLY A CHOICE FOR SOMEBODY CLEARED TO MAKE IT
+ *
+ * The organization list on this screen is *organizations that can appear on
+ * this caller's map*, which includes other agencies that share on the public
+ * map. Offering that list to everybody meant a PD sergeant could pick LSMD —
+ * and be refused by the API, correctly, having already drawn the shape. The
+ * live-map walkthrough found exactly that, by drawing a cordon and getting
+ * nothing back.
+ *
+ * So a caller without `map.track_all_orgs` gets no field at all: they draw for
+ * the organization they are acting in, which is the only value the API would
+ * accept. An option that can only fail is worse than no option.
+ *
+ * The API still decides (engineering rule 11) — this is a convenience, not the
+ * decision.
+ * ────────────────────────────────────────────────────────────────────────────
  */
 
 /** Radix Select reserves the empty string for "nothing selected". */
@@ -36,18 +49,38 @@ function squareMetres(value: number): string {
 }
 
 export function ShapeDialog({
-  kind, points, organizations, canDrawGlobal, onClose, onDrawn,
+  kind, points, organizations, actingOrganizationId, canDrawGlobal, onClose, onDrawn,
 }: {
   kind: MapShapeKind;
   points: MapShapePoint[];
   organizations: MapOrganizationRef[];
+  /** The organization the caller is acting in. The only one they may draw for. */
+  actingOrganizationId: string | null;
   canDrawGlobal: boolean;
   onClose: () => void;
   onDrawn: () => void;
 }) {
+  /**
+   * What this caller may actually pick.
+   *
+   * Cleared to see every organization → every organization, plus a shape shared
+   * with all of them. Everybody else → the one they are acting in, and the
+   * field below then does not render at all.
+   */
+  const scopeOptions = canDrawGlobal
+    ? [
+      ...organizations.map((org) => ({ value: org.id, label: org.shortName })),
+      { value: GLOBAL_SCOPE, label: 'All organizations' },
+    ]
+    : organizations
+      .filter((org) => org.id === actingOrganizationId)
+      .map((org) => ({ value: org.id, label: org.shortName }));
+
   const [label, setLabel] = React.useState('');
   const [description, setDescription] = React.useState('');
-  const [scope, setScope] = React.useState<string>(organizations[0]?.id ?? GLOBAL_SCOPE);
+  const [scope, setScope] = React.useState<string>(
+    actingOrganizationId ?? scopeOptions[0]?.value ?? GLOBAL_SCOPE,
+  );
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const toast = useToast();
@@ -92,11 +125,6 @@ export function ShapeDialog({
     toast.push({ tone: 'success', title: `${meta.label} saved` });
     onDrawn();
   }
-
-  const scopeOptions = [
-    ...organizations.map((org) => ({ value: org.id, label: org.shortName })),
-    ...(canDrawGlobal ? [{ value: GLOBAL_SCOPE, label: 'All organizations' }] : []),
-  ];
 
   return (
     <Modal

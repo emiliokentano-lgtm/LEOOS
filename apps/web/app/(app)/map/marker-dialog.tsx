@@ -16,10 +16,22 @@ import { placeMapMarker } from '@/lib/map-actions';
  * nobody meant. Moving one is a drag on the map, which is the gesture that
  * matches the intent.
  *
- * Scope is a genuine choice only for a caller cleared to see every organization.
- * Everyone else places for the organization they are acting in, and the API
- * enforces exactly that — the field below is a convenience, not the decision
- * (engineering rule 11).
+ * ────────────────────────────────────────────────────────────────────────────
+ * SCOPE IS ONLY A CHOICE FOR SOMEBODY CLEARED TO MAKE IT
+ *
+ * The organization list on this screen is *organizations that can appear on
+ * this caller's map*, which includes other agencies that share on the public
+ * map. Offering that list to everybody meant a PD sergeant could pick LSMD —
+ * and be refused by the API, correctly, after placing the marker. The live-map
+ * walkthrough found this on the shape dialog, which had inherited it from here.
+ *
+ * So a caller without `map.track_all_orgs` gets no field at all: they place for
+ * the organization they are acting in, which is the only value the API would
+ * accept. An option that can only fail is worse than no option.
+ *
+ * The API still decides (engineering rule 11) — this is a convenience, not the
+ * decision.
+ * ────────────────────────────────────────────────────────────────────────────
  */
 
 const TYPE_OPTIONS = (Object.keys(MAP_MARKER_TYPES) as MapMarkerType[]).map((key) => ({
@@ -31,18 +43,31 @@ const TYPE_OPTIONS = (Object.keys(MAP_MARKER_TYPES) as MapMarkerType[]).map((key
 const GLOBAL_SCOPE = '__global__';
 
 export function MarkerDialog({
-  position, organizations, canPlaceGlobal, onClose, onPlaced,
+  position, organizations, actingOrganizationId, canPlaceGlobal, onClose, onPlaced,
 }: {
   position: WorldPosition;
   organizations: MapOrganizationRef[];
+  /** The organization the caller is acting in. The only one they may place for. */
+  actingOrganizationId: string | null;
   canPlaceGlobal: boolean;
   onClose: () => void;
   onPlaced: () => void;
 }) {
+  const scopeOptions = canPlaceGlobal
+    ? [
+      ...organizations.map((org) => ({ value: org.id, label: org.shortName })),
+      { value: GLOBAL_SCOPE, label: 'All organizations' },
+    ]
+    : organizations
+      .filter((org) => org.id === actingOrganizationId)
+      .map((org) => ({ value: org.id, label: org.shortName }));
+
   const [type, setType] = React.useState<MapMarkerType>('hazard');
   const [label, setLabel] = React.useState('');
   const [description, setDescription] = React.useState('');
-  const [scope, setScope] = React.useState<string>(organizations[0]?.id ?? GLOBAL_SCOPE);
+  const [scope, setScope] = React.useState<string>(
+    actingOrganizationId ?? scopeOptions[0]?.value ?? GLOBAL_SCOPE,
+  );
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const toast = useToast();
@@ -78,11 +103,6 @@ export function MarkerDialog({
     toast.push({ tone: 'success', title: 'Marker placed' });
     onPlaced();
   }
-
-  const scopeOptions = [
-    ...organizations.map((org) => ({ value: org.id, label: org.shortName })),
-    ...(canPlaceGlobal ? [{ value: GLOBAL_SCOPE, label: 'All organizations' }] : []),
-  ];
 
   return (
     <Modal open onOpenChange={(open) => { if (!open) onClose(); }} title="Place a marker">

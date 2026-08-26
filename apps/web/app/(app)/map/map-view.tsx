@@ -871,6 +871,7 @@ export function MapView({
           kind={pendingShape.kind}
           points={pendingShape.points}
           organizations={organizations}
+          actingOrganizationId={auth.activeOrganizationId}
           canDrawGlobal={capabilities?.canTrackAllOrganizations ?? false}
           onClose={() => setPendingShape(null)}
           onDrawn={() => {
@@ -884,6 +885,7 @@ export function MapView({
         <MarkerDialog
           position={pendingMarker}
           organizations={organizations}
+          actingOrganizationId={auth.activeOrganizationId}
           canPlaceGlobal={capabilities?.canTrackAllOrganizations ?? false}
           onClose={() => setPendingMarker(null)}
           onPlaced={() => {
