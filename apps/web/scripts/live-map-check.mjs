@@ -862,140 +862,143 @@ if (offline[0]) {
  * Drawing a cordon, end to end, through the real tool.
  *
  * The two questions worth a browser rather than a unit test: does the modal
- * drawing tool actually place points where they are clicked, and does the shape
- * stay inside the organization that drew it once it is in a live payload.
+ * drawing tool place points where they are clicked, and does a shape stay
+ * inside the organization that drew it once it is in a live payload.
+ *
+ * Both sessions draw through the UI. There is no browser-reachable POST for a
+ * shape — the screen writes through a server action — so a scripted fetch would
+ * only ever prove that a route it invented does not exist. It did, once.
  */
+async function drawCordon(page, label, corners) {
+  if (!await safeClick(page.getByRole('button', { name: 'Draw an area' }), 'draw-an-area')) {
+    return null;
+  }
+
+  const box = await page.locator('canvas').first().boundingBox();
+  for (const corner of corners) {
+    await page.mouse.click(box.x + box.width * corner.dx, box.y + box.height * corner.dy);
+    await page.waitForTimeout(120);
+  }
+
+  const toolbar = await page.evaluate(() => document.body.innerText);
+  const counted = (toolbar.match(/(\d+) points?/) ?? [null, '0'])[1];
+
+  if (!await safeClick(page.getByRole('button', { name: 'Finish' }), 'Finish')) return null;
+  await page.fill('#shape-label', label);
+  if (!await safeClick(page.getByRole('button', { name: /Save area/ }), 'Save area')) return null;
+  await page.waitForTimeout(1200);
+
+  return { counted: Number(counted) };
+}
+
 {
   const areaButton = pd.page.getByRole('button', { name: 'Draw an area' });
   if (check(
     await areaButton.count() > 0,
     'the map offers no way to draw an area to a caller who can manage markers',
     'the map offers a drawing tool to a caller who can manage markers',
-  ) && await safeClick(areaButton, 'the draw-an-area control')) {
-    const canvas = pd.page.locator('canvas').first();
-    const box = await canvas.boundingBox();
-
-    // Four clicks, in the canvas's own coordinates. Deliberately a real cordon
-    // shape rather than four points in a line, so a wrongly paired geometry
-    // would produce a visibly different figure.
+  )) {
+    // A real cordon rather than four points in a line, so a wrongly paired
+    // geometry would produce a visibly different figure.
     const corners = [
       { dx: 0.35, dy: 0.35 }, { dx: 0.55, dy: 0.35 },
       { dx: 0.55, dy: 0.55 }, { dx: 0.35, dy: 0.55 },
     ];
-    for (const corner of corners) {
-      await pd.page.mouse.click(
-        box.x + box.width * corner.dx,
-        box.y + box.height * corner.dy,
-      );
-      await pd.page.waitForTimeout(120);
-    }
-
-    const toolbar = await pd.page.evaluate(() => document.body.innerText);
-    check(
-      /4 points/.test(toolbar),
-      `after four clicks the drawing toolbar reads: ${
-        (toolbar.match(/\d+ points?/) ?? ['nothing'])[0]}`,
-      'four clicks on the canvas placed exactly four points',
-    );
+    const label = `Walkthrough cordon ${Date.now().toString(36).slice(-4)}`;
+    const drawResult = await drawCordon(pd.page, label, corners);
     await shot(pd.page, '16-drawing');
 
-    const label = `Walkthrough cordon ${Date.now().toString(36).slice(-4)}`;
-    if (await safeClick(pd.page.getByRole('button', { name: 'Finish' }), 'Finish')) {
-      await pd.page.fill('#shape-label', label);
-      await shot(pd.page, '17-shape-dialog');
-      await safeClick(pd.page.getByRole('button', { name: /Save area/ }), 'Save area');
-      await pd.page.waitForTimeout(1200);
+    check(
+      drawResult?.counted === 4,
+      `after four clicks the drawing toolbar counted ${drawResult?.counted ?? 'nothing'}`,
+      'four clicks on the canvas placed exactly four points',
+    );
 
-      const afterDraw = await snapshotFor(pd.page);
-      const drawn = (afterDraw.shapes ?? []).find((sh) => sh.label === label);
-      check(
-        drawn !== undefined && drawn.points.length === 4 && drawn.kind === 'area',
-        `the drawn cordon did not come back as a four-point area: ${JSON.stringify(drawn)}`,
-        'the drawn cordon came back from the server as a four-point area',
-      );
+    const afterDraw = await snapshotFor(pd.page);
+    const drawn = (afterDraw.shapes ?? []).find((sh) => sh.label === label);
+    check(
+      drawn !== undefined && drawn.points.length === 4 && drawn.kind === 'area',
+      `the drawn cordon did not come back as a four-point area: ${JSON.stringify(drawn)}`,
+      'the drawn cordon came back from the server as a four-point area',
+    );
 
-      /**
-       * It belongs to the ORGANIZATION THAT DREW IT.
-       *
-       * This is the assertion that caught the bug: the scope field defaulted to
-       * the first organization on the caller's map — which for a PD sergeant is
-       * LSMD — so the API refused the save, correctly, after the cordon had
-       * already been drawn.
-       */
-      check(
-        drawn?.organization?.shortName === 'LSPD',
-        `the cordon a PD sergeant drew was scoped to `
-        + `${drawn?.organization?.shortName ?? 'nothing'}, not to their own agency`,
-        'the cordon a PD sergeant drew belongs to their own agency',
-      );
-      await shot(pd.page, '18-shape-drawn');
+    /**
+     * It belongs to the ORGANIZATION THAT DREW IT.
+     *
+     * This is the assertion that caught the bug: the scope field defaulted to
+     * the first organization on the caller's map — which for a PD sergeant is
+     * LSMD — so the API refused the save, correctly, after the cordon had
+     * already been drawn.
+     */
+    check(
+      drawn?.organization?.shortName === 'LSPD',
+      `the cordon a PD sergeant drew was scoped to `
+      + `${drawn?.organization?.shortName ?? 'nothing'}, not to their own agency`,
+      'the cordon a PD sergeant drew belongs to their own agency',
+    );
+    await shot(pd.page, '18-shape-drawn');
 
-      /**
-       * THE ONE THAT MATTERS: another organization does not receive it.
-       *
-       * Drawn by MD and checked against PD, not the other way round. This
-       * fixture's MD session deliberately HOLDS `map.track_all_orgs` — it is the
-       * cleared session the organization-isolation phase above contrasts with —
-       * so it is entitled to see a PD cordon and proves nothing. The PD sergeant
-       * holds no such capability, which is what makes their payload the honest
-       * place to look.
-       *
-       * Checked against the RAW payload text, not against what the screen shows:
-       * the client-side filter is a view filter, and a shape that reached the
-       * browser at all has already leaked.
-       */
-      const md2 = await session(MD_USER, 'MD-shapes');
-      await openMap(md2.page);
-      await md2.page.waitForTimeout(800);
+    /**
+     * THE ONE THAT MATTERS: another organization does not receive it.
+     *
+     * Drawn by MD and checked against PD, not the other way round. This
+     * fixture's MD session deliberately HOLDS `map.track_all_orgs` — it is the
+     * cleared session the organization-isolation phase above contrasts with —
+     * so it is entitled to see a PD cordon and proves nothing. The PD sergeant
+     * holds no such capability, which is what makes their payload the honest
+     * place to look.
+     */
+    const md2 = await session(MD_USER, 'MD-shapes');
+    await openMap(md2.page);
+    await md2.page.waitForTimeout(800);
 
-      const mdLabel = `MD cordon ${Date.now().toString(36).slice(-4)}`;
-      const mdDrawn = await md2.page.evaluate(async (name) => {
-        const res = await fetch('/api/map/shapes', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            kind: 'area',
-            label: name,
-            points: [{ x: 900, y: 900 }, { x: 1100, y: 900 }, { x: 1100, y: 1100 }],
-          }),
-        });
-        return res.ok ? await res.json() : { error: res.status };
-      }, mdLabel);
-      check(
-        typeof mdDrawn?.id === 'string',
-        `the cleared MD session could not draw a cordon: ${JSON.stringify(mdDrawn)}`,
-        'the cleared MD session drew a cordon of its own',
-      );
-      await shot(md2.page, '19-shape-other-org');
-      await md2.ctx.close();
+    const mdLabel = `MD cordon ${Date.now().toString(36).slice(-4)}`;
+    const mdResult = await drawCordon(md2.page, mdLabel, [
+      { dx: 0.60, dy: 0.60 }, { dx: 0.78, dy: 0.60 },
+      { dx: 0.78, dy: 0.78 }, { dx: 0.60, dy: 0.78 },
+    ]);
+    const mdSnap = await snapshotFor(md2.page);
+    const mdDrawn = (mdSnap.shapes ?? []).find((sh) => sh.label === mdLabel);
+    check(
+      mdResult !== null && mdDrawn !== undefined,
+      'the cleared MD session could not draw a cordon of its own',
+      'the cleared MD session drew a cordon of its own',
+    );
+    await shot(md2.page, '19-shape-other-org');
+    await md2.ctx.close();
 
-      await pd.page.reload({ waitUntil: 'domcontentloaded' });
-      await pd.page.waitForSelector('canvas', { timeout: 20000 });
-      await pd.page.waitForTimeout(800);
-      const pdShapePayload = await pd.page.evaluate(async () => {
-        const res = await fetch('/api/map/snapshot', { cache: 'no-store' });
-        return res.ok ? res.text() : `error ${res.status}`;
-      });
-      check(
-        !pdShapePayload.includes(mdLabel)
-        && (typeof mdDrawn?.id !== 'string' || !pdShapePayload.includes(mdDrawn.id)),
-        'an MD cordon reached a PD browser\'s map payload',
-        'an MD cordon is absent from a PD browser\'s map payload, not merely hidden in it',
-      );
-      check(
-        pdShapePayload.includes(label),
-        'the PD session lost its own cordon',
-        'the PD session still receives its own cordon',
-      );
+    await pd.page.reload({ waitUntil: 'domcontentloaded' });
+    await pd.page.waitForSelector('canvas', { timeout: 20000 });
+    await pd.page.waitForTimeout(800);
+    /*
+      Checked against the RAW payload text, not against what the screen shows:
+      the client-side filter is a view filter, and a shape that reached the
+      browser at all has already leaked.
+    */
+    const pdShapePayload = await pd.page.evaluate(async () => {
+      const res = await fetch('/api/map/snapshot', { cache: 'no-store' });
+      return res.ok ? res.text() : `error ${res.status}`;
+    });
+    check(
+      mdDrawn !== undefined
+      && !pdShapePayload.includes(mdLabel) && !pdShapePayload.includes(mdDrawn.id),
+      mdDrawn === undefined
+        ? 'no MD cordon existed, so isolation was never tested'
+        : "an MD cordon reached a PD browser's map payload",
+      "an MD cordon is absent from a PD browser's map payload, not merely hidden in it",
+    );
+    check(
+      pdShapePayload.includes(label),
+      'the PD session lost its own cordon',
+      'the PD session still receives its own cordon',
+    );
 
-      // And the filter chip counts it, so the operator can turn the layer off.
-      const shapeChip = chipNamed(pd.page, 'Areas & routes');
-      check(
-        await shapeChip.count() > 0,
-        'the map offers no way to hide the areas-and-routes layer',
-        'the map offers an areas-and-routes filter chip',
-      );
-    }
+    const shapeChip = chipNamed(pd.page, 'Areas & routes');
+    check(
+      await shapeChip.count() > 0,
+      'the map offers no way to hide the areas-and-routes layer',
+      'the map offers an areas-and-routes filter chip',
+    );
   }
 }
 
