@@ -210,6 +210,20 @@ regression test that fails without the fix — see
 | 27 | One `NotificationItem`, shared by the bell and the centre at two densities. | `apps/web/components/domain/notification-item.tsx` |
 | 40, 41 | The walkthrough is a release gate, and it earned its keep: it found that an operator with a membership but no `dispatch.view` rendered a dashboard whose poll could only be refused, reporting "lost contact with the server" while nothing was wrong. A refusal is an ANSWER, not an outage. | [notifications §8](docs/architecture/12-notifications.md), `apps/web/lib/dashboard.ts` |
 
+### Map areas and routes
+
+| Rules | Mechanism | Location |
+| --- | --- | --- |
+| 3, 4 | A shape is a SEQUENCE where a marker is a POINT, so it gets its own table — and not a parallel model: the permission, the organization rule, the scope check, expiry and soft deletion are the SAME functions, not copies. A second `map.shapes.manage` was rejected as one more switch to forget to set. | [map §10.1](docs/architecture/05-map.md), `apps/api/src/modules/map/map.service.ts` |
+| 18, 19 | Geometry is an array whose size the SENDER chooses, which is the one way a shape differs from a marker in kind. The 500-point ceiling therefore lives in three places that cannot disagree: the request schema (rejecting it before it becomes objects), the service, and a DB CHECK. The minimum, the pairing invariant and the world bounds get the same treatment. | [map §10.2](docs/architecture/05-map.md), [migration 0014](packages/db/migrations/0014_map_shapes.sql) |
+| 11, 12 | A shape the caller may not see is ABSENT from the payload the browser filters — the same SQL clause markers use. Another organization's is NOT FOUND; a shared one is FORBIDDEN, because the caller can see it and pretending otherwise is a lie they can disprove. | `apps/api/src/modules/map/map.read.ts` |
+| 21, 22, 27 | Shapes are slow-changing, so they are a prop where positions are not — and the per-frame work is hoisted out of the draw loop: boxes computed once per change, one path per shape, a vertex stride at low zoom. `shapeRenderPlan` lives in contracts so the BENCHMARK MEASURES THE FUNCTION THE CANVAS CALLS. Measured: 200 shapes at the 500-point ceiling cost 0.033 ms/frame, 100 000 stored points becoming 4 708 projections. | [map §10.3](docs/architecture/05-map.md), `packages/contracts/scripts/shape-render-bench.ts` |
+| 26, 43 | No polygon hit-testing: an area covering half the map would swallow every click meant for the units inside it, which is backwards. The permanent label is the handle. Shapes draw UNDER everything operational, filled at 10% — a wash, not a fill — because context must never hide the subject. | [map §10.4](docs/architecture/05-map.md) |
+| 26, 44 | The drawing tool is MODAL and says so: a click draws and nothing is selectable, because a tool that sometimes draws and sometimes selects will draw when you meant to select. Finish is disabled below the minimum with the reason on the button, rather than enabled and refused. | [map §10.5](docs/architecture/05-map.md) |
+| 29 | Parallel arrays rather than PostGIS. PostGIS answers spatial QUERIES and this product asks none — shapes are drawn and rendered, never intersected — and arrays let the database constrain the point count, which jsonb cannot. | [migration 0014](packages/db/migrations/0014_map_shapes.sql) |
+| 34, 45 | THIS REPOSITORY HAS NO ROAD GRAPH. A "route" is a polyline a human drew, its size is reported as DRAWN LENGTH, and the detail panel says in words that it does not follow roads. The benchmark states what it does not measure — rasterisation — rather than reporting its number as a frame time. | [map §10.0, §10.3](docs/architecture/05-map.md) |
+| 31, 32, 40 | The geometry and cross-organization guards are release-gate tests, each verified by being broken first: nine fail without them. | `apps/api/test/map.test.ts` |
+
 ### Global administration
 
 | Rules | Mechanism | Location |

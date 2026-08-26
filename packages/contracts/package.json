@@ -11,9 +11,11 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "echo 'no lint configured'"
+    "lint": "echo 'no lint configured'",
+    "bench": "tsx scripts/shape-render-bench.ts"
   },
   "devDependencies": {
+    "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   }

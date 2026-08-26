@@ -124,7 +124,7 @@ export function validateShapeGeometry(
  * Computed ONCE per shape when the set changes, never per frame: it is what lets
  * the renderer skip a shape entirely when its box does not meet the viewport,
  * and recomputing it inside the draw loop would spend more than the culling
- * saves. See docs/architecture/05-map.md §9.5.
+ * saves. See docs/architecture/05-map.md §10.3.
  */
 export function shapeBounds(points: readonly MapShapePoint[]): WorldBounds | null {
   const first = points[0];
@@ -186,6 +186,58 @@ export function enclosedArea(points: readonly MapShapePoint[]): number {
     twice += a.x * b.y - b.x * a.y;
   }
   return Math.abs(twice) / 2;
+}
+
+/**
+ * What a renderer should do with one shape this frame.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * THE PER-FRAME DECISION, IN ONE PLACE
+ *
+ * Extracted from the canvas so it is the SAME function the benchmark measures.
+ * A performance claim about code the benchmark does not run is not a
+ * measurement, it is a hope — see docs/architecture/05-map.md §10.3 for the
+ * numbers this produced.
+ *
+ * Two decisions:
+ *
+ *   VISIBLE — does the shape's precomputed box meet the viewport? A shape can be
+ *   entirely off-screen and still have a segment crossing it, so the test is
+ *   WIDENED by a margin rather than made exact. Drawing an occasional shape that
+ *   need not be drawn is free; skipping one that should not be skipped is a
+ *   cordon that vanishes when you pan.
+ *
+ *   STRIDE — how many points to skip. Zoomed out, adjacent points land on the
+ *   same pixel: drawing every one costs time and changes nothing visible. At any
+ *   zoom where the detail can be seen the stride is 1, so this never changes
+ *   what an operator is looking at, only what is spent drawing it.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+export interface ShapeRenderPlan {
+  visible: boolean;
+  /** 1 means every point. Only meaningful when `visible`. */
+  stride: number;
+}
+
+export function shapeRenderPlan(
+  bounds: WorldBounds | null,
+  view: WorldBounds,
+  pointCount: number,
+  scale: number,
+): ShapeRenderPlan {
+  if (bounds === null) return { visible: false, stride: 1 };
+  if (bounds.maxX < view.minX || bounds.minX > view.maxX) return { visible: false, stride: 1 };
+  if (bounds.maxY < view.minY || bounds.minY > view.maxY) return { visible: false, stride: 1 };
+
+  const spanPixels = Math.max(
+    (bounds.maxX - bounds.minX) * scale,
+    (bounds.maxY - bounds.minY) * scale,
+    1,
+  );
+  // Roughly one point per two screen pixels, with a floor so a tiny shape is
+  // never reduced to a triangle.
+  const stride = Math.max(1, Math.floor(pointCount / Math.max(spanPixels / 2, 8)));
+  return { visible: true, stride };
 }
 
 /**

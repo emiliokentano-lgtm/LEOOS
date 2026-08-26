@@ -39,6 +39,7 @@ CREATE TABLE "map_shape" (
   "expires_at" timestamptz,
   "deleted_at" timestamptz,
   "deleted_by" uuid REFERENCES "user_account"("id") ON DELETE SET NULL,
+  "deletion_reason" text,
 
   -- The two arrays are one geometry. A pair that disagrees in length would
   -- produce a point with an undefined coordinate somewhere downstream.
@@ -56,7 +57,13 @@ CREATE TABLE "map_shape" (
   -- allocation whose size the sender chooses.
   CONSTRAINT "map_shape_max_points" CHECK (array_length("points_x", 1) <= 500),
 
-  CONSTRAINT "map_shape_label_not_blank" CHECK (length(btrim("label")) > 0)
+  CONSTRAINT "map_shape_label_not_blank" CHECK (length(btrim("label")) > 0),
+
+  -- The soft-deletion invariant every operational record carries (data model
+  -- §8): a deletion has a deleter, and a reason without a deletion is nonsense.
+  CONSTRAINT "map_shape_soft_delete" CHECK (
+    ("deleted_at" IS NULL) = ("deleted_by" IS NULL)
+    AND ("deleted_at" IS NOT NULL OR "deletion_reason" IS NULL))
 );
 
 -- The live set is what every snapshot reads; the deleted ones are read only by

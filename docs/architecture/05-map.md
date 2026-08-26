@@ -454,3 +454,182 @@ units are actively transmitting, against a session that does not hold
 
 That walkthrough is what found the game-server restart defect described in
 [04-fivem-integration §The restart problem](04-fivem-integration.md).
+
+---
+
+## 10. Areas and routes
+
+Operators draw two things on the map: **areas** — a cordon, a search grid, a
+perimeter — and **routes**, a line indicating an approach or a corridor.
+
+### 10.0 A route is not navigation
+
+**This repository has no road graph.** There is no routing engine, no navigation
+mesh, and nothing that knows a road from a field. A route in LEOOS is *a polyline
+a human drew*, and every name in the schema, the contracts, the API and the UI
+says so. The detail panel states it in words:
+
+> A line drawn by hand. It is not a navigated route and does not follow roads.
+
+A route's size is reported as its **drawn length**, never as a distance to travel
+and never as a time. That is engineering rule 45 applied to a feature name:
+calling it navigation would be a claim the software cannot make, and an operator
+who believed it would follow a line nothing ever checked against a map.
+
+### 10.1 A separate table, and not a parallel model
+
+`map_shape` is its own table rather than a nullable geometry column on
+`map_marker`. A marker is a point; a shape is a sequence of them. One table would
+mean every marker row carrying two unused arrays and every query filtering on
+kind.
+
+What *should* be shared is shared, and shared as the same code rather than a
+copy:
+
+| Concern | Shared with markers |
+| --- | --- |
+| Permission | `map.markers.manage` — the same one |
+| Which organization it may be pinned to | `resolveOverlayOrganization()` |
+| Whether the caller may change it | `assertOverlayScope()` |
+| Visibility clause | the same org / global / `track_all_orgs` rule |
+| Expiry | filtered in SQL on read, no cleanup job required |
+| Deletion | soft, per [ADR-0008](../adr/0008-soft-deletion.md) |
+
+A separate `map.shapes.manage` permission was considered and rejected: it would
+give every installation a second switch to forget to set, guarding a capability
+nobody has ever wanted to grant separately. Drawing a cordon and dropping a
+roadblock pin are the same job.
+
+### 10.2 Geometry, and the three places the ceiling lives
+
+Points are stored as **two parallel `double precision[]` columns**, not PostGIS
+and not `jsonb`. PostGIS answers spatial *queries* — "which shapes contain this
+point", "which routes cross this area" — and this product asks none of them:
+shapes are drawn, listed and rendered, never intersected. Adding the extension to
+store a coordinate list would be a dependency with no second use (rule 29).
+Arrays rather than a blob because the **database** can then constrain the point
+count, which `jsonb` cannot.
+
+A shape's geometry is an array whose size the sender chooses, which is the one
+way it differs from a marker in kind rather than degree. So the 500-point ceiling
+exists in three places that cannot disagree:
+
+| Where | What it stops |
+| --- | --- |
+| `z.array(...).max(MAP_SHAPE_MAX_POINTS)` in the route schema | A 100 000-point array, *before* it is parsed into objects |
+| `validateShapeGeometry()` in the service | The same, if a future caller bypasses the route |
+| `CHECK (array_length(points_x, 1) <= 500)` | The same, if a script bypasses the service |
+
+The same three-layer treatment covers the minimum (3 for an area, 2 for a route)
+and the pairing invariant — the two arrays are one geometry, and a pair that
+disagreed in length would produce a point with an undefined coordinate.
+Coordinates are bounded to the world at the schema edge: a shape reaching to
+(1e9, 1e9) is not a rendering nuisance, it destroys the auto-fit for every other
+operator on the map.
+
+**The kind cannot change.** An update re-validates against the *stored* kind, so a
+two-point route cannot become an "area" enclosing nothing. The field is absent
+from the update schema rather than present and refused.
+
+### 10.3 What it costs to draw them
+
+Shapes are slow-changing data and are kept out of the fast path entirely.
+Positions never enter React state (§9.1); shapes are the opposite case — they are
+a prop, because they change a handful of times an hour — and the work that would
+otherwise land in the draw loop is hoisted out of it:
+
+- **Bounding boxes and label anchors are computed once per change**, in a
+  `useMemo` keyed on the shape array. An off-screen shape then costs four
+  comparisons per frame instead of a projection per point.
+- **One path per shape**, stroked once, rather than a `beginPath`/`stroke` pair
+  per segment.
+- **A vertex stride at low zoom.** Zoomed out, adjacent points land on the same
+  pixel; the polyline is decimated to roughly one point per two screen pixels.
+  The stored shape is untouched — this is a drawing decision, not an edit — and
+  at any zoom where the detail is visible the stride is 1. The last point always
+  lands whatever the stride, because a route that stops short of where it was
+  drawn to is a wrong route.
+
+The cull and the stride live in `shapeRenderPlan()` in `@leoos/contracts`, so the
+benchmark measures **the same function the canvas calls**. A performance claim
+about code the benchmark does not run is not a measurement.
+
+`pnpm --filter @leoos/contracts bench` (600 frames, 1600×900, panning across the
+world; "whole map" is the scale at which the world fits the viewport, where the
+cull can discard nothing, and "street" is `MAX_SCALE`):
+
+| Case | prep ms | ms/frame | drawn | projections/frame |
+| --- | --- | --- | --- | --- |
+| 10 hand-drawn shapes (12 pts), whole map | 0.09 | 0.016 | 8.6 | 112 |
+| 50 hand-drawn shapes (12 pts), whole map | 0.03 | 0.004 | 42.1 | 548 |
+| 50 hand-drawn shapes (12 pts), street zoom | 0.01 | 0.001 | 3.2 | 42 |
+| 200 hand-drawn shapes (12 pts), whole map | 0.08 | 0.011 | 168.1 | 2 185 |
+| 50 shapes at the 500-point ceiling, whole map | 0.14 | 0.006 | 41.2 | 1 071 |
+| **200 shapes at the 500-point ceiling, whole map** | **0.60** | **0.033** | **170.4** | **4 708** |
+| 200 shapes at the 500-point ceiling, street zoom | 0.57 | 0.016 | 13.3 | 4 543 |
+
+The worst case constructed — 200 shapes each at the ceiling, a hundred thousand
+points, far more than any real board carries — costs **0.033 ms per frame**, or
+0.2% of a 60 Hz budget. The stride is what makes that true: 100 000 stored points
+become 4 708 projections. The script fails at 1 ms, which is 6% of a frame.
+
+**What the benchmark does not measure is canvas rasterisation.** Filling and
+stroking is the browser's work, proportional to pixels rather than to shapes, and
+a Node process has no GPU to measure it on. Frame behaviour on the real page is
+covered by `live-map-check.mjs`, which measures DOM mutations under a live feed.
+Reporting the number above *as a frame time* would be a claim this benchmark
+cannot make.
+
+### 10.4 Selection, and why an area does not swallow clicks
+
+There is deliberately **no polygon hit-testing**. An area covering half the map
+would intercept every click meant for the units inside it — which is exactly
+backwards, since those units are the reason the cordon was drawn. The **label is
+the handle**: a shape is selected by clicking the thing that names it, and every
+shape carries a permanent label, drawn with no hover and no animation.
+
+Shapes are drawn **under** markers, incidents and units. A cordon is context; a
+unit standing in it is the subject, and the context must never be drawn over the
+subject. A route is dashed and an area is solid, so the two are distinguishable
+without colour and without a legend; an area is filled at 10% opacity — a wash,
+not a fill, because it must never hide what is standing in it.
+
+### 10.5 The drawing tool
+
+Drawing is **modal**. While the tool is open a click places a point and nothing on
+the map is selectable, because a tool where clicking sometimes draws and
+sometimes selects will draw when you meant to select. The mode is visible — a
+toolbar naming what is being drawn, a crosshair cursor — and dragging still pans,
+so a shape that runs off the screen does not force a restart.
+
+`Esc` leaves the tool, `Backspace` removes the last point, `Enter` finishes.
+Escape leaves the *tool* before it clears a selection, because the tool is what
+the operator is inside; every other map shortcut is suppressed while drawing, so
+`F` cannot start following a unit halfway through a cordon. **Finish** is disabled
+below the minimum with the reason on the button rather than enabled and then
+refused, and the point count and what is still needed are stated in the toolbar.
+
+The dialog that names a finished shape shows how many points it has and how big
+it is, and does not show the geometry as numbers: a cordon typed as coordinates
+is a cordon nobody meant.
+
+### 10.6 What was actually tested
+
+`apps/api/test/map.test.ts` covers the marker questions again for shapes — a
+shape pinned to another organization, a shape another organization tries to edit
+or delete, a global shape scoped down, expiry without a cleanup job, soft
+deletion with both audit rows — plus the ones that are new because geometry is a
+list:
+
+- an area with two points, and a route with one, are refused
+- 501 points is refused; **500 exactly is accepted**, so the cap is not off by one
+- a point outside the world is refused
+- a point carrying an extra key is refused, so nothing can be smuggled into one
+- a route cannot be turned into an area
+- the database refuses an oversized array and a mismatched pair *directly*, with
+  the schema and the service bypassed
+- the audit row records the point count, not the geometry
+
+Each guard was verified by breaking it: with `assertOverlayScope`,
+`resolveOverlayOrganization` and `assertDrawable` disabled for shapes, **nine of
+these tests fail**.

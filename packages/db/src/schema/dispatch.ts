@@ -6,7 +6,8 @@ import {
 import {
   citext, createdAt, fieldRequestKindEnum, fieldRequestStatusEnum, incidentLinkEntityEnum,
   incidentLinkRelationEnum, incidentLogEntryEnum, incidentSourceEnum, incidentStatusEnum,
-  mapMarkerTypeEnum, mapShapeKindEnum, primaryId, softDelete, timestamps, unitStatusEnum,
+  mapMarkerTypeEnum, mapShapeKindEnum, primaryId, softDelete, softDeleteCheck, timestamps,
+  unitStatusEnum,
 } from './_shared';
 import { userAccount } from './identity';
 import { organization, organizationMember } from './organization';
@@ -487,6 +488,7 @@ export const mapShape = pgTable(
     ),
     check('map_shape_max_points', sql`array_length(points_x, 1) <= 500`),
     check('map_shape_label_not_blank', sql`length(btrim(label)) > 0`),
+    check('map_shape_soft_delete', softDeleteCheck),
   ],
 );
 

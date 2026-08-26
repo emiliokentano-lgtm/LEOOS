@@ -246,7 +246,7 @@ export const mapMarkerTypeEnum = pgEnum('map_marker_type', [
  *
  * `route` is deliberately not called a path or a navigation: this repository has
  * no road graph, so a route is a polyline somebody drew. See
- * docs/architecture/05-map.md §9.5.
+ * docs/architecture/05-map.md §10.
  */
 export const mapShapeKindEnum = pgEnum('map_shape_kind', ['area', 'route']);
 

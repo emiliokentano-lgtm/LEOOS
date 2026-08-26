@@ -390,7 +390,7 @@ export function MarkerDetail({
  * The size line is the one thing worth stating plainly, and its WORDING is the
  * point: a route reports its DRAWN LENGTH, never a distance or a travel time.
  * The line was drawn by hand over a coordinate grid; nothing here has ever seen
- * a road (docs/architecture/05-map.md §9.5).
+ * a road (docs/architecture/05-map.md §10).
  */
 export function ShapeDetail({
   shape, canManage, onClose,

@@ -85,6 +85,11 @@ interface SnapshotBody {
   units: MapUnitBody[];
   incidents: { id: string; number: string; x: number; y: number }[];
   markers: { id: string; label: string; organization: { key: string } | null }[];
+  shapes: {
+    id: string; kind: string; label: string;
+    points: { x: number; y: number }[];
+    organization: { key: string } | null;
+  }[];
   organizations: { id: string; key: string }[];
   capabilities: Record<string, boolean>;
   source: { kind: string; connected: boolean; placeholderBaseLayer: boolean };
@@ -727,5 +732,381 @@ describe('live position store', () => {
     store.set(sample('u1', { x: 2 }));
     expect(store.size).toBe(1);
     expect(store.get('u1')?.x).toBe(2);
+  });
+});
+
+// ── Shapes ─────────────────────────────────────────────────────────────────
+
+/**
+ * Areas and routes.
+ *
+ * The questions are the marker questions plus one that is new: GEOMETRY IS AN
+ * ARRAY THE CALLER CHOOSES THE SIZE OF. A marker is two numbers and cannot be
+ * abused; a shape is a list, and an unbounded list is a payload attack with a
+ * friendly name. So the point count is bounded at the schema, in the service and
+ * as a CHECK constraint, and the tests below break each of those separately.
+ */
+describe('map shapes', () => {
+  function ring(cx: number, cy: number, r = 50) {
+    return [
+      { x: cx - r, y: cy - r },
+      { x: cx + r, y: cy - r },
+      { x: cx + r, y: cy + r },
+      { x: cx - r, y: cy + r },
+    ];
+  }
+
+  async function drawShape(who: Person, body: Record<string, unknown>) {
+    const res = await h.app.inject({
+      method: 'POST', url: '/api/v1/map/shapes', headers: who.headers, payload: body,
+    });
+    return { status: res.statusCode, body: res.json() as { id?: string; error?: unknown } };
+  }
+
+  it('draws an area for the actor organization', async () => {
+    const sergeant = await member('mapshape', 'PD', 'sergeant');
+    const result = await drawShape(sergeant, {
+      kind: 'area', label: unique('Cordon'), points: ring(100, 100),
+    });
+
+    expect(result.status).toBe(201);
+
+    const rows = await h.db.execute<{ organization_id: string | null; kind: string }>(sql`
+      SELECT organization_id, kind FROM map_shape WHERE id = ${result.body.id}
+    `);
+    expect(rows[0]?.organization_id).toBe(sergeant.organizationId);
+    expect(rows[0]?.kind).toBe('area');
+  });
+
+  it('round-trips the geometry it was given, in order', async () => {
+    // The two stored arrays are one geometry. If they were ever paired up
+    // wrongly the shape would still render — as a different shape.
+    const sergeant = await member('mapshaperound', 'PD', 'sergeant');
+    const points = [
+      { x: 10, y: 20 }, { x: 30, y: 40 }, { x: 50, y: -60 },
+    ];
+    const created = await drawShape(sergeant, {
+      kind: 'route', label: unique('Approach'), points,
+    });
+    expect(created.status).toBe(201);
+
+    const result = await snapshot(sergeant);
+    const shape = result.body.shapes.find((sh) => sh.id === created.body.id);
+    expect(shape?.points).toEqual(points);
+  });
+
+  it('refuses a caller without map.markers.manage', async () => {
+    // Shapes share the marker permission on purpose: drawing a cordon and
+    // dropping a roadblock pin are the same job, and a second switch would be a
+    // second switch to forget to set.
+    const officer = await member('mapshapedenied', 'PD', 'officer');
+    await setPermissionOverride(h.db, officer.memberId, 'map.markers.manage', 'deny');
+
+    const result = await drawShape(officer, {
+      kind: 'area', label: unique('Denied'), points: ring(0, 0),
+    });
+    expect(result.status).toBe(403);
+  });
+
+  it('refuses a shape pinned to another organization', async () => {
+    const sergeant = await member('mapshapecross', 'PD', 'sergeant');
+    const otherOrg = await organizationIdByKey(h.db, 'MD');
+
+    const result = await drawShape(sergeant, {
+      kind: 'area', label: unique('Cross'), points: ring(0, 0), organizationId: otherOrg,
+    });
+    expect(result.status).toBe(403);
+  });
+
+  it('scopes a requested global shape down to the actor organization', async () => {
+    const sergeant = await member('mapshapeglobal', 'PD', 'sergeant');
+    const result = await drawShape(sergeant, {
+      kind: 'area', label: unique('Global'), points: ring(0, 0), organizationId: null,
+    });
+    expect(result.status).toBe(201);
+
+    const rows = await h.db.execute<{ organization_id: string | null }>(sql`
+      SELECT organization_id FROM map_shape WHERE id = ${result.body.id}
+    `);
+    expect(rows[0]?.organization_id).toBe(sergeant.organizationId);
+  });
+
+  it('hides another organization shapes', async () => {
+    const doctor = await member('mapshapemd', 'MD', 'doctor');
+    const created = await drawShape(doctor, {
+      kind: 'area', label: unique('MDZone'), points: ring(200, 200),
+    });
+    expect(created.status).toBe(201);
+
+    const pdOfficer = await member('mapshapepd', 'PD', 'officer');
+    const result = await snapshot(pdOfficer);
+    expect(result.body.shapes.map((sh) => sh.id)).not.toContain(created.body.id);
+    // Absent from the PAYLOAD, not filtered by the client: anything a browser
+    // receives is readable by whoever is sitting at it.
+    expect(result.raw).not.toContain(created.body.id!);
+  });
+
+  it('refuses to remove another organization shape', async () => {
+    const doctor = await member('mapshapemddel', 'MD', 'doctor');
+    const created = await drawShape(doctor, {
+      kind: 'route', label: unique('MDRoute'), points: [{ x: 0, y: 0 }, { x: 10, y: 10 }],
+    });
+
+    const pdSergeant = await member('mapshapepddel', 'PD', 'sergeant');
+    const res = await h.app.inject({
+      method: 'DELETE', url: `/api/v1/map/shapes/${created.body.id}`,
+      headers: pdSergeant.headers,
+    });
+    // 404, not 403: a shape outside the caller's scope is not confirmed to exist.
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('refuses to edit another organization shape', async () => {
+    const doctor = await member('mapshapemdedit', 'MD', 'doctor');
+    const created = await drawShape(doctor, {
+      kind: 'area', label: unique('MDEdit'), points: ring(0, 0),
+    });
+
+    const pdSergeant = await member('mapshapepdedit', 'PD', 'sergeant');
+    const res = await h.app.inject({
+      method: 'PATCH', url: `/api/v1/map/shapes/${created.body.id}`,
+      headers: pdSergeant.headers, payload: { label: 'Taken over' },
+    });
+    expect(res.statusCode).toBe(404);
+
+    const rows = await h.db.execute<{ label: string }>(sql`
+      SELECT label FROM map_shape WHERE id = ${created.body.id}
+    `);
+    expect(rows[0]?.label).not.toBe('Taken over');
+  });
+
+  // ── Geometry ─────────────────────────────────────────────────────────────
+
+  it('refuses an area with fewer than three points', async () => {
+    const sergeant = await member('mapshapethin', 'PD', 'sergeant');
+    const result = await drawShape(sergeant, {
+      kind: 'area', label: unique('Thin'), points: [{ x: 0, y: 0 }, { x: 10, y: 10 }],
+    });
+    expect(result.status).toBe(400);
+  });
+
+  it('refuses a route with one point', async () => {
+    const sergeant = await member('mapshapedot', 'PD', 'sergeant');
+    const result = await drawShape(sergeant, {
+      kind: 'route', label: unique('Dot'), points: [{ x: 0, y: 0 }],
+    });
+    expect(result.status).toBe(400);
+  });
+
+  it('refuses an oversized point array', async () => {
+    /**
+     * The one that is not a tidiness rule.
+     *
+     * An unbounded array is an allocation whose size the sender chooses. This is
+     * rejected at the SCHEMA, before it is parsed into objects — the difference
+     * between a 400 and a garbage-collection pause.
+     */
+    const sergeant = await member('mapshapehuge', 'PD', 'sergeant');
+    const points = Array.from({ length: 501 }, (_, i) => ({ x: i, y: i }));
+
+    const result = await drawShape(sergeant, {
+      kind: 'route', label: unique('Huge'), points,
+    });
+    expect(result.status).toBe(400);
+  });
+
+  it('accepts exactly the maximum', async () => {
+    // The boundary itself must not be off by one, or the cap becomes 499.
+    const sergeant = await member('mapshapemax', 'PD', 'sergeant');
+    const points = Array.from({ length: 500 }, (_, i) => ({ x: i, y: -i }));
+
+    const result = await drawShape(sergeant, {
+      kind: 'route', label: unique('Max'), points,
+    });
+    expect(result.status).toBe(201);
+  });
+
+  it('refuses a point outside the world', async () => {
+    // A shape reaching to (1e9, 1e9) destroys the auto-fit for every operator
+    // on the map, because fitting to it zooms out to include a point nobody can
+    // see.
+    const sergeant = await member('mapshapefar', 'PD', 'sergeant');
+    const result = await drawShape(sergeant, {
+      kind: 'area', label: unique('Far'),
+      points: [{ x: 0, y: 0 }, { x: 10, y: 10 }, { x: 1e9, y: 1e9 }],
+    });
+    expect(result.status).toBe(400);
+  });
+
+  it('refuses a point carrying anything but coordinates', async () => {
+    // `.strict()` throughout: a client cannot smuggle an organizationId into a
+    // point and hope something downstream reads it.
+    const sergeant = await member('mapshapesmuggle', 'PD', 'sergeant');
+    const otherOrg = await organizationIdByKey(h.db, 'MD');
+    const result = await drawShape(sergeant, {
+      kind: 'route', label: unique('Smuggle'),
+      points: [{ x: 0, y: 0, organizationId: otherOrg }, { x: 10, y: 10 }],
+    });
+    expect(result.status).toBe(400);
+  });
+
+  it('refuses to change a route into an area', async () => {
+    /**
+     * The kind is not editable, and the update re-validates against the STORED
+     * kind rather than a supplied one. A two-point "area" would be a polygon
+     * enclosing nothing.
+     */
+    const sergeant = await member('mapshapemorph', 'PD', 'sergeant');
+    const created = await drawShape(sergeant, {
+      kind: 'route', label: unique('Morph'), points: [{ x: 0, y: 0 }, { x: 10, y: 10 }],
+    });
+
+    const res = await h.app.inject({
+      method: 'PATCH', url: `/api/v1/map/shapes/${created.body.id}`,
+      headers: sergeant.headers, payload: { kind: 'area' },
+    });
+    expect(res.statusCode).toBe(400);
+
+    const rows = await h.db.execute<{ kind: string }>(sql`
+      SELECT kind FROM map_shape WHERE id = ${created.body.id}
+    `);
+    expect(rows[0]?.kind).toBe('route');
+  });
+
+  it('rejects an oversized geometry at the database too', async () => {
+    // The ceiling exists in three places on purpose. If the schema and the
+    // service were both bypassed — a future endpoint, a script — the row still
+    // cannot be written.
+    const sergeant = await member('mapshapedbcap', 'PD', 'sergeant');
+    const xs = Array.from({ length: 501 }, (_, i) => i);
+
+    await expect(h.db.execute(sql`
+      INSERT INTO map_shape (kind, organization_id, label, points_x, points_y)
+      VALUES ('route', ${sergeant.organizationId}, 'Too many',
+              ${sql.param(xs)}::double precision[], ${sql.param(xs)}::double precision[])
+    `)).rejects.toThrow();
+  });
+
+  it('rejects arrays of unequal length at the database', async () => {
+    const sergeant = await member('mapshapepair', 'PD', 'sergeant');
+
+    await expect(h.db.execute(sql`
+      INSERT INTO map_shape (kind, organization_id, label, points_x, points_y)
+      VALUES ('route', ${sergeant.organizationId}, 'Unpaired',
+              ARRAY[1, 2, 3]::double precision[], ARRAY[1, 2]::double precision[])
+    `)).rejects.toThrow();
+  });
+
+  // ── Lifecycle ────────────────────────────────────────────────────────────
+
+  it('hides an expired shape without needing a cleanup job to have run', async () => {
+    const sergeant = await member('mapshapeexp', 'PD', 'sergeant');
+    const created = await drawShape(sergeant, {
+      kind: 'area', label: unique('Lapsing'), points: ring(0, 0),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(created.status).toBe(201);
+
+    await h.db.execute(sql`
+      UPDATE map_shape SET expires_at = now() - interval '1 minute' WHERE id = ${created.body.id}
+    `);
+
+    const result = await snapshot(sergeant);
+    expect(result.body.shapes.map((sh) => sh.id)).not.toContain(created.body.id);
+  });
+
+  it('soft-deletes rather than erasing, and audits both ends', async () => {
+    const sergeant = await member('mapshapesoft', 'PD', 'sergeant');
+    const created = await drawShape(sergeant, {
+      kind: 'area', label: unique('Soft'), points: ring(0, 0),
+    });
+
+    const res = await h.app.inject({
+      method: 'DELETE', url: `/api/v1/map/shapes/${created.body.id}`,
+      headers: sergeant.headers,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const rows = await h.db.execute<{ deleted_at: Date | null; deleted_by: string | null }>(sql`
+      SELECT deleted_at, deleted_by FROM map_shape WHERE id = ${created.body.id}
+    `);
+    expect(rows[0]?.deleted_at).not.toBeNull();
+    expect(rows[0]?.deleted_by).toBe(sergeant.userId);
+
+    const audits = await h.db.execute<{ action: string }>(sql`
+      SELECT action FROM audit_log
+       WHERE entity_type = 'map_shape' AND entity_id = ${created.body.id}
+       ORDER BY occurred_at
+    `);
+    expect(audits.map((a) => a.action)).toEqual(['map.shape_drawn', 'map.shape_removed']);
+  });
+
+  it('records the point count in the audit trail, not the geometry', async () => {
+    // An audit row records what happened. It is not a second copy of the shape.
+    const sergeant = await member('mapshapeaudit', 'PD', 'sergeant');
+    const created = await drawShape(sergeant, {
+      kind: 'area', label: unique('Audited'), points: ring(0, 0),
+    });
+
+    const rows = await h.db.execute<{ metadata: Record<string, unknown> }>(sql`
+      SELECT metadata FROM audit_log
+       WHERE entity_type = 'map_shape' AND entity_id = ${created.body.id}
+         AND action = 'map.shape_drawn'
+    `);
+    expect(rows[0]?.metadata).toMatchObject({ pointCount: 4, global: false });
+    expect(JSON.stringify(rows[0]?.metadata)).not.toContain('points');
+  });
+
+  it('lets a track_all_orgs holder draw a genuinely global shape and see everyone', async () => {
+    const commander = await member('mapshapeall', 'PD', 'commander');
+    const created = await drawShape(commander, {
+      kind: 'area', label: unique('Citywide'), points: ring(0, 0), organizationId: null,
+    });
+    expect(created.status).toBe(201);
+
+    const rows = await h.db.execute<{ organization_id: string | null }>(sql`
+      SELECT organization_id FROM map_shape WHERE id = ${created.body.id}
+    `);
+    expect(rows[0]?.organization_id).toBeNull();
+
+    // And a shape belonging to another organization is visible to them.
+    const doctor = await member('mapshapeallmd', 'MD', 'doctor');
+    const theirs = await drawShape(doctor, {
+      kind: 'area', label: unique('MDOwn'), points: ring(300, 300),
+    });
+
+    const result = await snapshot(commander);
+    const ids = result.body.shapes.map((sh) => sh.id);
+    expect(ids).toContain(created.body.id);
+    expect(ids).toContain(theirs.body.id);
+  });
+
+  it('shows a global shape to an organization that did not draw it', async () => {
+    const commander = await member('mapshapesharedraw', 'PD', 'commander');
+    const created = await drawShape(commander, {
+      kind: 'route', label: unique('Shared'), points: [{ x: 0, y: 0 }, { x: 5, y: 5 }],
+      organizationId: null,
+    });
+    expect(created.status).toBe(201);
+
+    const doctor = await member('mapshapesharesee', 'MD', 'doctor');
+    const result = await snapshot(doctor);
+    expect(result.body.shapes.map((sh) => sh.id)).toContain(created.body.id);
+  });
+
+  it('refuses an ordinary member editing a shared shape', async () => {
+    // Visible to them, so this is FORBIDDEN rather than hidden: pretending it
+    // does not exist would be a lie they can disprove by looking.
+    const commander = await member('mapshapesharedowner', 'PD', 'commander');
+    const created = await drawShape(commander, {
+      kind: 'area', label: unique('SharedArea'), points: ring(0, 0), organizationId: null,
+    });
+
+    const sergeant = await member('mapshapesharededit', 'PD', 'sergeant');
+    const res = await h.app.inject({
+      method: 'DELETE', url: `/api/v1/map/shapes/${created.body.id}`,
+      headers: sergeant.headers,
+    });
+    expect(res.statusCode).toBe(403);
   });
 });

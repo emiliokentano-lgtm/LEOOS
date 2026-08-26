@@ -5,7 +5,7 @@ import {
   DEFAULT_CLUSTER_CELL, MAP, MAP_SHAPE_KINDS, MAP_TICK_MS, WORLD_BOUNDS,
   boundsOf, centerViewport, clusterByScreenGrid, fitViewport, freshnessOf, matchesUnitFilter,
   panViewport, projectToScreen, resizeViewport, screenToWorld, shapeBounds, shapeLabelAnchor,
-  visibleBounds, worldViewport, zoomViewportAt,
+  shapeRenderPlan, visibleBounds, worldViewport, zoomViewportAt,
   type MapFilterState, type MapIncidentMarker, type MapMarker, type MapShape,
   type MapShapeKind, type MapShapePoint, type MapUnit, type ScreenPoint, type Viewport,
   type WorldBounds, type WorldPosition,
@@ -212,7 +212,7 @@ export const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(funct
    * few times an hour, against sixty frames a second.
    *
    * Measured rather than asserted: the numbers, and the script that produced
-   * them, are in docs/architecture/05-map.md §9.5.
+   * them, are in docs/architecture/05-map.md §10.3.
    */
   const preparedShapes = React.useMemo(
     () => shapes.map((shape) => ({
@@ -867,26 +867,19 @@ function drawShapes(
   const view = visibleBounds(vp, 64);
 
   for (const { shape, bounds, anchor } of prepared) {
-    if (bounds === null) continue;
-    if (bounds.maxX < view.minX || bounds.minX > view.maxX) continue;
-    if (bounds.maxY < view.minY || bounds.minY > view.maxY) continue;
-
     const points = shape.points;
     const first = points[0];
     if (first === undefined) continue;
 
+    // The cull and the vertex budget, from `@leoos/contracts` so the benchmark
+    // in docs/architecture/05-map.md §10.3 measures this exact function.
+    const plan = shapeRenderPlan(bounds, view, points.length, vp.scale);
+    if (!plan.visible) continue;
+    const stride = plan.stride;
+
     const selected = shape.id === selectedId;
     const color = shape.color ?? shape.organization?.color ?? fallback;
     const closed = MAP_SHAPE_KINDS[shape.kind]?.closed ?? false;
-
-    // How many points to skip: the shape's on-screen span in pixels decides how
-    // much detail can actually be seen.
-    const spanPixels = Math.max(
-      (bounds.maxX - bounds.minX) * vp.scale,
-      (bounds.maxY - bounds.minY) * vp.scale,
-      1,
-    );
-    const stride = Math.max(1, Math.floor(points.length / Math.max(spanPixels / 2, 8)));
 
     ctx.beginPath();
     const start = projectToScreen(vp, first);
