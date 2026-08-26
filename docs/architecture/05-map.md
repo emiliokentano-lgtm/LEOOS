@@ -134,6 +134,7 @@ pan, zoom and projection are pure functions in
 | **Units** | **custom canvas overlay** | live units, org-coloured, heading arrows | 1 Hz, interpolated |
 | Incidents | Leaflet layer group | priority-coloured pins, pulse on new | on event |
 | Markers | Leaflet layer group | hazards, roadblocks, staging | on event |
+| **Areas & routes** | **canvas, below the operational layers** | drawn cordons and hand-drawn approach lines | on event (§10) |
 | Selection | canvas | highlight ring, follow-mode | per frame |
 
 **Unit rendering detail.** Each unit is drawn as a rounded chevron oriented to its
