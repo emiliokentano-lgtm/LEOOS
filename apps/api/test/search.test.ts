@@ -421,7 +421,15 @@ describe('result shapes match what an operator reads', () => {
     await h.db.execute(sql`
       INSERT INTO person_alias (person_id, alias) VALUES (${rows[0]!.id}, ${alias})`);
 
-    const plate = unique('PLT').toUpperCase().slice(0, 10);
+    /**
+     * The VARYING part leads, so the prefix searched below is unique.
+     *
+     * `unique()` puts its counter first, which makes every run's Nth plate share
+     * a five-character prefix — in a database that outlives one run, dozens of
+     * them then match and the row this test is looking for falls outside the
+     * capped hit list. Found exactly that way.
+     */
+    const plate = `${Date.now().toString(36).slice(-5)}PL`.toUpperCase();
     await h.db.execute(sql`INSERT INTO vehicle (plate, model) VALUES (${plate}, 'sultan')`);
 
     const byAlias = await search(officer, `q=${alias}`);
