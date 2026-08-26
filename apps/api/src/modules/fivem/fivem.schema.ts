@@ -103,6 +103,13 @@ export const playerSampleSchema = z.object({
   speed: z.number().finite().min(0).max(400).nullish(),
   health: z.number().int().min(0).max(1000).nullish(),
   armor: z.number().int().min(0).max(1000).nullish(),
+  /**
+   * Dead or dying, as the GAME SERVER observed it.
+   *
+   * Accepted here and nowhere else. No session-authenticated route has a field
+   * for liveness, so a browser cannot assert it.
+   */
+  down: z.boolean().nullish(),
   vehicle: z.object({
     model: z.string().trim().min(1).max(64),
     plate: z.string().trim().max(16).nullish(),
@@ -148,6 +155,8 @@ export const eventSchema = z.object({
   x: worldX.nullish(),
   y: worldY.nullish(),
   reason: z.string().trim().max(200).nullish(),
+  /** Liveness at the moment of the press. Fresher than the last telemetry sample. */
+  down: z.boolean().nullish(),
 }).strict()
   // A coordinate is a pair. Half of one puts a panic marker in the sea.
   .refine((v) => (v.x === undefined || v.x === null) === (v.y === undefined || v.y === null), {

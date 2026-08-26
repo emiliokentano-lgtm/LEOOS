@@ -138,6 +138,32 @@ Transport.onIntervalChanged = function(intervalMs)
   end
 end
 
+--[[
+  The API had more commands waiting than fitted in one batch.
+
+  Drained on a short timer rather than in-line, because the response we are
+  handling has not finished being processed yet and the transport allows one
+  telemetry request in flight. A heartbeat is the cheap way to ask again: it
+  carries almost nothing and every response drains the queue.
+
+  Bounded by the transport's own backoff, so a queue that somehow never empties
+  cannot become a request loop.
+]]
+Transport.onCommandsPending = function()
+  if not sessionReady then return end
+  SetTimeout(250, function()
+    if not sessionReady then return end
+    Transport.send('/api/v1/fivem/heartbeat', {
+      sessionId = Transport.sessionId(),
+      playerCount = #GetPlayers(),
+      uptimeSeconds = os.time() - startedAt,
+      resourceVersion = Config.resourceVersion,
+    }, function(ok, _, _, decoded)
+      if ok and decoded then Transport.applyResponse(decoded) end
+    end)
+  end)
+end
+
 --[[===========================================================================
   Loops
 ===========================================================================]]
@@ -205,8 +231,12 @@ local function heartbeatLoop()
           playerCount = #GetPlayers(),
           uptimeSeconds = os.time() - startedAt,
           resourceVersion = Config.resourceVersion,
-        }, function(_, status)
+        }, function(ok, status, _, decoded)
           if status == 409 or status == 400 then Transport.onSessionLost() end
+          -- The heartbeat is the ONLY guaranteed periodic request. With
+          -- telemetry disabled it is the entire command channel, which is why
+          -- it applies the response rather than only checking the status.
+          if ok and decoded then Transport.applyResponse(decoded) end
         end)
 
         Transport.flushEvents(now)
@@ -245,37 +275,124 @@ end)
   same request from a browser, and can refuse. `/leoos-panic` in particular does
   not make a panic happen — it asks, and the answer comes from the database.
 ===========================================================================]]
+--[[
+  Is this player dead or dying, as THIS SERVER sees it?
+
+  ────────────────────────────────────────────────────────────────────────────
+  THE SECOND OF THREE LAYERS
+
+  `client/keybinds.lua` refuses locally so the player gets an instant answer.
+  That check is a courtesy and nothing more — a modded client is precisely what
+  it cannot stop, and a resource that trusted it would be trusting the client to
+  decide whether it may raise an alarm.
+
+  So the server asks again, with a server-side native against its own entity
+  state, and LEOOS asks a third time against what this server last reported.
+  Each layer catches what the one before it cannot.
+
+  Base natives only, so this works standalone. A framework that holds a downed
+  player at positive health knows better than `GetEntityHealth` does, and an
+  adapter can say so — see `Adapter.isDown`.
+]]
+local function playerIsDown(src)
+  if Adapter.isDown ~= nil then
+    local ok, result = pcall(Adapter.isDown, src)
+    if ok and result ~= nil then return result == true end
+  end
+
+  local ped = GetPlayerPed(src)
+  if ped == 0 then
+    -- No ped is not the same as dead. A player mid-spawn has none, and
+    -- refusing them would mean a panic button that silently fails on join.
+    return false
+  end
+  return GetEntityHealth(ped) <= 0
+end
+
+--[[
+  One panic path, reached by a keybind and by the slash command alike.
+
+  Written once so the two entry points cannot drift — the liveness check, the
+  coordinates, the immediate flush and the confirmation all live here.
+]]
+local function raisePanic(src)
+  local identifiers = Adapter.getIdentity(src)
+  if identifiers == nil or next(identifiers) == nil then return end
+
+  if playerIsDown(src) then
+    --[[
+      Told, not ignored.
+
+      Silence is the wrong answer to a pressed panic button under any
+      circumstance: a player who hears nothing back has every reason to believe
+      help is coming. This is also the layer that catches a client which skipped
+      its own check, so the message has to exist here and not only there.
+    ]]
+    TriggerClientEvent('leoos:notify', src, {
+      title = 'Panic not sent',
+      body = 'You are down. Dispatch was not alerted.',
+      tone = 'danger',
+    })
+    return
+  end
+
+  local ped = GetPlayerPed(src)
+  local coords = ped ~= 0 and GetEntityCoords(ped) or nil
+
+  Transport.queueEvent({
+    kind = 'player.panic',
+    at = math.floor(os.time() * 1000),
+    identifiers = identifiers,
+    src = tonumber(src),
+    x = coords and math.floor(coords.x * 10 + 0.5) / 10 or nil,
+    y = coords and math.floor(coords.y * 10 + 0.5) / 10 or nil,
+    -- Liveness AT THE MOMENT OF THE PRESS. Telemetry is throttled, so its last
+    -- sample can be seconds old, and seconds are exactly the window in which
+    -- somebody dies. LEOOS prefers this value over its own stored one.
+    down = false,
+  })
+
+  -- Flushed IMMEDIATELY rather than on the next heartbeat. Ten seconds is a
+  -- long time when somebody has pressed a panic button.
+  Transport.flushEvents(GetGameTimer())
+
+  --[[
+    "Sent to dispatch" would be a claim this resource cannot make.
+
+    The event has been queued and a flush attempted; whether LEOOS accepts it
+    depends on the player's membership and permissions, and the answer arrives
+    later or not at all. The alert the OTHER units see is the real confirmation,
+    and it does not come from here.
+  ]]
+  TriggerClientEvent('leoos:notify', src, {
+    title = 'Panic',
+    body = 'Alert sent. Dispatch decides what happens next.',
+    tone = 'danger',
+  })
+end
+
 if Config.features.panic then
   RegisterCommand('leoos-panic', function(src)
     if src == 0 then
       print('[leoos] /leoos-panic must be run by a player, not from the console.')
       return
     end
-
-    local identifiers = Adapter.getIdentity(src)
-    if identifiers == nil or next(identifiers) == nil then return end
-
-    local ped = GetPlayerPed(src)
-    local coords = ped ~= 0 and GetEntityCoords(ped) or nil
-
-    Transport.queueEvent({
-      kind = 'player.panic',
-      at = math.floor(os.time() * 1000),
-      identifiers = identifiers,
-      src = tonumber(src),
-      x = coords and math.floor(coords.x * 10 + 0.5) / 10 or nil,
-      y = coords and math.floor(coords.y * 10 + 0.5) / 10 or nil,
-    })
-
-    -- Flushed IMMEDIATELY rather than on the next heartbeat. Ten seconds is a
-    -- long time when somebody has pressed a panic button.
-    Transport.flushEvents(GetGameTimer())
-    TriggerClientEvent('leoos:notify', src, {
-      title = 'Panic',
-      body = 'Your alert has been sent to dispatch.',
-      tone = 'danger',
-    })
+    raisePanic(src)
   end, false)
+
+  --[[
+    The keybind's server half.
+
+    The event carries NOTHING. `source` is set by the FiveM runtime and cannot be
+    forged by the client, and everything else — identity, position, liveness —
+    is read here from natives the client has no way to influence. An event that
+    accepted a position, or a liveness flag, would be a client deciding both.
+  ]]
+  RegisterNetEvent('leoos:keybind:panic', function()
+    local src = source
+    if src == nil or src == 0 then return end
+    raisePanic(src)
+  end)
 end
 
 if Config.features.statusCommands then

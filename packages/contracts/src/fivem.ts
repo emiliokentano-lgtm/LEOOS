@@ -195,6 +195,26 @@ export interface FiveMPlayerSample {
   speed?: number | null;
   health?: number | null;
   armor?: number | null;
+  /**
+   * Whether the game considers this player dead or dying.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * A GAME-WORLD FACT, IN THE SAME TRUST CLASS AS A COORDINATE.
+   *
+   * LEOOS cannot verify it and does not pretend to. The game server observes it
+   * with a server-side native and ASSERTS it; LEOOS records what was asserted
+   * and acts on it, exactly as it does with position. A compromised game server
+   * can lie about this as it can lie about where somebody is standing.
+   *
+   * What it is NOT is something a browser may set. No session-authenticated
+   * route carries a liveness field, and `fivem.test.ts` asserts that.
+   *
+   * Distinct from `health` deliberately: a roleplay framework can hold a downed
+   * player at positive health, so a number does not answer the question a panic
+   * button asks.
+   * ────────────────────────────────────────────────────────────────────────
+   */
+  down?: boolean | null;
   vehicle?: {
     model: string;
     plate?: string | null;
@@ -245,6 +265,15 @@ export interface FiveMEvent {
   x?: number | null;
   y?: number | null;
   reason?: string | null;
+  /**
+   * Liveness as the game server saw it AT THE MOMENT OF THE PRESS.
+   *
+   * Carried on the event as well as on telemetry because it is the fresher of
+   * the two: telemetry is throttled, so its last sample can be seconds old, and
+   * seconds are exactly the window in which somebody dies. Same trust class and
+   * same caveat as `FiveMPlayerSample.down`.
+   */
+  down?: boolean | null;
 }
 
 export interface FiveMEventsRequest {
@@ -268,13 +297,28 @@ export interface FiveMClaimRequest {
  * game host needs no inbound firewall rule and exposes no listening port. The
  * web application never initiates a connection to a game server.
  */
+export type FiveMCommandType = 'notify' | 'setBlip' | 'clearBlip' | 'setWaypoint';
+
 export interface FiveMCommand {
   id: string;
-  type: 'notify' | 'setBlip' | 'clearBlip';
+  type: FiveMCommandType;
   /** The identifier this applies to. */
   target: string;
   payload?: Record<string, unknown>;
 }
+
+/**
+ * How many commands one game server may have waiting.
+ *
+ * Bounded because a game server that has been unreachable for an hour must not
+ * be able to make the API hold a backlog for it. Past the cap the OLDEST is
+ * dropped: a stale prompt is worse than a missing one, and the newest command
+ * is the one still describing a situation that exists.
+ */
+export const FIVEM_COMMAND_QUEUE_MAX = 100;
+
+/** Delivered per response, so one batch stays a small body. */
+export const FIVEM_COMMAND_BATCH_MAX = 20;
 
 export interface FiveMIngestResponse {
   ok: true;
@@ -282,6 +326,13 @@ export interface FiveMIngestResponse {
   nextIntervalMs?: number;
   /** At-most-once. A duplicated in-game popup is worse than a missed one. */
   commands?: FiveMCommand[];
+  /**
+   * More commands are waiting than fitted in this batch.
+   *
+   * The bridge drains again promptly rather than waiting a full tick. Without
+   * it, a burst would trickle out at one batch per second.
+   */
+  commandsPending?: boolean;
   /** What the API did with the batch, for the resource's debug log. */
   accepted?: number;
   rejected?: number;

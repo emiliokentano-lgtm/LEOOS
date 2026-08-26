@@ -32,13 +32,13 @@ steps* in the [project report](docs/PROJECT-REPORT.md).
 | Dispatch | Incidents, units, statuses, assignments, panic, timeline | `dispatch.test.ts` (61) |
 | Live map | Canvas renderer, clustering, filters, freshness, panic locator | `map.test.ts` (41) + `map-cluster/viewport/filter` (contracts) |
 | Real-time | WebSocket hub, ticket handshake, per-delivery authorization | `realtime.test.ts` (40) |
-| FiveM ingest | HMAC signing, replay/skew/sequence, telemetry, events, admin | `fivem.test.ts` (51) |
+| FiveM ingest | HMAC signing, replay/skew/sequence, telemetry, events, in-game keybinds, command channel | `fivem.test.ts` (49) + `fivem-command-channel.test.ts` (13) |
 | Notifications | Types, recipients, centre, preferences, panic surfacing | `notifications.test.ts` (39) |
 | Global administration | User register, capabilities, audit log, system status | `admin.test.ts` (39) |
 | Security regressions | Seven audited findings | `security.test.ts` (40) |
 | End-to-end lifecycle | Register → org → roles → hire → promote → dispatch → panic → terminate → archive | `lifecycle.test.ts` (42) |
 
-**911 automated tests** across four packages, plus **nine browser walkthroughs**
+**928 automated tests** across four packages, plus **nine browser walkthroughs**
 that drive a real Chromium against running servers.
 
 ### Not built
@@ -140,7 +140,7 @@ every rule inside the transaction that performs the change
 ## Tests and checks
 
 ```bash
-pnpm test                                    # 911 tests, all packages
+pnpm test                                    # 928 tests, all packages
 pnpm typecheck                               # all five packages
 pnpm lint
 

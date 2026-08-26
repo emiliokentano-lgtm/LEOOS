@@ -13,9 +13,9 @@ of this document that makes the other eighteen sections trustworthy.
 
 | Check | Result |
 | --- | --- |
-| `pnpm test` | **911 passed, 0 failed, 0 skipped** — contracts 116, authz-core 116, db 41, api 638 |
+| `pnpm test` | **928 passed, 0 failed, 0 skipped** — contracts 116, authz-core 116, db 41, api 655 |
 | `pnpm typecheck` | clean, five packages |
-| `pnpm lint` | clean |
+| `pnpm lint` | clean, including `luac -p` over all 12 Lua files |
 | `pnpm build` | succeeds |
 | `a11y-check.mjs` | **no problems found** |
 | 13 browser walkthroughs | all green against a production build |
@@ -67,7 +67,7 @@ asserting "No backend — UI phase", and two unused Radix packages. There are no
 | Dispatch | Complete | `dispatch.test.ts` (61) |
 | Live map | Complete | `map.test.ts` (41) |
 | Real-time | Complete | `realtime.test.ts` (40) |
-| FiveM ingest | Complete | `fivem.test.ts` (51) |
+| FiveM ingest | Complete | `fivem.test.ts` (49), `fivem-command-channel.test.ts` (13) |
 | Notifications | Complete | `notifications.test.ts` (39) |
 | Global administration | Complete | `admin.test.ts` (39) |
 | End-to-end lifecycle | Complete | `lifecycle.test.ts` (42) |
@@ -266,6 +266,27 @@ that tries to forge an organization and asserts the 400.
 The ingest secret leaves the API exactly once, at creation. It is read by the
 resource from a **convar**, never a file.
 
+**In-game keybinds** are bound through FiveM's own `RegisterKeyMapping`, so the
+player rebinds them in the game's settings and the choice persists — there is no
+rebinding UI of our own to disagree with it. A keypress raises a server event
+carrying no payload at all; the server reads identity, position and liveness from
+natives the client cannot reach.
+
+**A dead player cannot raise a panic**, checked in three places: the client
+refuses immediately as a courtesy, the game server re-checks with a server-side
+native, and the API refuses when this game server said the player was down —
+auditing the refusal. LEOOS cannot verify liveness and the documentation says so
+plainly: the game server asserts it in the same trust class as a coordinate, and
+a wholly compromised game server defeats all three layers.
+
+**The command channel now has a producer.** The contract, the wire format and the
+resource's consumer had existed since Phase 7 with nothing that produced a
+command — a channel that looked complete and carried nothing. Commands ride back
+in the response body of the bridge's own requests, so the game host exposes no
+inbound endpoint; the queue is bounded, drop-oldest, at-most-once, with a
+60-second TTL. Latency is ~1 s in the default configuration and ~10 s with
+telemetry disabled, which is documented as slower rather than broken.
+
 ## 15. Real-time system
 
 WebSocket hub with a single-use ticket handshake
@@ -381,10 +402,13 @@ scale.
 ## 19. Known limitations
 
 1. **Single-node only.** The nonce store, WebSocket ticket store, live position
-   store, actor cache, identity cache and rate limiter are all in-process, as is
-   the hourly retention sweep. On two instances: a replayed FiveM request can be
-   accepted by the instance that did not see the nonce, a ticket issued by one
-   is unknown to the other, and each holds a different view of live positions.
+   store, actor cache, identity cache, rate limiter, FiveM command queue and
+   FiveM liveness store are all in-process, as is the hourly retention sweep. On
+   two instances: a replayed FiveM request can be accepted by the instance that
+   did not see the nonce, a ticket issued by one is unknown to the other, each
+   holds a different view of live positions, and an in-game prompt queued on one
+   instance reaches a player only if their game server's next request happens to
+   land on it.
    Redis is declared in `docker-compose.yml` and **not wired up**. This is the
    single largest gap between the codebase and horizontal scaling.
 2. **Mail is never delivered.** Console transport only. Password reset and email

@@ -282,9 +282,60 @@ exposing an inbound endpoint:
 
 **At most once.** A command that fails to apply is not retried: a duplicated
 in-game popup is worse than a missed one, and anything that must not be lost
-belongs in the web UI where it can be acknowledged. The command set is
-deliberately tiny and cannot move, kick or charge a player — a dispatch backend
-should not become a way to grief a game server.
+belongs in the web UI where it can be acknowledged. The command set —
+`notify`, `setBlip`, `clearBlip`, `setWaypoint` — is deliberately tiny and
+cannot move, kick or charge a player. A dispatch backend should not become a way
+to grief a game server.
+
+Commands are drained from **every** ingest response: telemetry, heartbeat and
+events. Latency is therefore bounded by whichever periodic request runs first —
+about a second in the default configuration, about ten seconds if you have
+turned telemetry off. That second case is supported and slower, not broken.
+
+Turn the whole channel off with `set leoos_feature_commands "false"`. The
+resource keeps reporting everything it always did; the game simply stops hearing
+back.
+
+---
+
+## Keybinds
+
+| Action | Default | Rebind in |
+| --- | --- | --- |
+| Panic | `F7` | Settings → Key Bindings → FiveM |
+
+Bindings use FiveM's own `RegisterKeyMapping`, so **the player owns their
+keyboard**: they rebind in the game's settings screen, the choice is stored by
+their game client, and it survives a resource restart and a server restart.
+
+There is deliberately no rebinding menu of our own. One would be a second store
+of bindings, a second place for them to disagree, and a screen the player has to
+discover — in order to reimplement one they already know. `Config.keys` in
+`config.lua` sets the default for a key nobody has bound yet, and nothing more.
+
+A keypress raises a server event carrying **no payload at all** — not a
+position, not an identity, not a liveness flag. The server reads all three from
+natives the client cannot reach.
+
+### Panic is refused while you are down
+
+Three checks, and only the last two are checks:
+
+1. **The client** refuses immediately, so the player gets an answer rather than
+   a key that appears to do nothing. This is a courtesy, not security.
+2. **The game server** re-checks with a server-side native before signing
+   anything — a modded client is exactly what step 1 cannot stop.
+3. **LEOOS** refuses when this server said the player was down, on the event
+   itself or on its last telemetry, and audits the refusal.
+
+LEOOS cannot verify liveness. Your server asserts it, in the same trust class as
+the coordinates it asserts, and a compromised game server can lie about either.
+
+If your framework holds a downed player at **positive health** — many do —
+`GetEntityHealth` answers the wrong question. Implement `isDown(src)` in your
+adapter and the resource will use it instead; see
+[Adapters](#adapters). It is the only game-world question an adapter is allowed
+to answer beyond identity, and it changes nothing organizational.
 
 ---
 
@@ -293,7 +344,7 @@ should not become a way to grief a game server.
 | Command | Who | What it does |
 | --- | --- | --- |
 | `/leoos-link <code>` | player | Links their FiveM identity to a LEOOS account |
-| `/leoos-panic` | player | **Requests** a panic alert |
+| `/leoos-panic` | player | **Requests** a panic alert. Same path as the keybind |
 | `/leoos-status <key>` | player | **Requests** a duty status change |
 | `leoos-status-report` | console | Prints bridge diagnostics. Never prints the secret |
 
@@ -433,7 +484,7 @@ FIPS 180-4 and RFC 4231 vectors.
 
 ## Adapters
 
-An adapter answers two questions and no others:
+An adapter answers three questions and no others:
 
 ```lua
 ---@class LeoosAdapter
@@ -441,11 +492,19 @@ An adapter answers two questions and no others:
 ---@field detect            fun(): boolean
 ---@field getIdentity       fun(src: number): table<string, string>
 ---@field getCharacterName  fun(src: number): string|nil
+---@field isDown            fun(src: number): boolean|nil   -- optional
 ```
 
 That is the entire framework surface of this resource. **No adapter may supply an
 organization, rank, callsign, unit or permission** — those always resolve from
 the LEOOS database, so the choice of framework cannot affect authorization.
+
+`isDown` is optional and is the only one that is not about identity. It exists
+because a framework with a downed/incapacitated state knows something base
+natives do not: a player can be bleeding out at 150 health, and a panic button
+that works while you are unconscious is not a panic button. It answers a
+game-world question, which is the kind of question a game framework is entitled
+to answer — unlike anything organizational.
 
 To add one, create `server/adapters/<name>.lua`, register it, and add it to the
 manifest:
@@ -457,6 +516,8 @@ LeoosAdapters.myframework = {
   detect = function() return GetResourceState('myframework') == 'started' end,
   getIdentity = function(src) return { license = GetPlayerIdentifierByType(src, 'license') } end,
   getCharacterName = function(src) return exports.myframework:getCharacterName(src) end,
+  -- Optional. Omit it and the resource falls back to GetEntityHealth(ped) <= 0.
+  isDown = function(src) return exports.myframework:isPlayerDowned(src) end,
 }
 ```
 

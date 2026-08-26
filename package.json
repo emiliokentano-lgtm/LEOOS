@@ -9,7 +9,7 @@
     "dev": "pnpm --filter @leoos/web dev",
     "build": "pnpm --filter @leoos/web build",
     "start": "pnpm --filter @leoos/web start",
-    "lint": "pnpm -r lint",
+    "lint": "node scripts/check-lua.mjs && pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
     "db:migrate": "pnpm --filter @leoos/db migrate",
     "db:seed": "pnpm --filter @leoos/db seed",

@@ -221,14 +221,42 @@ function Transport.sendTelemetry(payload, now)
       Transport.onSessionLost()
     end
 
-    if ok and decoded and decoded.nextIntervalMs then
-      Transport.onIntervalChanged(decoded.nextIntervalMs)
-    end
-    if ok and decoded and decoded.commands then
-      Commands.apply(decoded.commands)
-    end
+    if ok and decoded then Transport.applyResponse(decoded, { telemetryInterval = true }) end
   end)
   return true
+end
+
+--[[
+  Commands come back on EVERY response, not just telemetry's.
+
+  This used to live inline in `sendTelemetry` and nowhere else, which meant a
+  server running with `leoos_feature_telemetry false` — a supported
+  configuration — received no commands at all. The channel worked in the default
+  setup and silently did nothing in a valid one, which is the worst shape a bug
+  can take.
+
+  `commandsPending` means the API had more waiting than fitted in one batch. We
+  drain again immediately rather than waiting for the next tick, so a burst
+  arrives at once instead of trickling out a batch per second.
+]]
+function Transport.applyResponse(decoded, opts)
+  --[[
+    `nextIntervalMs` MEANS SOMETHING DIFFERENT ON EACH ENDPOINT.
+
+    On a telemetry response it is the telemetry interval; on a heartbeat
+    response it is the heartbeat interval. They are different numbers by an
+    order of magnitude, so applying either one blindly would have the API's
+    heartbeat answer quietly slow telemetry to a tenth of its rate — a map that
+    updates every ten seconds, with nothing in any log to explain it.
+
+    So the caller says whether it is the one that owns the telemetry clock.
+    Only `sendTelemetry` passes `telemetryInterval = true`.
+  ]]
+  if opts ~= nil and opts.telemetryInterval and decoded.nextIntervalMs then
+    Transport.onIntervalChanged(decoded.nextIntervalMs)
+  end
+  if decoded.commands then Commands.apply(decoded.commands) end
+  if decoded.commandsPending then Transport.onCommandsPending() end
 end
 
 --[[
@@ -260,7 +288,8 @@ function Transport.flushEvents(now)
   send('/api/v1/fivem/events', {
     sessionId = state.sessionId,
     events = batch,
-  }, function(ok, status)
+  }, function(ok, status, _, decoded)
+    if ok and decoded then Transport.applyResponse(decoded) end
     if not ok then
       -- Put them back at the FRONT, so ordering survives a failure.
       for i = #batch, 1, -1 do
@@ -281,3 +310,4 @@ end
 --- Replaced by main.lua. Declared here so the transport has no upward dependency.
 function Transport.onSessionLost() end
 function Transport.onIntervalChanged(_) end
+function Transport.onCommandsPending() end

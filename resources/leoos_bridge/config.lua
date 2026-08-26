@@ -88,7 +88,13 @@ Config.features = {
   --- Report vehicle model and plate alongside position.
   vehicles = GetConvar('leoos_feature_vehicles', 'true') == 'true',
 
-  --- The /leoos-panic command and its event.
+  --[[
+    The panic button: the `/leoos-panic` command, the keybind, and the event.
+
+    Turning it off removes the keybind entirely rather than leaving a bound key
+    that does nothing — an unresponsive panic button is worse than an absent
+    one, because a player will press it and believe help is coming.
+  ]]
   panic = GetConvar('leoos_feature_panic', 'true') == 'true',
 
   --- The /leoos-status command, which REQUESTS a duty status change.
@@ -97,8 +103,33 @@ Config.features = {
   --- The /leoos-link command that binds a FiveM identity to a LEOOS account.
   identityClaim = GetConvar('leoos_feature_claim', 'true') == 'true',
 
-  --- Apply commands the API returns (in-game notifications).
+  --[[
+    Apply commands the API returns — notifications and waypoints.
+
+    This is the ONLY path from LEOOS into the game. Turned off, the resource
+    still reports everything it always did and the game simply stops hearing
+    back: no dispatch popups, no waypoints. See
+    docs/architecture/04-fivem-integration.md §7 for why the direction works
+    this way at all.
+  ]]
   commands = GetConvar('leoos_feature_commands', 'true') == 'true',
+}
+
+--[[===========================================================================
+  KEYBINDS
+
+  Defaults only. Every binding is registered through FiveM's own
+  `RegisterKeyMapping`, so a player rebinds it in Settings → Key Bindings →
+  FiveM and their choice persists — it is stored by the game client, survives a
+  resource restart, and is not overridden by the values here.
+
+  There is deliberately NO in-game rebinding menu of our own. One would be a
+  second store of bindings, a second place for them to disagree, and a screen
+  the player has to discover, in order to reimplement one they already know.
+===========================================================================]]
+Config.keys = {
+  --- Raise a panic alert. Refused while the player is down.
+  panic = GetConvar('leoos_key_panic', 'F7'),
 }
 
 --[[

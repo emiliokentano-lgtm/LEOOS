@@ -5,6 +5,7 @@ import {
 } from '@leoos/contracts';
 import { gameServerState, type Database } from '@leoos/db';
 import type { LivePositionStore, PositionSample } from '../map/sources/live-positions.js';
+import type { LivenessStore } from './liveness-store.js';
 import type { TelemetryInput } from './fivem.schema.js';
 import {
   parseIdentifier, primaryIdentifier, resolvePlayers, touchIdentities,
@@ -43,6 +44,14 @@ import {
 export interface IngestDeps {
   db: Database;
   store: LivePositionStore;
+  /**
+   * Records what the game server said about who is dead or dying.
+   *
+   * Optional so the ingest function stays usable from tests and the benchmark
+   * without one. Absent, liveness is simply not recorded, and the panic path
+   * falls back to the event's own assertion.
+   */
+  liveness?: LivenessStore;
   /** Persists `unit.pos_*`. Called at a fraction of the tick rate. */
   now?: () => number;
 }
@@ -252,6 +261,25 @@ export async function ingestTelemetry(
 
   // ── Write ────────────────────────────────────────────────────────────────
   deps.store.setMany(accepted.map((a) => a.sample));
+
+  /**
+   * Liveness is recorded for EVERY identified player, not only accepted ones.
+   *
+   * An accepted sample is one that became a unit position — it needed a linked
+   * account, an active membership and a crewed unit. Liveness needs none of
+   * that: it is a fact about a body, and the player whose panic we may have to
+   * refuse might be off duty, uncrewed, or rejected as out of bounds. Keying it
+   * to the acceptance path would leave exactly those cases unrecorded.
+   */
+  if (deps.liveness !== undefined) {
+    for (const { identifier, player } of usable) {
+      deps.liveness.set(identifier.full, player.down, now);
+    }
+    for (const raw of input.departed ?? []) {
+      const departedId = raw.includes(':') ? parseIdentifier(raw) : null;
+      if (departedId !== null) deps.liveness.forget(departedId.full);
+    }
+  }
 
   /**
    * Departed players are removed IMMEDIATELY.

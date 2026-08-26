@@ -469,7 +469,7 @@ sequentially against one database — `pnpm test` already does this
 ## 8. Verification battery
 
 ```bash
-pnpm test                    # 911 tests across four packages
+pnpm test                    # 928 tests across four packages
 pnpm typecheck               # all five packages
 pnpm lint
 ```

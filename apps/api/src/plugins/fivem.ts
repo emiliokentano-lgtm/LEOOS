@@ -2,6 +2,8 @@ import fp from 'fastify-plugin';
 import type { AppConfig } from '../config.js';
 import { SecretBox } from '../lib/secret-box.js';
 import { NonceStore } from '../modules/fivem/nonce-store.js';
+import { FiveMCommandQueue } from '../modules/fivem/command-queue.js';
+import { LivenessStore } from '../modules/fivem/liveness-store.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -15,6 +17,17 @@ declare module 'fastify' {
     secretBox: SecretBox | null;
     /** Decides when the Postgres position cache is due a write. */
     fivemFlush: FlushClock;
+    /**
+     * Things LEOOS wants a game client to do, waiting for that game server's
+     * next request. The ONLY path from the API into a game — there is no
+     * inbound endpoint on the game host.
+     */
+    fivemCommands: FiveMCommandQueue;
+    /**
+     * What the game server last said about whether a player is dead or dying.
+     * An assertion LEOOS records, never a fact it verifies.
+     */
+    fivemLiveness: LivenessStore;
   }
 }
 
@@ -70,6 +83,8 @@ export default fp<FiveMPluginOptions>(async (app, opts) => {
   const secretBox = SecretBox.fromBase64(opts.config.LEOOS_FIVEM_SECRET_KEY);
   app.decorate('secretBox', secretBox);
   app.decorate('fivemFlush', new FlushClock());
+  app.decorate('fivemCommands', new FiveMCommandQueue());
+  app.decorate('fivemLiveness', new LivenessStore());
 
   if (opts.config.POSITION_SOURCE === 'fivem' && secretBox === null) {
     // Belt and braces: `loadConfig` already refuses this combination. Repeated

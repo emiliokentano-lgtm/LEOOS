@@ -327,31 +327,133 @@ connection it actually has: with the bridge enabled and nothing reporting it say
 
 ## 7. Command channel (server ← API)
 
-The `/telemetry` and `/heartbeat` responses carry a small command list, letting
-the API push actions without the game server exposing an inbound endpoint:
+Everything so far flows one way: the game server tells LEOOS what happened. In-game
+prompts — a backup request, a shared location, a dispatch note — need the other
+direction, and that direction is the harder one to get right.
 
-```jsonc
-{
-  "ok": true,
-  "nextIntervalMs": 1000,
-  "commands": [
-    { "id": "c_01", "type": "notify", "target": "license:ab…",
-      "payload": { "title": "Dispatch", "body": "Assigned to #2026-08-000431" } },
-    { "id": "c_02", "type": "setBlip", "target": "license:cd…",
-      "payload": { "color": 38 } },
-    { "id": "c_03", "type": "kickUnit", "target": "license:ef…" }
-  ]
-}
-```
+### The decision, and what it was weighed against
 
-Commands are queued in Redis per server, delivered at-most-once per poll, and
-acknowledged on the next request by id. At-most-once is deliberate: a duplicated
-in-game notification is worse than a missed one, and anything that must not be
-lost belongs in the web UI, not in a game popup.
+**A LEOOS-side command reaches a game client in the RESPONSE BODY of a request the
+bridge itself made.** The game host exposes no inbound endpoint and holds no extra
+connection open.
+
+| Option | Verdict |
+| --- | --- |
+| **Push from LEOOS to an endpoint on the game host** | Rejected. Inverts the trust direction: the game host would have to listen, be reachable from the API, authenticate the caller, and carry a firewall rule. A dispatch backend that can open connections into a game server is worth attacking for that reason alone. |
+| **A dedicated long-poll from the bridge** | Rejected. Lower latency, and it fights the transport's design. `PerformHttpRequest` offers no timeout guarantee — a request that never returns simply never calls back — which is why the transport keeps at most one telemetry request in flight and skips rather than queues. A held-open poll is that failure mode by construction, and invisible when it happens. |
+| **Piggyback on the existing outbound requests** | **Chosen.** No listening port, no second credential, no second connection, and nothing that has not already been signature-authenticated can reach the command handler. |
+
+The cost is latency, bounded by whichever periodic request runs first:
+
+| Configuration | Worst-case command latency |
+| --- | --- |
+| Telemetry on (default, 1 Hz) | ~1 s |
+| Telemetry off, heartbeat only | ~10 s |
+| Any ingest request in flight for another reason | immediate |
+
+Telemetry-off is a supported configuration and it is **slower**, not broken. Written
+here rather than discovered by an operator wondering why a prompt took ten seconds.
+
+### What actually exists
+
+The contract (`FiveMCommand`, `FiveMIngestResponse.commands`) and the resource's
+`Commands.apply` were written in Phase 7. **Nothing produced a command**, so the
+channel had a consumer, a wire format and a documented design, and carried nothing.
+This section previously described a Redis-backed queue with an acknowledgement
+protocol and an example `kickUnit` command — none of it implemented, and the last of
+it something the resource refuses on principle.
+
+Now:
+
+- **A bounded in-process queue per game server** (`FiveMCommandQueue`), drop-oldest
+  past the cap, so a game server offline for an hour cannot make the API hold an
+  unbounded backlog for it.
+- **Drained on every ingest response** — telemetry, heartbeat and events. Draining
+  only from telemetry, as the resource did, meant an installation with telemetry
+  disabled received no commands at all.
+- **At-most-once, with no acknowledgement protocol.** An ack buys at-least-once, and
+  a duplicated in-game popup is worse than a missed one. Anything that must not be
+  lost belongs in the web UI where a person can acknowledge it.
+- **A 60-second TTL**, checked on drain. A prompt surfacing four minutes late is not
+  help, it is confusion.
+- **`commandsPending`** when the queue was truncated, so the bridge drains again
+  promptly instead of waiting a full tick.
+
+One trap this shape sets, and how it is handled: `nextIntervalMs` means the
+*telemetry* interval on a telemetry response and the *heartbeat* interval on a
+heartbeat response — an order of magnitude apart. The resource's shared response
+handler therefore applies it only for the caller that owns the telemetry clock.
+Applying it blindly would have the heartbeat's answer quietly slow the map to a
+tenth of its rate, with nothing in any log to explain it.
+
+The queue is in-process, which puts it on the same list as the nonce store and the
+ticket store: correct on one node, wrong on two.
+
+### The command set stays small on purpose
+
+`notify`, `setBlip`, `clearBlip`, `setWaypoint`. Nothing here can move a player, take
+their money, or kick them. LEOOS is a dispatch system, not a server administration
+tool, and a compromised backend must not become a way to grief a game server. An
+unknown command type is ignored rather than rejected, so a newer API can address an
+older resource without breaking it.
 
 ---
 
-## 8. The Lua resource
+## 8. Keybinds and the liveness precondition
+
+Players bind keys through **FiveM's own mechanism** — `RegisterKeyMapping`, rebound
+in Settings → Key Bindings → FiveM, stored per player by the game client, surviving a
+resource restart. There is deliberately no rebinding UI of our own: it would be a
+second store of bindings, a second place for them to disagree, and a screen the
+player has to discover, in order to reimplement one they already know.
+`Config.keys` holds defaults for unbound keys and nothing else.
+
+A keypress raises a server event carrying **no payload at all** — not a position, not
+an identity, not a liveness flag. `source` is set by the FiveM runtime and cannot be
+forged; the server reads everything else from natives the client cannot reach.
+
+### A dead player cannot raise a panic
+
+Three layers, each catching what the one before it cannot:
+
+| Layer | Where | What it catches |
+| --- | --- | --- |
+| 1 | `client/keybinds.lua` | Nothing hostile. It exists so the player gets an *immediate* refusal instead of pressing a key that appears to do nothing. |
+| 2 | `server/main.lua` → `playerIsDown` | A modded client that skipped layer 1. Uses a server-side native against the server's own entity state. |
+| 3 | `fivem.routes.ts` → `handleInGamePanic` | A bridge whose event path was bypassed while its telemetry stayed truthful. |
+
+**LEOOS cannot verify liveness and does not pretend to.** The game server asserts it
+with `down`, in exactly the same trust class as the coordinates it asserts. A wholly
+compromised game server defeats all three layers — which has always been true of
+position, and is the honest limit of this design.
+
+Two rules govern layer 3, and they point in opposite directions on purpose:
+
+- **Either source saying down refuses.** The event is fresher than telemetry, but
+  letting `down: false` on an event override a recent telemetry report would delete
+  layer 3 entirely — that override is exactly what a bypassed event path would send.
+- **Absent information fails open.** `down` missing, or a liveness report older than
+  `FIVEM_POSITION_TTL_MS`, and the panic proceeds. Refusing on silence would let a
+  telemetry gap suppress somebody's alarm, which is far worse than a dead player
+  managing to raise one.
+
+A refusal is **audited** as `panic.triggered` with outcome `denied`, so a stream of
+them — a player hammering a key while dead, or a resource whose check has broken —
+is one filter away rather than invisible.
+
+One consequence worth naming: because liveness gates the panic button, a *revived*
+player must be reported promptly or their panic button stays dead. The collector's
+throttle therefore treats a liveness transition as a change worth sending, alongside
+distance, heading and vehicle. Without that, a player shot while standing still — or
+revived while standing still — would wait up to the ten-second keep-alive.
+
+Nothing about this reaches a browser. No session-authenticated route carries a
+liveness field, so a player cannot mark themselves alive to get past the check, or
+mark somebody else down.
+
+---
+
+## 9. The Lua resource
 
 `resources/leoos_bridge/` — **server scripts only**, no client scripts beyond a
 thin command handler for identity claiming.
@@ -437,7 +539,7 @@ Implementation constraints that shape this design:
 
 ---
 
-## 9. Versioning
+## 10. Versioning
 
 The resource sends `X-LEOOS-Protocol: 1`. The API supports the current and one
 previous protocol version. On mismatch the handshake returns a structured upgrade

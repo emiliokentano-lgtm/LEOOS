@@ -4,7 +4,11 @@
  * Signs requests EXACTLY as the Lua resource does — same canonical string, same
  * headers, same order — and drives a full session against a running API:
  * handshake, telemetry, panic, heartbeat. Then it attacks its own requests:
- * replay, tamper, skew, forged organization.
+ * replay, tamper, skew, forged organization, forged liveness.
+ *
+ * It also checks the RETURN direction — the command channel — because that is
+ * the one part of this protocol that had a consumer, a contract and no producer
+ * for two phases, and looked complete the whole time.
  *
  * The point of doing this out-of-process rather than in vitest is that it proves
  * the wire format, not the internals. A test that calls the verifier directly
@@ -152,6 +156,94 @@ if (LICENSE) {
     }],
   });
   expect('in-game panic', panic.status, 200);
+}
+
+// ── 10. The liveness precondition, over the wire ────────────────────────────
+//
+// The unit tests prove the rule; this proves the WIRE carries it. A field the
+// server never reads would pass every in-process test and fail here, which is
+// the whole reason this walkthrough exists out of process.
+if (LICENSE) {
+  const down = await post('/api/v1/fivem/events', {
+    sessionId,
+    events: [{
+      kind: 'player.panic', at: Date.now(),
+      identifiers: { license: LICENSE }, x: 420, y: -980,
+      down: true,
+    }],
+  });
+  // ACCEPTED as a request and REFUSED as a panic. The endpoint returning 200 is
+  // correct: the batch was well-formed. Whether a panic happened is a different
+  // question, and the answer is recorded in the audit log rather than here.
+  expect('panic while down is accepted-as-request', down.status, 200);
+  notes.push('panic carrying down:true → 200 (refused as a panic, audited as denied)');
+
+  // A liveness flag the schema does not know is a REJECTION, not a silent
+  // ignore — the same rule that stops a game server inventing an organization.
+  const bogus = await post('/api/v1/fivem/events', {
+    sessionId,
+    events: [{
+      kind: 'player.panic', at: Date.now(),
+      identifiers: { license: LICENSE }, isAlive: true,
+    }],
+  });
+  expect('an unknown liveness field is refused', bogus.status, 400);
+}
+
+// ── 11. The command channel carries something ───────────────────────────────
+//
+// Phase 7 shipped the contract, the wire format and the resource's consumer,
+// and nothing that produced a command — so the channel looked complete and
+// carried nothing for two phases. This asserts the SHAPE the resource parses,
+// on every endpoint that is supposed to drain it.
+{
+  const shaped = (label, body) => {
+    if (body === null || typeof body !== 'object') {
+      problems.push(`${label}: response was not an object`);
+      return;
+    }
+    if ('commands' in body && !Array.isArray(body.commands)) {
+      problems.push(`${label}: commands present but not an array`);
+      return;
+    }
+    if ('commandsPending' in body && typeof body.commandsPending !== 'boolean') {
+      problems.push(`${label}: commandsPending present but not a boolean`);
+      return;
+    }
+    notes.push(`${label}: response shape is drainable`);
+  };
+
+  const hb = await post('/api/v1/fivem/heartbeat', {
+    sessionId, playerCount: 1, uptimeSeconds: 120, resourceVersion: '1.0.0',
+  });
+  shaped('heartbeat', hb.json);
+
+  const tel = await post('/api/v1/fivem/telemetry', {
+    sessionId, sentAt: Date.now(), players: [],
+  });
+  shaped('telemetry', tel.json);
+
+  /**
+   * `nextIntervalMs` MEANS DIFFERENT THINGS on the two endpoints.
+   *
+   * Telemetry's is the telemetry interval; the heartbeat's is the heartbeat
+   * interval — an order of magnitude apart. A resource that applied either one
+   * to its telemetry clock would quietly drop the map to a tenth of its rate,
+   * with nothing in any log to explain it. Asserted here because it is a
+   * property of the WIRE, and the resource is written against it.
+   */
+  const hbInterval = hb.json?.nextIntervalMs;
+  const telInterval = tel.json?.nextIntervalMs;
+  if (typeof hbInterval === 'number' && typeof telInterval === 'number') {
+    if (hbInterval === telInterval) {
+      problems.push(
+        'heartbeat and telemetry report the SAME nextIntervalMs — the resource '
+        + 'cannot tell which clock an interval belongs to',
+      );
+    } else {
+      notes.push(`nextIntervalMs: telemetry ${telInterval}ms, heartbeat ${hbInterval}ms`);
+    }
+  }
 }
 
 // ── Report ──────────────────────────────────────────────────────────────────

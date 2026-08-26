@@ -34,6 +34,26 @@ end
 handlers.setBlip = function() end
 handlers.clearBlip = function() end
 
+--[[
+  Puts a marker on the player's map and GPS.
+
+  The most a command in this set will ever do to a player's game: draw a line on
+  their minimap. It cannot move them, and a player who ignores it loses nothing.
+  Coordinates are bounded on the client before use, because a malformed or
+  hostile payload should place no waypoint rather than an undefined one.
+]]
+handlers.setWaypoint = function(src, payload)
+  local x = tonumber(payload and payload.x)
+  local y = tonumber(payload and payload.y)
+  if x == nil or y == nil then return end
+
+  TriggerClientEvent('leoos:setWaypoint', src, {
+    x = x,
+    y = y,
+    label = tostring(payload.label or 'LEOOS'),
+  })
+end
+
 --- Resolves an identifier to a currently-connected server id, or nil.
 local function findPlayer(identifier)
   for _, src in ipairs(GetPlayers()) do

@@ -826,6 +826,181 @@ describe('the trust model', () => {
     `);
     expect(after[0]!.n).toBe(before[0]!.n);
   });
+
+  // ── The liveness precondition ────────────────────────────────────────────
+  //
+  // A dead player does not press a panic button. Three layers enforce that —
+  // the game client, the game server, and this one. Only the third is testable
+  // from here, and it is deliberately the weakest of the three: it can catch a
+  // bridge whose event path was bypassed while telemetry stayed honest, and it
+  // cannot catch a wholly compromised game server. That is the same thing that
+  // has always been true of coordinates.
+
+  it('REFUSES a panic when the event says the player is down', async () => {
+    const credential = await registerServer('paniclive');
+    const sessionId = await handshake(credential);
+    const officer = await onDutyOfficer('fmdown');
+
+    const before = await h.db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM panic_event WHERE resolved_at IS NULL
+    `);
+
+    const res = await post(credential, '/api/v1/fivem/events', {
+      sessionId,
+      events: [{
+        kind: 'player.panic',
+        at: Date.now(),
+        identifiers: { license: officer.license },
+        down: true,
+      }],
+    });
+    expect(res.statusCode).toBe(200);
+
+    const after = await h.db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM panic_event WHERE resolved_at IS NULL
+    `);
+    expect(after[0]!.n).toBe(before[0]!.n);
+  });
+
+  it('AUDITS the refusal, so a stream of them is visible', async () => {
+    const credential = await registerServer('panicaudit');
+    const sessionId = await handshake(credential);
+    const officer = await onDutyOfficer('fmdownaudit');
+
+    await post(credential, '/api/v1/fivem/events', {
+      sessionId,
+      events: [{
+        kind: 'player.panic',
+        at: Date.now(),
+        identifiers: { license: officer.license },
+        down: true,
+      }],
+    });
+
+    /**
+     * Recorded under the SAME action as a successful panic, with `denied` as
+     * the outcome — so "show me refused panics" is one filter rather than a new
+     * key nobody thinks to look at.
+     */
+    const audit = await h.db.execute<{ metadata: unknown }>(sql`
+      SELECT metadata FROM audit_log
+       WHERE action = 'panic.triggered' AND outcome = 'denied'
+         AND actor_user_id = ${officer.userId}
+    `);
+    expect(audit.length).toBe(1);
+    expect(audit[0]!.metadata).toMatchObject({ reason: 'player-down', assertedBy: 'event' });
+  });
+
+  it('REFUSES using the last telemetry when the event omits liveness', async () => {
+    const credential = await registerServer('panicstore');
+    const sessionId = await handshake(credential);
+    const officer = await onDutyOfficer('fmdownstore');
+
+    // Telemetry says down. This is the backstop: an event that simply does not
+    // carry the field cannot use its silence to get past the check.
+    await post(credential, '/api/v1/fivem/telemetry', {
+      sessionId,
+      sentAt: Date.now(),
+      players: [{
+        src: 1,
+        identifiers: { license: officer.license },
+        x: 100, y: -200, z: 30, heading: 0,
+        down: true,
+      }],
+    });
+
+    const before = await h.db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM panic_event WHERE resolved_at IS NULL
+    `);
+
+    const res = await post(credential, '/api/v1/fivem/events', {
+      sessionId,
+      events: [{
+        kind: 'player.panic',
+        at: Date.now(),
+        identifiers: { license: officer.license },
+      }],
+    });
+    expect(res.statusCode).toBe(200);
+
+    const after = await h.db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM panic_event WHERE resolved_at IS NULL
+    `);
+    expect(after[0]!.n).toBe(before[0]!.n);
+  });
+
+  it('ALLOWS a panic when nothing has ever reported this player\'s liveness', async () => {
+    /**
+     * FAIL OPEN ON SILENCE, and this is the test that pins the direction.
+     *
+     * Refusing on absent information would mean a telemetry gap silences
+     * somebody's alarm. A dead player managing to raise one is the far cheaper
+     * mistake, so unknown and stale both read as "not down".
+     */
+    const credential = await registerServer('panicunknown');
+    const sessionId = await handshake(credential);
+    const officer = await onDutyOfficer('fmunknown');
+
+    const res = await post(credential, '/api/v1/fivem/events', {
+      sessionId,
+      events: [{
+        kind: 'player.panic',
+        at: Date.now(),
+        identifiers: { license: officer.license },
+      }],
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Scoped to THIS officer's member row. Every officer in this block is a PD
+    // member, so an organization-wide count picks up the panics the neighbouring
+    // tests raised — which made the first version of this test assert on other
+    // tests' data rather than on its own.
+    const panics = await h.db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM panic_event WHERE member_id = ${officer.memberId}
+    `);
+    expect(panics[0]!.n).toBe(1);
+  });
+
+  it('a browser has NOWHERE to assert liveness', async () => {
+    /**
+     * The counterpart to "a game server cannot invent an organization".
+     *
+     * Liveness travels one way only: the game server asserts it, LEOOS records
+     * it. A session-authenticated panic carries no such field, so a player
+     * cannot mark themselves alive to get past the check — and, just as
+     * importantly, cannot mark somebody else down.
+     */
+    const officer = await onDutyOfficer('fmbrowserdown');
+
+    // Telemetry has said this player is down. A browser panic must not be able
+    // to argue with that, in either direction.
+    h.app.fivemLiveness.set(officer.license, true);
+
+    const forged = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/dispatch/self/panic',
+      headers: officer.headers,
+      payload: { x: 100, y: -200, down: false },
+    });
+
+    // REFUSED OUTRIGHT, not silently dropped. `panicSchema` is `.strict()`, so
+    // a field the API will never read is a 400 the caller sees rather than a
+    // parameter they believe worked.
+    expect(forged.statusCode).toBe(400);
+    expect(h.app.fivemLiveness.isDown(officer.license)).toBe(true);
+
+    // And the ordinary browser panic still works — the point is the field, not
+    // the route. A browser panic is not gated on liveness at all: the operator
+    // pressing it is at a desk, and the game's view of their character is
+    // irrelevant to whether they may raise an alarm.
+    const ordinary = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/dispatch/self/panic',
+      headers: officer.headers,
+      payload: { x: 100, y: -200 },
+    });
+    expect(ordinary.statusCode).toBe(201);
+  });
 });
 
 // ── Heartbeat and offline detection ─────────────────────────────────────────

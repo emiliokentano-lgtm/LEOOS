@@ -69,6 +69,21 @@ local function shouldSend(identifier, snapshot, now)
   local nowPlate = snapshot.vehicle and snapshot.vehicle.plate or nil
   if lastPlate ~= nowPlate then return true, 'vehicle' end
 
+  --[[
+    GOING DOWN, OR GETTING BACK UP, IS ALWAYS WORTH A MESSAGE.
+
+    Without this the throttle would swallow it: a player who is shot while
+    standing still moves less than the distance threshold and turns less than
+    the heading one, so the change would wait for the ten-second keep-alive.
+
+    That cuts both ways and the second direction is the one that matters. LEOOS
+    refuses a panic from somebody it believes is down, so a REVIVED player who
+    stands still would be unable to raise an alarm until the keep-alive caught
+    up — up to ten seconds of a working panic button that does nothing. A
+    transition is a change, and this is a change detector.
+  ]]
+  if last.down ~= snapshot.down then return true, 'liveness' end
+
   return false, nil
 end
 
@@ -99,6 +114,19 @@ local function snapshotPlayer(src)
     y = math.floor(coords.y * 10 + 0.5) / 10,
     z = math.floor(coords.z * 10 + 0.5) / 10,
     heading = math.floor(GetEntityHeading(ped) * 10 + 0.5) / 10,
+    --[[
+      Dead or dying, from the SERVER's view of the entity.
+
+      Reported alongside position because it is the same kind of fact and comes
+      from the same place. LEOOS uses it to refuse a panic from somebody who is
+      down, and can only ever treat it as this server's assertion — it has no
+      way to check, exactly as it has no way to check a coordinate.
+
+      A boolean rather than the health number: a roleplay framework can hold a
+      downed player at positive health, so the number does not answer the
+      question a panic button asks.
+    ]]
+    down = Collector.isDown(src, ped),
   }
 
   if Config.features.vehicles then
@@ -116,6 +144,22 @@ local function snapshotPlayer(src)
   end
 
   return snapshot
+end
+
+--[[
+  Whether a player counts as down.
+
+  Base natives by default. A framework that tracks incapacitation separately
+  from health knows better, and says so through the adapter — which is the only
+  place in this resource allowed to know a framework exists.
+]]
+function Collector.isDown(src, ped)
+  if Adapter.isDown ~= nil then
+    local ok, result = pcall(Adapter.isDown, src)
+    if ok and result ~= nil then return result == true end
+  end
+  if ped == nil or ped == 0 then return false end
+  return GetEntityHealth(ped) <= 0
 end
 
 --[[
@@ -151,6 +195,7 @@ function Collector.collect(now)
             y = snapshot.y,
             heading = snapshot.heading,
             vehicle = snapshot.vehicle,
+            down = snapshot.down,
           }
         end
       end

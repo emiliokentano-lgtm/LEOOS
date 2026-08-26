@@ -10,6 +10,9 @@
 
     · identifiers — which Rockstar licence, Steam id, Discord id this player has
     · a character name, ADVISORY ONLY, for display when no LEOOS account is linked
+    · whether the player is DOWN — optional, and only because a framework knows
+      something base natives do not: a downed player can sit at positive health,
+      so `GetEntityHealth` answers the wrong question on those servers
 
   WHAT NO ADAPTER MAY EVER SUPPLY: organization, rank, callsign, unit,
   permissions. Those resolve from the LEOOS database by looking the identifier
@@ -76,6 +79,24 @@ function StandaloneAdapter.getCharacterName(src)
   local name = GetPlayerName(src)
   if name == nil or name == '' then return nil end
   return name
+end
+
+--[[
+  Whether the player is dead or dying.
+
+  OPTIONAL, and the base implementation is deliberately blunt: health at or
+  below zero. A framework with a downed/incapacitated state should override this
+  — on those servers a player can be bleeding out at 150 health, and a panic
+  button that works while you are unconscious is not a panic button.
+
+  This is the one place the resource asks a game-world question whose answer a
+  framework can improve. Everything organizational still resolves from the LEOOS
+  database, and no adapter may touch that.
+]]
+function StandaloneAdapter.isDown(src)
+  local ped = GetPlayerPed(src)
+  if ped == 0 then return false end
+  return GetEntityHealth(ped) <= 0
 end
 
 LeoosAdapters.standalone = StandaloneAdapter

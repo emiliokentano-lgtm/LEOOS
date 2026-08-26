@@ -50,6 +50,30 @@ import { findIdentity, primaryIdentifier } from './fivem.identity.js';
 /** Bodies are small; a telemetry batch for 500 players is about 100 KB. */
 const MAX_BODY_BYTES = 512 * 1024;
 
+/**
+ * Attaches any waiting commands to an ingest response.
+ *
+ * ONE FUNCTION, used by every ingest route, because the alternative is the bug
+ * the resource shipped with: it applied commands only from the telemetry
+ * response, so an installation running `leoos_feature_telemetry false` — a
+ * supported configuration — received none at all. A channel that works in the
+ * default setup and silently does nothing in a valid one is the worst shape a
+ * bug can take.
+ *
+ * Draining here also means the reply is the ONLY place a command leaves the
+ * API. There is no push, no socket to a game server and no inbound endpoint on
+ * the game host; if this call is not made, nothing reaches a game.
+ */
+function withCommands<T extends FiveMIngestResponse>(
+  app: FastifyInstance,
+  gameServerId: string,
+  response: T,
+): T {
+  const { commands, pending } = app.fivemCommands.drain(gameServerId);
+  if (commands.length === 0) return response;
+  return { ...response, commands, ...(pending ? { commandsPending: true } : {}) };
+}
+
 interface AuthedRequest {
   principal: FiveMPrincipal;
   body: unknown;
@@ -244,7 +268,7 @@ export default async function fivemRoutes(app: FastifyInstance): Promise<void> {
       ok: true,
       nextIntervalMs: FIVEM_DEFAULT_HEARTBEAT_MS,
     };
-    return reply.send(response);
+    return reply.send(withCommands(app, authed.principal.gameServerId, response));
   });
 
   // ── Telemetry ────────────────────────────────────────────────────────────
@@ -258,7 +282,7 @@ export default async function fivemRoutes(app: FastifyInstance): Promise<void> {
     const result = await ingestTelemetry(
       body,
       { gameServerId: authed.principal.gameServerId },
-      { db: app.db, store: app.mapPositions },
+      { db: app.db, store: app.mapPositions, liveness: app.fivemLiveness },
     );
 
     /**
@@ -281,7 +305,7 @@ export default async function fivemRoutes(app: FastifyInstance): Promise<void> {
       rejected: result.rejected,
       nextIntervalMs: FIVEM_DEFAULT_TELEMETRY_MS,
     };
-    return reply.send(response);
+    return reply.send(withCommands(app, authed.principal.gameServerId, response));
   });
 
   // ── Events ───────────────────────────────────────────────────────────────
@@ -307,7 +331,7 @@ export default async function fivemRoutes(app: FastifyInstance): Promise<void> {
 
       switch (event.kind) {
         case 'player.panic':
-          await handleInGamePanic(app, identity.userId, event, request);
+          await handleInGamePanic(app, identity.userId, identifier.full, event, request);
           handled += 1;
           break;
 
@@ -344,7 +368,7 @@ export default async function fivemRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const response: FiveMIngestResponse = { ok: true, accepted: handled };
-    return reply.send(response);
+    return reply.send(withCommands(app, authed.principal.gameServerId, response));
   });
 
   // ── Identity claim ───────────────────────────────────────────────────────
@@ -495,9 +519,62 @@ async function requireSession(
 async function handleInGamePanic(
   app: FastifyInstance,
   userId: string,
-  event: { x?: number | null; y?: number | null },
+  identifier: string,
+  event: { x?: number | null; y?: number | null; down?: boolean | null },
   request: FastifyRequest,
 ): Promise<void> {
+  /**
+   * A dead player does not press a panic button.
+   *
+   * THREE LAYERS, each catching what the one before it cannot:
+   *
+   *   1. the client refuses locally, so the player gets an instant answer
+   *      rather than a silent no-op;
+   *   2. the game server re-checks with a server-side native before signing
+   *      anything, because a modded client is exactly what layer 1 cannot stop;
+   *   3. here — the API refuses when the game server itself said the player was
+   *      down, on this event or on its last telemetry.
+   *
+   * Layer 3 is the weakest and worth being honest about: it catches a bridge
+   * whose event path was bypassed while its telemetry stayed truthful. A wholly
+   * compromised game server defeats all three, which has always been true of
+   * coordinates too.
+   *
+   * EITHER SOURCE SAYING DOWN REFUSES. The event is fresher, but letting a
+   * `down: false` on the event override a recent telemetry report would delete
+   * layer 3 entirely — that override is precisely what a bypassed event path
+   * would send.
+   *
+   * FAIL OPEN ON ABSENT INFORMATION, though: `down` missing, or a liveness
+   * report older than the position TTL, and the panic proceeds. Refusing on
+   * silence would let a telemetry gap suppress somebody's alarm — far worse
+   * than a dead player managing to raise one.
+   */
+  if (event.down === true || app.fivemLiveness.isDown(identifier)) {
+    /**
+     * Audited, not merely dropped.
+     *
+     * A stream of these is either a player hammering a key while dead, or a
+     * resource whose liveness check has broken. Recorded under the SAME action
+     * as a successful panic with `denied` as the outcome, so "show me refused
+     * panics" is one filter rather than a new key nobody thinks to look at.
+     */
+    await writeAudit(app.db, {
+      action: AUDIT_ACTIONS.PANIC_TRIGGERED,
+      actorType: 'game_server',
+      actorUserId: userId,
+      outcome: 'denied',
+      metadata: {
+        reason: 'player-down',
+        assertedBy: event.down === true ? 'event' : 'telemetry',
+      },
+      ip: request.ip,
+      userAgent: 'leoos_bridge',
+      requestId: request.requestId,
+    });
+    return;
+  }
+
   const scope = await scopeFor(app.db, userId);
   if (scope === null) return;
 

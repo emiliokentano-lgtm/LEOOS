@@ -15,10 +15,10 @@ a property could not be tested, it is written down in
 | Package | Files | Tests | What it holds |
 | --- | ---: | ---: | --- |
 | `packages/contracts` | 6 | 116 | Pure domain logic: coordinates, projection, incident transitions, filters, clustering, dashboard metrics |
-| `packages/authz-core` | 2 | 98 | The authorization kernel: hierarchy rules H1–H7, role mutation, global administration |
+| `packages/authz-core` | 2 | 116 | The authorization kernel: hierarchy rules H1–H8, role mutation, global administration |
 | `packages/db` | 3 | 41 | Schema, constraints and the invariants the database enforces itself |
-| `apps/api` | 19 | 619 | Every HTTP surface, the real-time hub, the FiveM ingest, and the security regressions |
-| **Total** | **30** | **874** | |
+| `apps/api` | 20 | 655 | Every HTTP surface, the real-time hub, the FiveM ingest and its command channel, and the security regressions |
+| **Total** | **31** | **928** | |
 
 Plus **13 browser walkthroughs** in `apps/web/scripts`, which drive a real
 Chromium against running servers and assert on what an operator actually sees.
