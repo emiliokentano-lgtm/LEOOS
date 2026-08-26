@@ -933,24 +933,60 @@ if (offline[0]) {
       /**
        * THE ONE THAT MATTERS: another organization does not receive it.
        *
-       * Checked against the RAW payload the MD browser got, not against what
-       * its screen shows — the client-side filter is a view filter, and a shape
-       * that reached the browser at all has already leaked.
+       * Drawn by MD and checked against PD, not the other way round. This
+       * fixture's MD session deliberately HOLDS `map.track_all_orgs` — it is the
+       * cleared session the organization-isolation phase above contrasts with —
+       * so it is entitled to see a PD cordon and proves nothing. The PD sergeant
+       * holds no such capability, which is what makes their payload the honest
+       * place to look.
+       *
+       * Checked against the RAW payload text, not against what the screen shows:
+       * the client-side filter is a view filter, and a shape that reached the
+       * browser at all has already leaked.
        */
       const md2 = await session(MD_USER, 'MD-shapes');
       await openMap(md2.page);
       await md2.page.waitForTimeout(800);
-      const mdPayload = await md2.page.evaluate(async () => {
+
+      const mdLabel = `MD cordon ${Date.now().toString(36).slice(-4)}`;
+      const mdDrawn = await md2.page.evaluate(async (name) => {
+        const res = await fetch('/api/map/shapes', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            kind: 'area',
+            label: name,
+            points: [{ x: 900, y: 900 }, { x: 1100, y: 900 }, { x: 1100, y: 1100 }],
+          }),
+        });
+        return res.ok ? await res.json() : { error: res.status };
+      }, mdLabel);
+      check(
+        typeof mdDrawn?.id === 'string',
+        `the cleared MD session could not draw a cordon: ${JSON.stringify(mdDrawn)}`,
+        'the cleared MD session drew a cordon of its own',
+      );
+      await shot(md2.page, '19-shape-other-org');
+      await md2.ctx.close();
+
+      await pd.page.reload({ waitUntil: 'domcontentloaded' });
+      await pd.page.waitForSelector('canvas', { timeout: 20000 });
+      await pd.page.waitForTimeout(800);
+      const pdShapePayload = await pd.page.evaluate(async () => {
         const res = await fetch('/api/map/snapshot', { cache: 'no-store' });
         return res.ok ? res.text() : `error ${res.status}`;
       });
       check(
-        !mdPayload.includes(label) && (drawn === undefined || !mdPayload.includes(drawn.id)),
-        `a PD cordon reached an MD browser's map payload`,
-        'a PD cordon is absent from an MD browser\'s map payload, not merely hidden in it',
+        !pdShapePayload.includes(mdLabel)
+        && (typeof mdDrawn?.id !== 'string' || !pdShapePayload.includes(mdDrawn.id)),
+        'an MD cordon reached a PD browser\'s map payload',
+        'an MD cordon is absent from a PD browser\'s map payload, not merely hidden in it',
       );
-      await shot(md2.page, '19-shape-other-org');
-      await md2.ctx.close();
+      check(
+        pdShapePayload.includes(label),
+        'the PD session lost its own cordon',
+        'the PD session still receives its own cordon',
+      );
 
       // And the filter chip counts it, so the operator can turn the layer off.
       const shapeChip = chipNamed(pd.page, 'Areas & routes');

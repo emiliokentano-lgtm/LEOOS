@@ -65,8 +65,13 @@ export function MarkerDialog({
   const [type, setType] = React.useState<MapMarkerType>('hazard');
   const [label, setLabel] = React.useState('');
   const [description, setDescription] = React.useState('');
+  /**
+   * An administrator with no active organization defaults to the SHARED scope,
+   * not to whichever agency happens to sort first — they belong to none of them.
+   */
   const [scope, setScope] = React.useState<string>(
-    actingOrganizationId ?? scopeOptions[0]?.value ?? GLOBAL_SCOPE,
+    actingOrganizationId
+    ?? (canPlaceGlobal ? GLOBAL_SCOPE : scopeOptions[0]?.value ?? GLOBAL_SCOPE),
   );
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
