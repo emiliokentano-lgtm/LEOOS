@@ -854,6 +854,100 @@ if (offline[0]) {
   }
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// 6 · AREAS AND ROUTES
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Drawing a cordon, end to end, through the real tool.
+ *
+ * The two questions worth a browser rather than a unit test: does the modal
+ * drawing tool actually place points where they are clicked, and does the shape
+ * stay inside the organization that drew it once it is in a live payload.
+ */
+{
+  const areaButton = pd.page.getByRole('button', { name: 'Draw an area' });
+  if (check(
+    await areaButton.count() > 0,
+    'the map offers no way to draw an area to a caller who can manage markers',
+    'the map offers a drawing tool to a caller who can manage markers',
+  ) && await safeClick(areaButton, 'the draw-an-area control')) {
+    const canvas = pd.page.locator('canvas').first();
+    const box = await canvas.boundingBox();
+
+    // Four clicks, in the canvas's own coordinates. Deliberately a real cordon
+    // shape rather than four points in a line, so a wrongly paired geometry
+    // would produce a visibly different figure.
+    const corners = [
+      { dx: 0.35, dy: 0.35 }, { dx: 0.55, dy: 0.35 },
+      { dx: 0.55, dy: 0.55 }, { dx: 0.35, dy: 0.55 },
+    ];
+    for (const corner of corners) {
+      await pd.page.mouse.click(
+        box.x + box.width * corner.dx,
+        box.y + box.height * corner.dy,
+      );
+      await pd.page.waitForTimeout(120);
+    }
+
+    const toolbar = await pd.page.evaluate(() => document.body.innerText);
+    check(
+      /4 points/.test(toolbar),
+      `after four clicks the drawing toolbar reads: ${
+        (toolbar.match(/\d+ points?/) ?? ['nothing'])[0]}`,
+      'four clicks on the canvas placed exactly four points',
+    );
+    await shot(pd.page, '16-drawing');
+
+    const label = `Walkthrough cordon ${Date.now().toString(36).slice(-4)}`;
+    if (await safeClick(pd.page.getByRole('button', { name: 'Finish' }), 'Finish')) {
+      await pd.page.fill('#shape-label', label);
+      await shot(pd.page, '17-shape-dialog');
+      await safeClick(pd.page.getByRole('button', { name: /Save area/ }), 'Save area');
+      await pd.page.waitForTimeout(1200);
+
+      const afterDraw = await snapshotFor(pd.page);
+      const drawn = (afterDraw.shapes ?? []).find((sh) => sh.label === label);
+      check(
+        drawn !== undefined && drawn.points.length === 4 && drawn.kind === 'area',
+        `the drawn cordon did not come back as a four-point area: ${JSON.stringify(drawn)}`,
+        'the drawn cordon came back from the server as a four-point area',
+      );
+      await shot(pd.page, '18-shape-drawn');
+
+      /**
+       * THE ONE THAT MATTERS: another organization does not receive it.
+       *
+       * Checked against the RAW payload the MD browser got, not against what
+       * its screen shows — the client-side filter is a view filter, and a shape
+       * that reached the browser at all has already leaked.
+       */
+      const md2 = await session(MD_USER, 'MD-shapes');
+      await openMap(md2.page);
+      await md2.page.waitForTimeout(800);
+      const mdPayload = await md2.page.evaluate(async () => {
+        const res = await fetch('/api/map/snapshot', { cache: 'no-store' });
+        return res.ok ? res.text() : `error ${res.status}`;
+      });
+      check(
+        !mdPayload.includes(label) && (drawn === undefined || !mdPayload.includes(drawn.id)),
+        `a PD cordon reached an MD browser's map payload`,
+        'a PD cordon is absent from an MD browser\'s map payload, not merely hidden in it',
+      );
+      await shot(md2.page, '19-shape-other-org');
+      await md2.ctx.close();
+
+      // And the filter chip counts it, so the operator can turn the layer off.
+      const shapeChip = chipNamed(pd.page, 'Areas & routes');
+      check(
+        await shapeChip.count() > 0,
+        'the map offers no way to hide the areas-and-routes layer',
+        'the map offers an areas-and-routes filter chip',
+      );
+    }
+  }
+}
+
 game.tell('stop');
 await game.done;
 await pd.ctx.close();
