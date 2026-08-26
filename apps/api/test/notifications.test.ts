@@ -826,3 +826,66 @@ describe('no notification response carries a credential', () => {
     expect(serialised).not.toContain('CONFIDENTIAL-DESCRIPTION');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe('a fan-out larger than one statement can carry', () => {
+  /**
+   * ONE INSERT HAS A PARAMETER CEILING, AND PANIC IS THE LARGEST FAN-OUT.
+   *
+   * Postgres accepts at most 65 535 bind parameters per statement. The
+   * notification insert binds twelve per row, so a single statement tops out
+   * around 5 400 recipients — and past that the driver fails the whole
+   * statement rather than delivering fewer. The notification that matters most
+   * is therefore the first one to stop working.
+   *
+   * This writes recipients directly rather than through the service, because
+   * what is under test is the WRITE, not the audience rule — which has its own
+   * tests above. Six thousand rows is deliberately just over the ceiling.
+   */
+  it('writes every recipient past the single-statement limit', async () => {
+    const { createNotifications } = await import(
+      '../src/modules/notifications/notification.service.js'
+    );
+
+    const chief = await operator('fanout', 'PD', 'chief');
+
+    /**
+     * Six thousand real accounts, written in one statement.
+     *
+     * Real ones because `notification.user_id` is a foreign key — the first
+     * draft of this test used random UUIDs and failed on that rather than on
+     * the thing it was meant to measure. They are inert rows: no memberships,
+     * no sessions, nothing that could sign in.
+     */
+    const distinct = await h.db.execute<{ id: string }>(sql`
+      INSERT INTO user_account (email, username, password_hash, display_name, status)
+      SELECT 'fanout' || n || '@example.invalid', 'fanout' || n, 'x', 'Fan Out ' || n, 'disabled'
+        FROM generate_series(1, 6000) AS n
+      RETURNING id
+    `);
+    expect(distinct).toHaveLength(6_000);
+
+    const delivered = await createNotifications(
+      h.db,
+      distinct.map((row) => ({ userId: row.id, memberId: chief.memberId })),
+      {
+        type: 'panic.triggered',
+        organizationId: chief.organizationId,
+        title: 'Officer needs assistance',
+        body: null,
+        href: '/dispatch',
+        entityType: 'panic_event',
+        entityId: null,
+      },
+    );
+
+    // Every one, not "as many as fitted".
+    expect(delivered).toHaveLength(6_000);
+
+    const written = await h.db.execute<{ count: string }>(sql`
+      SELECT count(*)::text AS count FROM notification
+       WHERE type = 'panic.triggered' AND organization_id = ${chief.organizationId}
+    `);
+    expect(Number(written[0]?.count ?? 0)).toBeGreaterThanOrEqual(6_000);
+  }, 60_000);
+});

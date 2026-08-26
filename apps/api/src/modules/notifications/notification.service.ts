@@ -87,6 +87,30 @@ export function deliveryPayload(delivery: NotificationDelivery): NotificationPay
  * this inside the caller's transaction is that it must not be slow enough to
  * make anybody move it outside.
  */
+/**
+ * The largest number of notification rows one INSERT may carry.
+ *
+ * Twelve bind parameters per row against Postgres's 65 535 ceiling allows about
+ * 5 400; 2 000 leaves room for the columns this table may grow without anybody
+ * having to remember this arithmetic again.
+ */
+const NOTIFICATION_INSERT_CHUNK = 2_000;
+
+async function insertInChunks(
+  tx: Database,
+  values: (typeof notification.$inferInsert)[],
+): Promise<{ id: string; userId: string }[]> {
+  const written: { id: string; userId: string }[] = [];
+  for (let i = 0; i < values.length; i += NOTIFICATION_INSERT_CHUNK) {
+    const rows = await tx
+      .insert(notification)
+      .values(values.slice(i, i + NOTIFICATION_INSERT_CHUNK))
+      .returning({ id: notification.id, userId: notification.userId });
+    written.push(...rows);
+  }
+  return written;
+}
+
 export async function createNotifications(
   tx: Database,
   recipients: readonly Recipient[],
@@ -97,9 +121,25 @@ export async function createNotifications(
 
   const severity = draft.severity ?? notificationTypeMeta(draft.type).defaultSeverity;
 
-  const rows = await tx
-    .insert(notification)
-    .values(unique.map((recipient) => ({
+  /**
+   * WRITTEN IN CHUNKS, because one statement has a parameter ceiling.
+   *
+   * Postgres accepts at most 65 535 bind parameters per statement. This insert
+   * binds twelve per row, so a single statement tops out around 5 400
+   * recipients — and past that the driver fails the whole statement. The
+   * failure mode is what makes this worth guarding: the largest fan-out in the
+   * product is a PANIC, so the notification that matters most is the first one
+   * to stop working, and it stops by throwing rather than by delivering fewer.
+   *
+   * Found when a test database accumulated ~7 800 memberships across repeated
+   * fixture runs and every panic began returning 500 with a 53 000-placeholder
+   * insert. No real organization is that large, which is precisely why nothing
+   * would have caught it before somebody's did.
+   *
+   * The chunks share the caller's transaction, so this is still all-or-nothing:
+   * a rolled-back assignment leaves no "you were assigned" in anybody's bell.
+   */
+  const rows = await insertInChunks(tx, unique.map((recipient) => ({
       userId: recipient.userId,
       organizationId: draft.organizationId ?? null,
       channel: 'in_app' as const,
@@ -120,8 +160,7 @@ export async function createNotifications(
        * make the undispatched index fill up with rows nothing will ever pick up.
        */
       dispatchedAt: new Date(),
-    })))
-    .returning({ id: notification.id, userId: notification.userId });
+    })));
 
   return rows.map((row) => ({
     userId: row.userId,
