@@ -539,7 +539,11 @@ a prop, because they change a handful of times an hour — and the work that wou
 otherwise land in the draw loop is hoisted out of it:
 
 - **Bounding boxes and label anchors are computed once per change**, in a
-  `useMemo` keyed on the shape array. An off-screen shape then costs four
+  `useMemo` keyed on the filtered shape array — so they are recomputed when a
+  shape is drawn, edited or removed, or when the filter changes, and never per
+  frame. A position tick does not touch it: ticks go straight into the unit
+  store and never call `setState` (§9.1), so the snapshot object the memo
+  depends on is stable between them. An off-screen shape then costs four
   comparisons per frame instead of a projection per point.
 - **One path per shape**, stroked once, rather than a `beginPath`/`stroke` pair
   per segment.
