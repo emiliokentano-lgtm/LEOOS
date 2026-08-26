@@ -190,6 +190,23 @@ export const AUDIT_ACTIONS = {
   TASK_REOPENED: 'dispatch.task_reopened',
   TASK_CANCELLED: 'dispatch.task_cancelled',
 
+  /**
+   * Chat.
+   *
+   * NOT every message. An audit row per message would double the write volume
+   * of the busiest table in this context and bury the administrative events the
+   * log exists to surface, in exchange for recording something already recorded
+   * — the message itself.
+   *
+   * What IS audited: creating a conversation, changing who is in it, and
+   * DELETING a message, which is the only action here that destroys
+   * information. Those are the three a dispute turns on.
+   */
+  CONVERSATION_CREATED: 'chat.conversation_created',
+  CONVERSATION_PARTICIPANT_ADDED: 'chat.participant_added',
+  CONVERSATION_PARTICIPANT_REMOVED: 'chat.participant_removed',
+  MESSAGE_DELETED: 'chat.message_deleted',
+
   // map
   /**
    * Marker lifecycle. Separate keys rather than one `map.marker_changed`,

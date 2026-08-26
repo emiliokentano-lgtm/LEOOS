@@ -276,3 +276,17 @@ export const fieldRequestStatusEnum = pgEnum('field_request_status', [
   /** Nobody took it in time. Distinct from `declined`: silence is not refusal. */
   'expired',
 ]);
+
+/** Chat. A direct thread is between exactly two people; a group is not. */
+export const conversationKindEnum = pgEnum('conversation_kind', ['direct', 'group']);
+
+/**
+ * What a message may point at.
+ *
+ * A TYPED IDENTIFIER, never pasted text. The label a reader sees is resolved at
+ * read time through the same redaction the record read paths use, so a link
+ * grants no access its reader did not already have.
+ */
+export const messageLinkEntityEnum = pgEnum('message_link_entity', [
+  'person', 'vehicle', 'incident', 'unit', 'member',
+]);

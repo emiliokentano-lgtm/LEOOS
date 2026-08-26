@@ -37,6 +37,18 @@ export function dispatchTopics(scope: TopicScope): string[] {
 }
 
 /**
+ * The operator's own stream, and nothing else.
+ *
+ * What chat travels on. `user:<id>` is refused to everybody but its owner — no
+ * capability reaches another person's stream, including a global
+ * administrator's, because there is no operational reason and it would be pure
+ * surveillance.
+ */
+export function userTopics(userId: string | null): string[] {
+  return userId === null ? [] : [`user:${userId}`];
+}
+
+/**
  * The dashboard.
  *
  * Everything the board watches, plus personnel — the dashboard reports how many

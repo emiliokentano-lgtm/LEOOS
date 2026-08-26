@@ -21,6 +21,7 @@ import dispatchRoutes from './modules/dispatch/dispatch.routes.js';
 import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
 import notificationRoutes from './modules/notifications/notification.routes.js';
 import taskRoutes from './modules/tasks/task.routes.js';
+import chatRoutes from './modules/chat/chat.routes.js';
 import fivemRoutes from './modules/fivem/fivem.routes.js';
 import gameServerRoutes from './modules/fivem/gameserver.routes.js';
 import adminRoutes from './modules/admin/admin.routes.js';
@@ -221,6 +222,16 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
    * docs/architecture/10-dashboard.md §4b.
    */
   await app.register(taskRoutes, { prefix: '/api/v1/tasks' });
+
+  /**
+   * Chat.
+   *
+   * No permission gates ordinary conversation — talking to a colleague is not a
+   * privilege an organization grants. What is gated is everything a message can
+   * REACH: links resolve per viewer through the same redaction the record read
+   * paths apply. See docs/architecture/16-chat.md.
+   */
+  await app.register(chatRoutes, { prefix: '/api/v1/chat' });
   /**
    * Real-time is TWO surfaces, deliberately separate.
    *

@@ -183,6 +183,44 @@ transaction — so a joint call reaches both boards rather than neither.
 
 ---
 
+## 4b. The payload rule, and the one feature that tested it
+
+Event payloads carry **identifiers and the handful of fields a screen needs to
+know something moved** — never a description, a note body, a caller's phone
+number, an email or a rank. Asserted by tests that search the *whole serialised
+frame* for planted strings, not the fields anyone remembered to check.
+
+Chat is the first free text this system carries, and it is where that rule was
+either going to hold or acquire its first exception.
+
+**It holds.** `message.created` carries `{ conversationId, messageId,
+authorMemberId }` and the client fetches the message over REST. Two options were
+weighed in writing before any code — the full argument is in
+[16-chat §1](16-chat.md) — and the deciding reasons were not really about the
+rule at all:
+
+- **A body could not have been rendered from a broadcast frame anyway.** A
+  message can link a record that resolves *differently for different readers*, so
+  a ready-to-render frame would have to be built per recipient. At that point it
+  is not a broadcast, and the round trip it was meant to save has been spent on
+  the server instead.
+- **Membership can change between publish and delivery.** With an identifier the
+  worst case is a fetch that returns 404, which is the correct answer. With a
+  body, the worst case is a message delivered to somebody who has just left the
+  conversation.
+
+The leak test gained a chat case rather than a carve-out. A test with an
+exception for one feature is a test somebody adds a second exception to, and the
+rule's whole value is that it has none.
+
+**Chat is also the only event type routed to explicit per-user topics rather
+than an organization topic.** A conversation's audience is its membership, which
+is narrower than any organization topic and changes independently of one — and
+the *existence* of a conversation is itself information about who is talking to
+whom.
+
+---
+
 ## 5. Authorization
 
 Two rules, and the second is the one that is usually got wrong.

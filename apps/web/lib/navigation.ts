@@ -50,6 +50,13 @@ export const NAVIGATION: NavSection[] = [
        * route behind this link resolves its subject from the session.
        */
       { href: '/notifications', label: 'Notifications', icon: 'Bell', permission: null, shortcut: 'G N' },
+      /**
+       * No permission. Talking to a colleague is not a privilege an
+       * organization grants — gating it would produce members who can read a
+       * dispatch board and cannot ask a question about it. What is gated is
+       * everything a message can REACH: links resolve per viewer.
+       */
+      { href: '/chat', label: 'Chat', icon: 'MessageSquare', permission: null, shortcut: 'G C' },
       { href: '/map', label: 'Map', icon: 'Map', permission: 'map.view', shortcut: 'G M' },
       { href: '/dispatch', label: 'Dispatch', icon: 'Radio', permission: 'dispatch.view', shortcut: 'G L' },
     ],

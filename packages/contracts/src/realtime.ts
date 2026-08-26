@@ -50,6 +50,8 @@ export type RealtimeEventType =
   | 'panic.resolved'
   // asking for help, and saying where you are
   | 'field_request.updated'
+  // chat
+  | 'message.created'
   // people
   | 'personnel.updated'
   // the operator
@@ -233,6 +235,32 @@ export interface FieldRequestPayload {
   status: string;
 }
 
+/**
+ * A message was posted.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * THREE IDS, AND DELIBERATELY NOTHING ELSE.
+ *
+ * No body, no preview, no author name. Chat is the first free text this system
+ * carries, and it EXTENDS the payload rule rather than being exempted from it:
+ * the socket says something arrived, and the client fetches it over REST where
+ * per-viewer authorization and per-viewer link resolution already live.
+ *
+ * Two reasons beyond the rule itself. A message can link a record that resolves
+ * DIFFERENTLY for different readers, so a ready-to-render frame would have to be
+ * built per recipient — at which point it is not a broadcast. And membership can
+ * change between publish and delivery; with an id, the worst case is a fetch
+ * that returns 404, which is the correct answer.
+ *
+ * See docs/architecture/16-chat.md §1.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+export interface MessageCreatedPayload {
+  conversationId: string;
+  messageId: string;
+  authorMemberId: string | null;
+}
+
 export type RealtimeEvent =
   | RealtimeEnvelope<'unit.location.updated', UnitLocationBatchPayload>
   | RealtimeEnvelope<'unit.status.updated', UnitStatusPayload>
@@ -247,6 +275,7 @@ export type RealtimeEvent =
   | RealtimeEnvelope<'panic.triggered', PanicPayload>
   | RealtimeEnvelope<'panic.resolved', PanicResolvedPayload>
   | RealtimeEnvelope<'field_request.updated', FieldRequestPayload>
+  | RealtimeEnvelope<'message.created', MessageCreatedPayload>
   | RealtimeEnvelope<'personnel.updated', PersonnelPayload>
   | RealtimeEnvelope<'notification.created', NotificationPayload>;
 
@@ -366,6 +395,19 @@ export function topicsForEvent(event: RealtimeEvent): string[] {
      */
     case 'field_request.updated':
       return org === null ? [] : [`org:${org}:incidents`];
+
+    /**
+     * Delivered to each PARTICIPANT'S OWN topic, named explicitly by the
+     * publisher — never to an organization topic.
+     *
+     * A conversation's audience is its membership, which is narrower than any
+     * organization topic and changes independently of one. Routing chat onto
+     * `org:<id>:*` would deliver "there is a new message in conversation X" to
+     * every console in the agency, and the existence of a conversation is
+     * itself information.
+     */
+    case 'message.created':
+      return [];
 
     case 'personnel.updated':
       return org === null ? [] : [`org:${org}:personnel`];

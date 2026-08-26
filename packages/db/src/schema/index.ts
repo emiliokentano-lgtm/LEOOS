@@ -16,3 +16,4 @@ export * from './dispatch';
 export * from './integration';
 export * from './audit';
 export * from './notification';
+export * from './chat';

@@ -13,3 +13,4 @@ export * from './admin';
 export * from './notifications';
 export * from './field-requests';
 export * from './tasks';
+export * from './chat';

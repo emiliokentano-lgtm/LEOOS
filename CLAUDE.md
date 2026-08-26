@@ -298,6 +298,23 @@ cache's TTL were all built for it; until now nothing could actually write one.
 | 21, 22 | Setting or clearing one bumps `permission_version`, so it takes effect on the very next request with no wait. EXPIRY is the one case no transaction can announce — nothing runs when the clock passes `expires_at` — which is precisely what the identity cache's five-second TTL is for, and both halves are tested. | [performance §4](docs/architecture/14-performance.md) |
 | 24 | An expired override is kept, not deleted: it is a record of something that was once approved, and the audit trail refers to it. Reads filter on the expiry rather than the row's existence. | `personnel.read.ts`, `context.service.ts` |
 
+### Chat
+
+| Rules | Mechanism | Location |
+| --- | --- | --- |
+| 41 | The collision with the payload rule was RAISED AND RESOLVED IN WRITING before any code: event payloads carry no free text, asserted by a test that searches the whole serialised frame, and chat is free text. Two options were weighed; the socket now carries three ids and the client fetches over REST. The leak test gained a chat case rather than a carve-out. | [chat §1](docs/architecture/16-chat.md), [realtime §4b](docs/architecture/03-realtime.md), `apps/api/test/realtime.test.ts` |
+| 16 | A LINK RESOLVES PER VIEWER. Two people reading the same message correctly see different things, and the unresolved half is ABSENT from the response body — not hidden, absent. Proven by a test that searches the whole serialised response for the name, and by one that checks the entity id never travels either. | `apps/api/src/modules/chat/link-resolver.ts`, `apps/api/test/chat.test.ts` |
+| 3, 4 | Link resolution reuses `SearchScope`, which already answers "which categories may this caller read, and whose rows", gated on the SAME permissions that gate each screen. A second set of rules here would be a second set to drift from the first. | `link-resolver.ts` |
+| 45 | `not-permitted` and `not-found` are DIFFERENT and both are reported. Collapsing them would be tidier and would tell a reader that a record they may not see does not exist — a lie they might act on. | `MessageLinkDto` |
+| 9, 10 | No permission gates ordinary conversation: talking to a colleague is not a privilege, and gating it would produce members who can read a board and cannot ask a question about it. What is gated is everything a message can REACH. | [chat §3](docs/architecture/16-chat.md) |
+| 11, 12 | Membership is checked on EVERY read and every write, never cached — somebody removed from a group stops being able to read it on their next request, with no revocation machinery. A conversation the caller is not in answers NOT FOUND: its existence is information about who is talking to whom. | `chat.service.ts` |
+| 12 | Chat is routed to explicit per-user topics, never an organization topic, so an event cannot reach a console that is not in the conversation. Asserted by a test with a bystander socket. | `packages/contracts/src/realtime.ts` |
+| 22, 41 | A direct thread is unique by DATABASE CONSTRAINT over the ordered pair, not by a read-then-write. Two people opening a DM simultaneously would otherwise create two threads and each see half the conversation. | [migration 0013](packages/db/migrations/0013_chat.sql) |
+| 21, 22 | Keyset paging on `(conversation_id, id DESC)` — ids are uuidv7 so they sort by time, and a keyset on a unique column cannot tie. Links resolve in one batched query per entity TYPE per page, not one per link. Unread is COUNTED against `last_read_at` rather than stored, because a stored counter drifts the first time a write is lost. | `chat.read.ts` |
+| 23 | NOT every message. An audit row per message would double the write volume of the busiest table here and bury the administrative events the log exists to surface. Audited: creating a conversation, changing who is in it, and DELETING a message — the only action that destroys information. | `packages/db/src/schema/audit.ts` |
+| 24, 25 | Deletion is soft and leaves a visible tombstone. An operational conversation is a record — "who told me to go there" is asked afterwards — and a thread whose shape changes depending on who is reading is worse than one with a visible hole. | `chat.read.ts` |
+| 16 | `label_hint` is deliberately left NULL on write. Whatever the author saw is their view of the record; storing it would put a name into a row a later reader might not be entitled to. Asserted by a test. | `chat.service.ts` |
+
 ### Tasks
 
 | Rules | Mechanism | Location |

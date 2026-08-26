@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   FieldRequestPayload, IncidentAssignedPayload, IncidentClosedPayload, IncidentPayload,
-  NotificationPayload,
+  MessageCreatedPayload, NotificationPayload,
   PanicPayload, PanicResolvedPayload, PersonnelPayload, RealtimeActor, RealtimeEvent,
   RealtimeEventType, UnitMemberPayload, UnitPayload, UnitStatusPayload,
 } from '@leoos/contracts';
@@ -137,6 +137,31 @@ export class RealtimePublisher {
    */
   fieldRequestUpdated(context: PublishContext, payload: FieldRequestPayload): void {
     this.emit('field_request.updated', context, payload);
+  }
+
+  // ── Chat ───────────────────────────────────────────────────────────────
+
+  /**
+   * A message was posted.
+   *
+   * Delivered to each PARTICIPANT'S OWN topic, named explicitly — never to an
+   * organization topic. A conversation's audience is its membership, which is
+   * narrower than any organization topic and changes independently of one, and
+   * the existence of a conversation is itself information.
+   *
+   * The payload is three ids. No body, no preview, no author name: the client
+   * fetches the message over REST, where per-viewer authorization and per-viewer
+   * link resolution already live. See docs/architecture/16-chat.md §1.
+   */
+  messageCreated(
+    context: PublishContext, payload: MessageCreatedPayload, recipientUserIds: string[],
+  ): void {
+    this.emit(
+      'message.created',
+      context,
+      payload,
+      recipientUserIds.map((id) => `user:${id}`),
+    );
   }
 
   // ── People ─────────────────────────────────────────────────────────────

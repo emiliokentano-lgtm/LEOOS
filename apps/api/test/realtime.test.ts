@@ -538,6 +538,10 @@ describe('dispatch mutations publish', () => {
       `org:${person.organizationId}:units`,
       `org:${person.organizationId}:panic`,
       `org:${person.organizationId}:personnel`,
+      // The operator's OWN topic, which carries notifications and chat. Nobody
+      // else can reach it — `user:<id>` is refused to everybody but its owner,
+      // including a global administrator.
+      `user:${person.userId}`,
     ]);
     return socket;
   }
@@ -686,6 +690,67 @@ describe('dispatch mutations publish', () => {
 
     expect(typesOn(socket).filter((t) => t === 'incident.updated').length).toBeGreaterThan(0);
     expect(socket.sent.join('\n')).not.toContain('SUSPECT-WENT-OVER-THE-FENCE');
+  });
+
+  it('a CHAT MESSAGE reaches the socket without its text', async () => {
+    /**
+     * Chat EXTENDS the payload rule rather than being exempted from it.
+     *
+     * This is the same shape as the incident and note cases above, and it is
+     * here deliberately: chat is the first free text this system carries, and
+     * the moment the leak test grows a carve-out for it is the moment it stops
+     * protecting anything. The socket says "conversation X has message Y"; the
+     * client fetches the message over REST, where per-viewer authorization and
+     * per-viewer link resolution already live.
+     *
+     * See docs/architecture/16-chat.md §1 for the two options weighed.
+     */
+    const a = await member('rtchata', 'PD', 'officer');
+    const b = await member('rtchatb', 'PD', 'officer');
+    const socket = await connect(b);
+
+    const conv = await h.app.inject({
+      method: 'POST', url: '/api/v1/chat/conversations/direct', headers: a.headers,
+      payload: { memberId: b.memberId },
+    });
+    const { id } = conv.json() as { id: string };
+
+    await h.app.inject({
+      method: 'POST', url: `/api/v1/chat/conversations/${id}/messages`, headers: a.headers,
+      payload: { body: 'MEET-ME-BEHIND-THE-DEPOT' },
+    });
+    await settle();
+
+    const frames = socket.sent.join('\n');
+    expect(frames).toContain('message.created');
+    expect(frames).not.toContain('MEET-ME-BEHIND-THE-DEPOT');
+  });
+
+  it('a chat message reaches ONLY the participants', async () => {
+    /**
+     * Routed to each participant's own topic, never to an organization topic.
+     * A conversation's audience is its membership, which is narrower than any
+     * organization topic — and the existence of a conversation is itself
+     * information about who is talking to whom.
+     */
+    const a = await member('rtchatc', 'PD', 'officer');
+    const b = await member('rtchatd', 'PD', 'officer');
+    const bystander = await member('rtchate', 'PD', 'officer');
+    const outsideSocket = await connect(bystander);
+
+    const conv = await h.app.inject({
+      method: 'POST', url: '/api/v1/chat/conversations/direct', headers: a.headers,
+      payload: { memberId: b.memberId },
+    });
+    const { id } = conv.json() as { id: string };
+
+    await h.app.inject({
+      method: 'POST', url: `/api/v1/chat/conversations/${id}/messages`, headers: a.headers,
+      payload: { body: 'not for you' },
+    });
+    await settle();
+
+    expect(typesOn(outsideSocket)).not.toContain('message.created');
   });
 
   it('a subscriber who loses dispatch.view stops receiving on the next event', async () => {

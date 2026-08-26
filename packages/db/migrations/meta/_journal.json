@@ -92,6 +92,13 @@
       "when": 1788100000000,
       "tag": "0012_tasks",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788200000000,
+      "tag": "0013_chat",
+      "breakpoints": true
     }
   ]
 }
