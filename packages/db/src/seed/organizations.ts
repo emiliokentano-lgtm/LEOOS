@@ -41,6 +41,13 @@ interface OrganizationSeed {
 const BASE_OPERATIONAL: PermissionKey[] = [
   'map.view', 'map.track_units',
   'dispatch.view', 'dispatch.create', 'dispatch.panic',
+  /**
+   * Asking for help and saying where you are are seeded to EVERYONE who works
+   * a shift, for the same reason panic is: the moment somebody needs to shout
+   * for backup is not the moment to discover a permission was never granted.
+   * They are self-actions and commit nobody else.
+   */
+  'dispatch.request_backup', 'dispatch.share_location',
   'persons.view', 'vehicles.view',
   'personnel.view', 'roles.view', 'organization.view',
 ];
@@ -89,6 +96,7 @@ const MEDICAL_SENIOR: PermissionKey[] = [
 
 const MECHANIC_BASE: PermissionKey[] = [
   'map.view', 'dispatch.view', 'dispatch.create', 'dispatch.panic',
+  'dispatch.request_backup', 'dispatch.share_location',
   'vehicles.view', 'vehicles.create', 'vehicles.edit',
   'personnel.view', 'roles.view', 'organization.view',
 ];

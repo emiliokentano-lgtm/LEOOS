@@ -78,6 +78,13 @@
       "when": 1787900000000,
       "tag": "0010_performance",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1788000000000,
+      "tag": "0011_field_requests",
+      "breakpoints": true
     }
   ]
 }

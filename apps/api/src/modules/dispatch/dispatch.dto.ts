@@ -250,6 +250,8 @@ export function toCapabilitiesDto(scope: DispatchScope): DispatchCapabilities {
     canManageUnits: scope.canManageUnits,
     canTriggerPanic: scope.canTriggerPanic,
     canAcknowledgePanic: scope.canAcknowledgePanic,
+    canRequestBackup: scope.canRequestBackup,
+    canShareLocation: scope.canShareLocation,
   };
 }
 

@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { MAP, type RealtimeActor } from '@leoos/contracts';
+import { FIELD_REQUEST_KIND_KEYS, MAP, type RealtimeActor } from '@leoos/contracts';
 import { NotFoundError } from '../../lib/errors.js';
 import type { RequestMeta } from '../auth/auth.service.js';
 import { resolveDispatchScope, type DispatchScope } from './dispatch.scope.js';
@@ -15,6 +15,10 @@ import {
   createUnit, disbandUnit, joinUnit, leaveUnit, setOwnStatus, setUnitStatus,
 } from './unit.service.js';
 import { acknowledgePanic, resolvePanic, triggerPanic } from './panic.service.js';
+import {
+  attachAcceptorToIncident, cancelFieldRequest, raiseFieldRequest, respondToFieldRequest,
+} from './field-request.service.js';
+import { getFieldRequestRevision, listLiveFieldRequests } from './field-request.read.js';
 import { publishDispatchEvents, type DispatchEmission } from './dispatch.events.js';
 
 /**
@@ -115,6 +119,32 @@ const unitStatusSchema = z.object({ statusKey: z.string().trim().min(1).max(60) 
 const panicSchema = z.object({ x: worldX.nullish(), y: worldY.nullish() }).strict();
 const resolvePanicSchema = z.object({
   restoreStatusKey: z.string().trim().max(60).nullish(),
+}).strict();
+
+/**
+ * Raising a field request.
+ *
+ * `.strict()`, so a client cannot smuggle a recipient list, an organization or
+ * a member id past the audience derivation. Everything except the kind, an
+ * optional note and an optional position is read from the asker's membership.
+ */
+const fieldRequestSchema = z.object({
+  kind: z.enum(FIELD_REQUEST_KIND_KEYS),
+  /**
+   * Bounded, and short on purpose.
+   *
+   * This is the one free-text field a field request carries, and it reaches
+   * every on-duty colleague — so it is not private, and the screen where it is
+   * typed says so. Short enough that it cannot become a place to paste somebody
+   * else's record.
+   */
+  note: z.string().trim().max(200).nullish(),
+  x: worldX.nullish(),
+  y: worldY.nullish(),
+}).strict();
+
+const respondSchema = z.object({
+  action: z.enum(['accept', 'decline']),
 }).strict();
 
 const deltaSchema = z.object({
@@ -401,6 +431,76 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
     );
     publish(request, events);
     return reply.status(201).send(result);
+  });
+
+  // ── Field requests ───────────────────────────────────────────────────────
+  //
+  // Asking for backup, and saying where you are. See
+  // docs/architecture/09-dispatch.md §6b for why these are not incidents.
+
+  app.get('/field-requests', async (request, reply) => {
+    const scope = requireDispatch(request);
+    const [requests, revision] = await Promise.all([
+      listLiveFieldRequests(app.db, scope),
+      getFieldRequestRevision(app.db, scope),
+    ]);
+    return reply.send({ requests, revision });
+  });
+
+  app.post('/field-requests', async (request, reply) => {
+    const scope = requireDispatch(request);
+    const body = fieldRequestSchema.parse(request.body ?? {});
+
+    const { result, events } = await raiseFieldRequest(app.db, scope, {
+      kind: body.kind,
+      note: body.note ?? null,
+      x: body.x ?? null,
+      y: body.y ?? null,
+      source: 'web',
+    }, meta(request));
+
+    publish(request, events);
+    // 200 rather than 201 for a repeat: nothing was created, and telling the
+    // client otherwise would have it render a second card for one request.
+    return reply.status(result.alreadyLive ? 200 : 201).send(result);
+  });
+
+  app.post('/field-requests/:requestId/respond', async (request, reply) => {
+    const scope = requireDispatch(request);
+    const { requestId } = request.params as { requestId: string };
+    const body = respondSchema.parse(request.body ?? {});
+
+    const { result, events } = await respondToFieldRequest(
+      app.db, scope, requestId, body.action, meta(request),
+    );
+    publish(request, events);
+
+    /**
+     * The attachment is a SECOND, ordinary assignment.
+     *
+     * Made through `assignUnit` in its own transaction, so it carries the same
+     * authorization, the same audit row and the same timeline entry a
+     * dispatcher's assignment would. A refusal there does not undo the
+     * acceptance — see the service.
+     */
+    if (body.action === 'accept') {
+      const attached = await attachAcceptorToIncident(
+        app.db, scope, result.attachedToIncidentId, meta(request),
+      );
+      if (attached !== null) publish(request, attached.events);
+    }
+
+    return reply.send(result);
+  });
+
+  app.post('/field-requests/:requestId/cancel', async (request, reply) => {
+    const scope = requireDispatch(request);
+    const { requestId } = request.params as { requestId: string };
+    const { result, events } = await cancelFieldRequest(
+      app.db, scope, requestId, meta(request),
+    );
+    publish(request, events);
+    return reply.send(result);
   });
 
   // ── Panic handling ───────────────────────────────────────────────────────

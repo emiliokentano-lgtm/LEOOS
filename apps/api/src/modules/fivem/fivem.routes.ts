@@ -12,6 +12,9 @@ import { RateLimitedError, ValidationError } from '../../lib/errors.js';
 import { resolveIdentity, toActorContext } from '../auth/context.service.js';
 import { resolveDispatchScope } from '../dispatch/dispatch.scope.js';
 import { triggerPanic } from '../dispatch/panic.service.js';
+import {
+  attachAcceptorToIncident, raiseFieldRequest, respondToFieldRequest,
+} from '../dispatch/field-request.service.js';
 import { setOwnStatus } from '../dispatch/unit.service.js';
 import { publishDispatchEvents } from '../dispatch/dispatch.events.js';
 import {
@@ -340,6 +343,38 @@ export default async function fivemRoutes(app: FastifyInstance): Promise<void> {
           handled += 1;
           break;
 
+        /**
+         * Field requests from a keypress.
+         *
+         * Each goes through the SAME service a browser reaches, with a scope
+         * built from the player's real permissions. The game server reports
+         * that a key was pressed; it does not decide that backup was requested,
+         * and it cannot accept on behalf of somebody who may not.
+         */
+        case 'player.backup_requested':
+        case 'player.location_shared':
+          await handleFieldRequest(
+            app,
+            identity.userId,
+            event.kind === 'player.backup_requested' ? 'backup' : 'location_share',
+            event,
+            request,
+          );
+          handled += 1;
+          break;
+
+        case 'player.request_accepted':
+        case 'player.request_declined':
+          await handleFieldResponse(
+            app,
+            identity.userId,
+            event.kind === 'player.request_accepted' ? 'accept' : 'decline',
+            event,
+            request,
+          );
+          handled += 1;
+          break;
+
         case 'player.dropped': {
           /**
            * Remove the position now rather than waiting for the TTL.
@@ -624,6 +659,196 @@ async function handleStatusRequest(
   } catch (error) {
     request.log.warn({ err: error, userId }, 'in-game status change refused');
   }
+}
+
+/**
+ * A backup request or a location share, raised from the game.
+ *
+ * Advisory in, authorized decision out — the same shape as panic and status.
+ * The position comes from the game because the game knows it; everything else
+ * is resolved from the database.
+ */
+async function handleFieldRequest(
+  app: FastifyInstance,
+  userId: string,
+  kind: 'backup' | 'location_share',
+  event: { x?: number | null; y?: number | null },
+  request: FastifyRequest,
+): Promise<void> {
+  const scope = await scopeFor(app.db, userId);
+  if (scope === null) return;
+
+  try {
+    const outcome = await raiseFieldRequest(app.db, scope, {
+      kind,
+      note: null,
+      x: event.x ?? null,
+      y: event.y ?? null,
+      source: 'fivem',
+    }, { ip: request.ip, userAgent: 'leoos_bridge', requestId: request.requestId });
+
+    publishDispatchEvents(
+      app.events,
+      { kind: 'game_server', userId, label: null },
+      outcome.events,
+    );
+
+    /**
+     * The PROMPT goes back through the command channel.
+     *
+     * Queued for every on-duty colleague of the asker who has a linked FiveM
+     * identity and is currently connected to this game server. Whether they see
+     * it in game is a matter of whether they are playing; the notification in
+     * the web UI reached them either way, which is why this is allowed to be
+     * best-effort.
+     */
+    await queueFieldRequestPrompts(app, outcome.result.id, userId, request);
+  } catch (error) {
+    request.log.warn({ err: error, userId, kind }, 'in-game field request refused');
+  }
+}
+
+/**
+ * Accepting or declining somebody else's request, from a keypress.
+ *
+ * The id came from a prompt this API sent, so the game knows it — but it is
+ * still validated, looked up, and checked against the RESPONDER's live
+ * membership. A game server cannot accept on behalf of somebody in another
+ * organization, because the check does not consult anything the game sent.
+ */
+async function handleFieldResponse(
+  app: FastifyInstance,
+  userId: string,
+  action: 'accept' | 'decline',
+  event: { fieldRequestId?: string | null },
+  request: FastifyRequest,
+): Promise<void> {
+  if (!event.fieldRequestId) return;
+  const scope = await scopeFor(app.db, userId);
+  if (scope === null) return;
+
+  const meta = { ip: request.ip, userAgent: 'leoos_bridge', requestId: request.requestId };
+
+  try {
+    const outcome = await respondToFieldRequest(
+      app.db, scope, event.fieldRequestId, action, meta,
+    );
+    publishDispatchEvents(
+      app.events,
+      { kind: 'game_server', userId, label: null },
+      outcome.events,
+    );
+
+    if (action === 'accept') {
+      const attached = await attachAcceptorToIncident(
+        app.db, scope, outcome.result.attachedToIncidentId, meta,
+      );
+      if (attached !== null) {
+        publishDispatchEvents(
+          app.events,
+          { kind: 'game_server', userId, label: null },
+          attached.events,
+        );
+      }
+
+      /**
+       * The waypoint, which is the point of accepting in game.
+       *
+       * Sent only when the request carried a position. A waypoint at 0,0 is
+       * worse than none — it sends somebody to the sea off Los Santos with
+       * every appearance of being correct.
+       */
+      if (outcome.result.x !== null && outcome.result.y !== null) {
+        const identifier = await identifierForUser(app.db, userId);
+        if (identifier !== null) {
+          app.fivemCommands.push(await gameServerForUser(app.db, userId) ?? '', {
+            type: 'setWaypoint',
+            target: identifier,
+            payload: { x: outcome.result.x, y: outcome.result.y, label: 'LEOOS backup' },
+          });
+        }
+      }
+    }
+  } catch (error) {
+    request.log.warn({ err: error, userId, action }, 'in-game field response refused');
+  }
+}
+
+/**
+ * Queues an in-game prompt for everybody who should be offered a request.
+ *
+ * BEST-EFFORT BY DESIGN. The authoritative delivery is the notification row
+ * written in the service's transaction; this is the convenience that puts it on
+ * a screen somebody is actually looking at. A player not connected, or with no
+ * linked identity, simply gets nothing here and still has it in the web UI.
+ */
+async function queueFieldRequestPrompts(
+  app: FastifyInstance,
+  fieldRequestId: string,
+  askerUserId: string,
+  request: FastifyRequest,
+): Promise<void> {
+  try {
+    const rows = await app.db.execute<{ identifier: string; game_server_id: string }>(sql`
+      SELECT gi.provider || ':' || gi.identifier AS identifier, gs.game_server_id
+        FROM field_request fr
+        JOIN organization_member asker ON asker.id = fr.member_id
+        JOIN organization_member m
+          ON m.organization_id = fr.organization_id AND m.status = 'active'
+        JOIN member_status ms ON ms.member_id = m.id
+        JOIN operational_status os ON os.key = ms.status_key AND os.is_on_duty
+        JOIN game_identity gi ON gi.user_id = m.user_id AND gi.verified_at IS NOT NULL
+        JOIN LATERAL (
+          SELECT gss.game_server_id
+            FROM game_server_state gss
+           WHERE gss.last_heartbeat_at > now() - interval '60 seconds'
+           ORDER BY gss.last_heartbeat_at DESC
+           LIMIT 1
+        ) gs ON TRUE
+       WHERE fr.id = ${fieldRequestId}
+         AND m.user_id <> ${askerUserId}
+       LIMIT 100
+    `);
+
+    for (const row of rows) {
+      app.fivemCommands.push(row.game_server_id, {
+        type: 'notify',
+        target: row.identifier,
+        payload: {
+          title: 'Backup requested',
+          body: 'Press your accept key to respond, or your dismiss key to pass.',
+          tone: 'warning',
+          fieldRequestId,
+        },
+      });
+    }
+  } catch (error) {
+    // A failure here loses an in-game popup and nothing else. The notification
+    // row is already committed and the web UI has it.
+    request.log.warn({ err: error, fieldRequestId }, 'could not queue in-game prompts');
+  }
+}
+
+/** The player's primary verified FiveM identifier, or null. */
+async function identifierForUser(db: Database, userId: string): Promise<string | null> {
+  const rows = await db.execute<{ identifier: string }>(sql`
+    SELECT provider || ':' || identifier AS identifier
+      FROM game_identity
+     WHERE user_id = ${userId} AND verified_at IS NOT NULL
+     ORDER BY provider = 'license' DESC
+     LIMIT 1
+  `);
+  return rows[0]?.identifier ?? null;
+}
+
+/** The game server most recently seen alive. Best-effort, like the prompt. */
+async function gameServerForUser(db: Database, _userId: string): Promise<string | null> {
+  const rows = await db.execute<{ game_server_id: string }>(sql`
+    SELECT game_server_id FROM game_server_state
+     WHERE last_heartbeat_at > now() - interval '60 seconds'
+     ORDER BY last_heartbeat_at DESC LIMIT 1
+  `);
+  return rows[0]?.game_server_id ?? null;
 }
 
 /**

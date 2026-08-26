@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import type { IncidentPriority, IncidentStatusKey } from '@leoos/contracts';
+import type { FieldRequestKind, IncidentPriority, IncidentStatusKey } from '@leoos/contracts';
 import { apiFetch } from './api-client';
 
 /**
@@ -181,4 +181,40 @@ export async function createUnit(input: {
 
 export async function disbandUnit(unitId: string): Promise<ActionResult> {
   return call(`/api/v1/dispatch/units/${unitId}`, { method: 'DELETE' });
+}
+
+// ── Field requests ─────────────────────────────────────────────────────────
+//
+// Asking for backup, and telling colleagues where you are. Both are
+// self-actions: they commit the caller and nobody else.
+
+export async function raiseFieldRequest(input: {
+  kind: FieldRequestKind;
+  note?: string | null;
+}): Promise<ActionResult> {
+  return call('/api/v1/dispatch/field-requests', {
+    body: {
+      kind: input.kind,
+      note: input.note ?? null,
+      /**
+       * NO POSITION FROM THE BROWSER.
+       *
+       * A desk has no idea where the character is standing, and a coordinate a
+       * browser invented would be worse than none — somebody would drive to it.
+       * The server falls back to the unit's last known position, which is a
+       * fact the game reported.
+       */
+    },
+  });
+}
+
+export async function respondToFieldRequest(
+  requestId: string,
+  action: 'accept' | 'decline',
+): Promise<ActionResult> {
+  return call(`/api/v1/dispatch/field-requests/${requestId}/respond`, { body: { action } });
+}
+
+export async function cancelFieldRequest(requestId: string): Promise<ActionResult> {
+  return call(`/api/v1/dispatch/field-requests/${requestId}/cancel`, { body: {} });
 }

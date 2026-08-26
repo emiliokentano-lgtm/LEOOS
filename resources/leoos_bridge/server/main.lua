@@ -395,6 +395,97 @@ if Config.features.panic then
   end)
 end
 
+--[[===========================================================================
+  Field requests: asking for backup, and sharing where you are.
+
+  Same shape as panic, and for the same reasons: the event carries nothing the
+  client chose, the position comes from a server native, and LEOOS decides
+  whether anything happens.
+===========================================================================]]
+if Config.features.fieldRequests then
+  local function raiseFieldRequest(src, kind, requiresAlive)
+    local identifiers = Adapter.getIdentity(src)
+    if identifiers == nil or next(identifiers) == nil then return end
+
+    if requiresAlive and playerIsDown(src) then
+      TriggerClientEvent('leoos:notify', src, {
+        title = 'Not sent',
+        body = 'You are down. Try sharing your location instead.',
+        tone = 'danger',
+      })
+      return
+    end
+
+    local ped = GetPlayerPed(src)
+    local coords = ped ~= 0 and GetEntityCoords(ped) or nil
+
+    Transport.queueEvent({
+      kind = kind,
+      at = math.floor(os.time() * 1000),
+      identifiers = identifiers,
+      src = tonumber(src),
+      x = coords and math.floor(coords.x * 10 + 0.5) / 10 or nil,
+      y = coords and math.floor(coords.y * 10 + 0.5) / 10 or nil,
+      down = requiresAlive and false or nil,
+    })
+    Transport.flushEvents(GetGameTimer())
+  end
+
+  RegisterNetEvent('leoos:keybind:backup', function()
+    local src = source
+    if src == nil or src == 0 then return end
+    raiseFieldRequest(src, 'player.backup_requested', true)
+    TriggerClientEvent('leoos:notify', src, {
+      title = 'Backup',
+      body = 'Request sent. Dispatch decides who responds.',
+      tone = 'warning',
+    })
+  end)
+
+  RegisterNetEvent('leoos:keybind:share_location', function()
+    local src = source
+    if src == nil or src == 0 then return end
+    -- NOT gated on being alive: sharing where you are while down is exactly
+    -- when it matters most, because it is how somebody finds you.
+    raiseFieldRequest(src, 'player.location_shared', false)
+    TriggerClientEvent('leoos:notify', src, {
+      title = 'Location',
+      body = 'Shared with your organization.',
+      tone = 'info',
+    })
+  end)
+
+  --[[
+    Answering a prompt.
+
+    The id came from the API, travelled to the client in a prompt, and comes
+    back here. It is NOT trusted: LEOOS looks it up and checks it against the
+    responder's own live membership, so a client that invents one, or replays
+    somebody else's, is refused by the same check a browser would hit.
+
+    Bounded before it is queued, because an unbounded string from a client is an
+    allocation somebody else chooses the size of.
+  ]]
+  RegisterNetEvent('leoos:keybind:respond', function(fieldRequestId, action)
+    local src = source
+    if src == nil or src == 0 then return end
+    if type(fieldRequestId) ~= 'string' or #fieldRequestId ~= 36 then return end
+    if action ~= 'accept' and action ~= 'decline' then return end
+
+    local identifiers = Adapter.getIdentity(src)
+    if identifiers == nil or next(identifiers) == nil then return end
+
+    Transport.queueEvent({
+      kind = action == 'accept' and 'player.request_accepted' or 'player.request_declined',
+      at = math.floor(os.time() * 1000),
+      identifiers = identifiers,
+      src = tonumber(src),
+      fieldRequestId = fieldRequestId,
+    })
+    Transport.flushEvents(GetGameTimer())
+  end)
+end
+
 if Config.features.statusCommands then
   RegisterCommand('leoos-status', function(src, args)
     if src == 0 or args[1] == nil then return end

@@ -43,6 +43,33 @@ local BINDINGS = {
     feature = 'panic',
     requiresAlive = true,
   },
+  {
+    command = 'leoos_backup',
+    label = 'LEOOS: Request backup',
+    defaultKey = (Config.keys and Config.keys.backup) or 'F8',
+    event = 'leoos:keybind:backup',
+    feature = 'fieldRequests',
+    --[[
+      Also refused while down, and for the same reason as panic: a request for
+      backup from somebody who is unconscious is a request nobody can act on
+      usefully, and the player needs to be told rather than left waiting.
+    ]]
+    requiresAlive = true,
+  },
+  {
+    command = 'leoos_share_location',
+    label = 'LEOOS: Share my location',
+    defaultKey = (Config.keys and Config.keys.shareLocation) or 'F9',
+    event = 'leoos:keybind:share_location',
+    feature = 'fieldRequests',
+    --[[
+      NOT gated on being alive.
+      
+      Sharing where you are while down is exactly when it is most useful — it is
+      how somebody finds your body. The asymmetry with backup is deliberate.
+    ]]
+    requiresAlive = false,
+  },
 }
 
 Keybinds = {}

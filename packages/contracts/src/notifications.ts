@@ -59,6 +59,9 @@ export type NotificationType =
   | 'incident.assigned'
   | 'incident.updated'
   | 'incident.closed'
+  | 'field_request.backup'
+  | 'field_request.location'
+  | 'field_request.accepted'
   | 'unit.assigned'
   | 'unit.released'
   | 'organization.announcement'
@@ -124,6 +127,52 @@ export const NOTIFICATION_TYPES: Record<NotificationType, NotificationTypeMeta> 
     icon: 'PenLine',
     defaultSeverity: 'info',
     audible: false,
+    category: 'incidents',
+  },
+  /**
+   * Somebody in your organization is asking for help.
+   *
+   * AUDIBLE and `warning`, deliberately between a call update and a panic. It
+   * is not a panic — nobody has pressed the button that means "I am in danger
+   * right now" — but it is a colleague who cannot handle something alone, and an
+   * alert nobody hears is an alert that did not happen.
+   */
+  'field_request.backup': {
+    key: 'field_request.backup',
+    label: 'Backup requested',
+    icon: 'Siren',
+    defaultSeverity: 'warning',
+    audible: true,
+    category: 'incidents',
+  },
+  /**
+   * Somebody shared where they are.
+   *
+   * INFO and SILENT. This is passive information — nobody is waiting on it, and
+   * a tone every time a colleague drops a pin would train operators to ignore
+   * the tones that matter.
+   */
+  'field_request.location': {
+    key: 'field_request.location',
+    label: 'Location shared',
+    icon: 'MapPin',
+    defaultSeverity: 'info',
+    audible: false,
+    category: 'incidents',
+  },
+  /**
+   * Somebody accepted your request.
+   *
+   * Goes to the ASKER alone, which is the one notification in this system with
+   * an audience of exactly one — and even that is derived, not supplied: it is
+   * the `member_id` on the row.
+   */
+  'field_request.accepted': {
+    key: 'field_request.accepted',
+    label: 'Help is coming',
+    icon: 'UserCheck',
+    defaultSeverity: 'warning',
+    audible: true,
     category: 'incidents',
   },
   'incident.closed': {

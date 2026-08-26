@@ -100,6 +100,15 @@ Config.features = {
   --- The /leoos-status command, which REQUESTS a duty status change.
   statusCommands = GetConvar('leoos_feature_status', 'true') == 'true',
 
+  --[[
+    Backup requests and location sharing, and the prompts that answer them.
+
+    Off removes the keybinds entirely rather than leaving bound keys that do
+    nothing — a player who presses an unresponsive backup key believes help is
+    coming.
+  ]]
+  fieldRequests = GetConvar('leoos_feature_field_requests', 'true') == 'true',
+
   --- The /leoos-link command that binds a FiveM identity to a LEOOS account.
   identityClaim = GetConvar('leoos_feature_claim', 'true') == 'true',
 
@@ -130,6 +139,23 @@ Config.features = {
 Config.keys = {
   --- Raise a panic alert. Refused while the player is down.
   panic = GetConvar('leoos_key_panic', 'F7'),
+
+  --- Ask nearby colleagues for backup.
+  backup = GetConvar('leoos_key_backup', 'F8'),
+
+  --- Broadcast your position to your organization.
+  shareLocation = GetConvar('leoos_key_share', 'F9'),
+
+  --[[
+    Answering a prompt.
+
+    E and G because they are the keys a FiveM player already has muscle memory
+    for accepting and refusing. They do NOTHING when no prompt is on screen —
+    binding a common interaction key to a no-op would otherwise make it feel
+    broken everywhere else.
+  ]]
+  accept = GetConvar('leoos_key_accept', 'E'),
+  dismiss = GetConvar('leoos_key_dismiss', 'G'),
 }
 
 --[[

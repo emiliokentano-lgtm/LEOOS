@@ -6,6 +6,7 @@ import {
   BACKSTOP_POLL_MS, DISPATCH_POLL_MS, EMPTY_DISPATCH_FILTER, INCIDENT_STATUSES, PRIORITY_LIST,
   compareIncidentsForQueue, countActiveDispatchFilters, matchesDispatchIncident,
   type DispatchBoard, type DispatchFilterState, type DispatchIncidentSummary,
+  type FieldRequestDto,
 } from '@leoos/contracts';
 import {
   Alert, Badge, Button, EmptyState, FilterBar, FilterChip, Panel, PanelHeader,
@@ -19,6 +20,7 @@ import { useNow } from '@/lib/map/use-now';
 import { cn, formatElapsed } from '@/lib/utils';
 import { StatusControl } from './status-control';
 import { PanicBanner } from './panic-banner';
+import { FieldRequestStrip } from './field-request-strip';
 import { IncidentDetailPanel } from './incident-detail';
 import { UnitBoard } from './unit-board';
 import { NewIncidentDialog } from './new-incident-dialog';
@@ -75,6 +77,41 @@ export function DispatchView({
 
   const refresh = React.useCallback(() => sourceRef.current?.refresh(), []);
 
+  /**
+   * Field requests are fetched SEPARATELY from the board.
+   *
+   * They are a handful of rows that appear and vanish on a three-minute clock;
+   * the board is a large payload. Folding them together would mean refetching
+   * every incident and unit because somebody dropped a pin. They share the
+   * board's revision, so the two cannot disagree about whether anything moved.
+   */
+  const [fieldRequests, setFieldRequests] = React.useState<FieldRequestDto[]>([]);
+
+  const refreshFieldRequests = React.useCallback(() => {
+    void fetch('/api/dispatch/field-requests')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { requests?: FieldRequestDto[] } | null) => {
+        setFieldRequests(data?.requests ?? []);
+      })
+      .catch(() => {
+        // A failed poll leaves the last known set on screen rather than
+        // clearing it. An empty strip means "nothing live", and showing that
+        // because a request timed out would be a lie in the safe-looking
+        // direction.
+      });
+  }, []);
+
+  React.useEffect(() => {
+    refreshFieldRequests();
+    const id = setInterval(refreshFieldRequests, 10_000);
+    return () => clearInterval(id);
+  }, [refreshFieldRequests]);
+
+  const refreshAll = React.useCallback(() => {
+    refresh();
+    refreshFieldRequests();
+  }, [refresh, refreshFieldRequests]);
+
   // ── Live updates ────────────────────────────────────────────────────────
   //
   // An event says the board moved; the authorized read says what it moved to.
@@ -85,7 +122,7 @@ export function DispatchView({
     () => dispatchTopics({ userId: auth.userId, organizationId: auth.activeOrganizationId }),
     [auth.userId, auth.activeOrganizationId],
   );
-  useRealtimeRefresh(topics, refresh, { interestingTypes: BOARD_EVENTS });
+  useRealtimeRefresh(topics, refreshAll, { interestingTypes: BOARD_EVENTS });
 
   // While the socket carries the board, the poll becomes a slow backstop rather
   // than the mechanism — see dispatch-source.ts for why it is not switched off.
@@ -207,6 +244,10 @@ export function DispatchView({
           onChanged={refresh}
         />
       ) : null}
+
+      {/* Below panic, above the filters — a filter must never hide somebody
+          asking for help. */}
+      <FieldRequestStrip requests={fieldRequests} onChanged={refreshAll} />
 
       {connection === 'reconnecting' || connection === 'failed' ? (
         <div className="px-3 pt-3">
@@ -348,7 +389,8 @@ export function DispatchView({
               self={self}
               statuses={board.statuses}
               units={units}
-              onChanged={refresh}
+              capabilities={capabilities}
+              onChanged={refreshAll}
             />
           ) : null}
           <UnitBoard

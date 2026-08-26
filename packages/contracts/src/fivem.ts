@@ -243,6 +243,10 @@ export interface FiveMTelemetryRequest {
 export type FiveMEventKind =
   | 'player.connected'
   | 'player.dropped'
+  | 'player.backup_requested'
+  | 'player.location_shared'
+  | 'player.request_accepted'
+  | 'player.request_declined'
   | 'player.panic'
   | 'player.status_requested';
 
@@ -265,6 +269,8 @@ export interface FiveMEvent {
   x?: number | null;
   y?: number | null;
   reason?: string | null;
+  /** The field request being answered, for the accept/decline kinds. */
+  fieldRequestId?: string | null;
   /**
    * Liveness as the game server saw it AT THE MOMENT OF THE PRESS.
    *

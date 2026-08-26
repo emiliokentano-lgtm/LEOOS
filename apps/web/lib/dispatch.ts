@@ -1,5 +1,7 @@
 import 'server-only';
-import type { DispatchBoard, DispatchDelta, DispatchIncidentDetail } from '@leoos/contracts';
+import type { DispatchBoard, DispatchDelta, DispatchIncidentDetail,
+  FieldRequestListDto,
+} from '@leoos/contracts';
 import { apiFetch } from './api-client';
 
 /**
@@ -50,4 +52,21 @@ export async function fetchIncidentDetail(
 export async function fetchOwnUnitId(): Promise<string | null> {
   const res = await apiFetch<{ self: { unitId: string | null } }>('/api/v1/dispatch/self');
   return res.ok && res.data ? res.data.self.unitId : null;
+}
+
+/**
+ * Live field requests for the organizations the caller may see.
+ *
+ * A SEPARATE REQUEST from the board, on purpose. The board is a large payload
+ * that changes when anything changes; field requests are a handful of rows that
+ * appear and vanish on their own clock. Folding them into the board would mean
+ * refetching every incident and unit because somebody dropped a pin.
+ *
+ * They still share the board's REVISION, so the two cannot disagree about
+ * whether anything changed.
+ */
+export async function fetchFieldRequests(): Promise<FieldRequestListDto | null> {
+  const res = await apiFetch<FieldRequestListDto>('/api/v1/dispatch/field-requests');
+  if (!res.ok || !res.data) return null;
+  return res.data;
 }

@@ -39,6 +39,7 @@ server_scripts {
 }
 
 client_scripts {
+  'client/prompt.lua',
   'client/display.lua',
   'client/keybinds.lua',
 }

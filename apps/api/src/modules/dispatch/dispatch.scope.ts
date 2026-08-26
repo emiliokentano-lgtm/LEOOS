@@ -28,6 +28,10 @@ export interface DispatchScope {
   canManageUnits: boolean;
   canTriggerPanic: boolean;
   canAcknowledgePanic: boolean;
+  /** Asking for help. A self-action: it commits the asker and nobody else. */
+  canRequestBackup: boolean;
+  /** Broadcasting your own position to your organization. Also a self-action. */
+  canShareLocation: boolean;
   /** Sees every organization's board rather than only their own. */
   canViewAllOrganizations: boolean;
 
@@ -57,6 +61,8 @@ export function resolveDispatchScope(actor: ActorContext, actorUserId: string): 
     canManageUnits: can(actor, 'units.manage'),
     canTriggerPanic: can(actor, 'dispatch.panic'),
     canAcknowledgePanic: can(actor, 'dispatch.panic.acknowledge'),
+    canRequestBackup: can(actor, 'dispatch.request_backup'),
+    canShareLocation: can(actor, 'dispatch.share_location'),
     canViewAllOrganizations,
     organizationId: actor.organizationId,
     organizationIds: actor.organizationId === null ? [] : [actor.organizationId],

@@ -1,11 +1,13 @@
 'use client';
 
 import * as React from 'react';
-import { LogOut, TriangleAlert } from 'lucide-react';
-import type { DispatchSelfState, DispatchUnit, OperationalStatusMeta } from '@leoos/contracts';
+import { LogOut, MapPin, Siren, TriangleAlert } from 'lucide-react';
+import type {
+  DispatchCapabilities, DispatchSelfState, DispatchUnit, OperationalStatusMeta,
+} from '@leoos/contracts';
 import { Button, Panel, PanelHeader, Select, useToast } from '@/components/ui';
 import { Icon } from '@/components/icon';
-import { joinUnit, leaveUnit } from '@/lib/dispatch-actions';
+import { joinUnit, leaveUnit, raiseFieldRequest } from '@/lib/dispatch-actions';
 import { useDutyStatus } from '@/components/shell/duty-status-context';
 import { cn } from '@/lib/utils';
 
@@ -18,11 +20,18 @@ import { cn } from '@/lib/utils';
  * API routes.
  */
 export function StatusControl({
-  self, statuses, units, onChanged,
+  self, statuses, units, capabilities, onChanged,
 }: {
   self: DispatchSelfState;
   statuses: OperationalStatusMeta[];
   units: DispatchUnit[];
+  /**
+   * Null on the shell's compact rendering, where the board has not been
+   * loaded. A missing capability set hides the controls rather than guessing —
+   * the server refuses either way, and a button that is always refused is worse
+   * than no button.
+   */
+  capabilities: DispatchCapabilities | null;
   onChanged: () => void;
 }) {
   const [pending, setPending] = React.useState<string | null>(null);
@@ -143,6 +152,38 @@ export function StatusControl({
               onJoin={(unitId) => { void run('join', () => joinUnit(unitId)); }}
             />
           )}
+        </div>
+
+        {/*
+          Asking for help, one press each.
+
+          NO CONFIRMATION STEP, unlike panic, and the asymmetry is the point. A
+          false panic pulls units off real calls; a false backup request costs
+          somebody a glance at a strip that expires in three minutes. Making
+          these two-step would put a dialog between an officer and the moment
+          they need a hand.
+        */}
+        <div className="flex gap-1.5 border-t border-border-subtle pt-2.5">
+          {capabilities?.canRequestBackup ? (
+            <Button
+              variant="secondary" size="sm" className="flex-1"
+              disabled={pending !== null}
+              onClick={() => { void run('backup', () => raiseFieldRequest({ kind: 'backup' })); }}
+            >
+              <Siren aria-hidden /> Backup
+            </Button>
+          ) : null}
+          {capabilities?.canShareLocation ? (
+            <Button
+              variant="secondary" size="sm" className="flex-1"
+              disabled={pending !== null}
+              onClick={() => {
+                void run('share', () => raiseFieldRequest({ kind: 'location_share' }));
+              }}
+            >
+              <MapPin aria-hidden /> Share
+            </Button>
+          ) : null}
         </div>
 
         {/* Panic */}

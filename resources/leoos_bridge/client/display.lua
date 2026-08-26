@@ -18,6 +18,18 @@
 RegisterNetEvent('leoos:notify', function(payload)
   if type(payload) ~= 'table' then return end
 
+  --[[
+    A payload carrying a `fieldRequestId` is a PROMPT, not a toast.
+
+    Distinguished by the field rather than by a new command type, so the API's
+    command set stays at four and an older resource that predates prompts shows
+    a harmless notification instead of failing on a type it does not know.
+  ]]
+  if payload.fieldRequestId ~= nil then
+    Prompt.show(payload)
+    return
+  end
+
   local title = tostring(payload.title or 'LEOOS')
   local body = tostring(payload.body or '')
 

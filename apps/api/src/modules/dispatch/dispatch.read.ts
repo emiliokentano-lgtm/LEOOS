@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import {
-  incident, incidentAssignment, incidentLog, incidentType, memberStatus, operationalStatus,
+  fieldRequest, incident, incidentAssignment, incidentLog, incidentType, memberStatus,
+  operationalStatus,
   organization, organizationMember, panicEvent, person, unit, unitMember, userAccount, vehicle,
   type Database,
 } from '@leoos/db';
@@ -618,11 +619,31 @@ export async function getDispatchRevision(
     })
     .from(incidentAssignment);
 
+  /**
+   * Field requests are FOLDED IN rather than given a poll of their own.
+   *
+   * A screen that has to ask two questions to find out whether anything changed
+   * will eventually get two different answers and render half a board. The
+   * count is of LIVE requests only, so an expiry moves the revision without any
+   * row being written — which is exactly what has to happen for a prompt to
+   * disappear from a screen when its deadline passes.
+   */
+  const [fieldRequests] = await db
+    .select({
+      at: sql<string | null>`max(extract(epoch from ${fieldRequest.updatedAt}))::text`,
+      n: sql<number>`count(*) FILTER (
+        WHERE ${fieldRequest.status} = 'pending' AND ${fieldRequest.expiresAt} > now()
+      )::int`,
+    })
+    .from(fieldRequest)
+    .where(orgRestriction(scope, fieldRequest.organizationId, false));
+
   return [
     incidents[0]?.at ?? '0', incidents[0]?.n ?? 0,
     units[0]?.at ?? '0', units[0]?.n ?? 0,
     statuses[0]?.at ?? '0', statuses[0]?.n ?? 0,
     panics[0]?.at ?? '0', panics[0]?.n ?? 0, panics[0]?.ack ?? '0',
     assignments?.at ?? '0', assignments?.released ?? '0', assignments?.n ?? 0,
+    fieldRequests?.at ?? '0', fieldRequests?.n ?? 0,
   ].join(':');
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
-  IncidentAssignedPayload, IncidentClosedPayload, IncidentPayload, NotificationPayload,
+  FieldRequestPayload, IncidentAssignedPayload, IncidentClosedPayload, IncidentPayload,
+  NotificationPayload,
   PanicPayload, PanicResolvedPayload, PersonnelPayload, RealtimeActor, RealtimeEvent,
   RealtimeEventType, UnitMemberPayload, UnitPayload, UnitStatusPayload,
 } from '@leoos/contracts';
@@ -122,6 +123,20 @@ export class RealtimePublisher {
 
   panicResolved(context: PublishContext, payload: PanicResolvedPayload): void {
     this.emit('panic.resolved', context, payload);
+  }
+
+  // ── Field requests ─────────────────────────────────────────────────────
+
+  /**
+   * Backup asked for, taken, dismissed or withdrawn.
+   *
+   * Routed onto the organization's INCIDENTS topic by `topicsForEvent` — a
+   * field request is board content and shares the board's audience exactly, so
+   * it shares its authorization rule rather than getting a second one to keep
+   * in step.
+   */
+  fieldRequestUpdated(context: PublishContext, payload: FieldRequestPayload): void {
+    this.emit('field_request.updated', context, payload);
   }
 
   // ── People ─────────────────────────────────────────────────────────────

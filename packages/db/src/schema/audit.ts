@@ -160,6 +160,23 @@ export const AUDIT_ACTIONS = {
    */
   PANIC_RESOLVED: 'panic.resolved',
 
+  /**
+   * Field requests: asking for backup, and sharing a position.
+   *
+   * Four keys rather than one `field_request.changed`, because the questions
+   * asked afterwards are different questions. "Who asked for help and did
+   * anybody come" needs raised and accepted separately; "was this dismissed by
+   * eight people or seen by none" needs declines to be their own rows.
+   *
+   * Under the `dispatch.` prefix rather than a new one, so they inherit the
+   * severity rules the rest of dispatch already has — these are routine
+   * operational events, not privileged administrative ones.
+   */
+  FIELD_REQUEST_RAISED: 'dispatch.field_request_raised',
+  FIELD_REQUEST_ACCEPTED: 'dispatch.field_request_accepted',
+  FIELD_REQUEST_DECLINED: 'dispatch.field_request_declined',
+  FIELD_REQUEST_CANCELLED: 'dispatch.field_request_cancelled',
+
   // map
   /**
    * Marker lifecycle. Separate keys rather than one `map.marker_changed`,

@@ -147,6 +147,17 @@ export const eventSchema = z.object({
     'player.dropped',
     'player.panic',
     'player.status_requested',
+    /**
+     * Asking for backup, sharing a position, and answering somebody else's ask.
+     *
+     * All four are REQUESTS. The game server reports that a key was pressed;
+     * whether anything happens is decided by the same service a browser reaches,
+     * against the player's real permissions.
+     */
+    'player.backup_requested',
+    'player.location_shared',
+    'player.request_accepted',
+    'player.request_declined',
   ]),
   at: z.number().int().min(0),
   identifiers: identifiersSchema,
@@ -157,6 +168,15 @@ export const eventSchema = z.object({
   reason: z.string().trim().max(200).nullish(),
   /** Liveness at the moment of the press. Fresher than the last telemetry sample. */
   down: z.boolean().nullish(),
+  /**
+   * Which field request is being answered.
+   *
+   * The game client knows this id because the API sent it there in a prompt.
+   * It is validated as a uuid and then looked up — a made-up id resolves to
+   * nothing, and one belonging to another organization is refused by the same
+   * check a browser hits.
+   */
+  fieldRequestId: z.uuid().nullish(),
 }).strict()
   // A coordinate is a pair. Half of one puts a panic marker in the sea.
   .refine((v) => (v.x === undefined || v.x === null) === (v.y === undefined || v.y === null), {

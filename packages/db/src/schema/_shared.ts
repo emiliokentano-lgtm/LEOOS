@@ -254,3 +254,25 @@ export const notificationSeverityEnum = pgEnum('notification_severity', [
   'warning',
   'critical',
 ]);
+
+/**
+ * Field requests: what somebody asked for, and where it ended up.
+ *
+ * Two kinds and one lifecycle, because backup and location sharing are the same
+ * shape — raised in the field, offered to colleagues, taken or dismissed — and
+ * differ only in what accepting does. See docs/architecture/09-dispatch.md §6b.
+ */
+export const fieldRequestKindEnum = pgEnum('field_request_kind', [
+  'backup',
+  'location_share',
+]);
+
+export const fieldRequestStatusEnum = pgEnum('field_request_status', [
+  'pending',
+  'accepted',
+  'declined',
+  /** The asker withdrew it. Distinct from `declined`, which somebody else did. */
+  'cancelled',
+  /** Nobody took it in time. Distinct from `declined`: silence is not refusal. */
+  'expired',
+]);

@@ -81,6 +81,21 @@ export const PERMISSIONS = {
   'dispatch.panic': { category: 'dispatch', risk: 'low', label: 'Trigger panic' },
   'dispatch.panic.acknowledge': { category: 'dispatch', risk: 'medium', label: 'Acknowledge panic' },
   'units.manage': { category: 'dispatch', risk: 'medium', label: 'Manage units' },
+  /**
+   * Asking for help, and saying where you are.
+   *
+   * Both LOW risk and both self-actions: they commit the asker and nobody else.
+   * Separate keys rather than one, because a probationary officer being able to
+   * shout for backup while not being able to broadcast their position to the
+   * whole agency is a distinction an organization may reasonably want, and
+   * collapsing them would remove the choice.
+   */
+  'dispatch.request_backup': {
+    category: 'dispatch', risk: 'low', label: 'Request backup',
+  },
+  'dispatch.share_location': {
+    category: 'dispatch', risk: 'low', label: 'Share own location',
+  },
 
   // ── map ──────────────────────────────────────────────────────────────────
   'map.view': { category: 'map', risk: 'low', label: 'View map' },

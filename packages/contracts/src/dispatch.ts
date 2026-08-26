@@ -190,6 +190,10 @@ export interface DispatchCapabilities {
   canManageUnits: boolean;
   canTriggerPanic: boolean;
   canAcknowledgePanic: boolean;
+  /** Asking for backup. A self-action — it commits the caller and nobody else. */
+  canRequestBackup: boolean;
+  /** Broadcasting your own position to your organization. Also a self-action. */
+  canShareLocation: boolean;
 }
 
 export interface DispatchBoard {

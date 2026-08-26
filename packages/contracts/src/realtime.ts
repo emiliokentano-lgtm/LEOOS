@@ -48,6 +48,8 @@ export type RealtimeEventType =
   // panic
   | 'panic.triggered'
   | 'panic.resolved'
+  // asking for help, and saying where you are
+  | 'field_request.updated'
   // people
   | 'personnel.updated'
   // the operator
@@ -217,6 +219,20 @@ export interface NotificationPayload {
 
 // ── The event union ────────────────────────────────────────────────────────
 
+/**
+ * A field request changed state.
+ *
+ * IDENTIFIERS AND A STATUS, nothing more. No note body, no asker name, no
+ * position — the rule that event payloads carry what a screen needs to know
+ * something moved, and never the content. A client that needs the detail asks
+ * for it over REST, where the per-viewer authorization already lives.
+ */
+export interface FieldRequestPayload {
+  fieldRequestId: string;
+  kind: string;
+  status: string;
+}
+
 export type RealtimeEvent =
   | RealtimeEnvelope<'unit.location.updated', UnitLocationBatchPayload>
   | RealtimeEnvelope<'unit.status.updated', UnitStatusPayload>
@@ -230,6 +246,7 @@ export type RealtimeEvent =
   | RealtimeEnvelope<'incident.closed', IncidentClosedPayload>
   | RealtimeEnvelope<'panic.triggered', PanicPayload>
   | RealtimeEnvelope<'panic.resolved', PanicResolvedPayload>
+  | RealtimeEnvelope<'field_request.updated', FieldRequestPayload>
   | RealtimeEnvelope<'personnel.updated', PersonnelPayload>
   | RealtimeEnvelope<'notification.created', NotificationPayload>;
 
@@ -338,6 +355,17 @@ export function topicsForEvent(event: RealtimeEvent): string[] {
     case 'panic.triggered':
     case 'panic.resolved':
       return org === null ? [] : [`org:${org}:panic`];
+
+    /**
+     * Delivered on the INCIDENTS topic, not a topic of its own.
+     *
+     * A field request is dispatch board content and its audience is exactly the
+     * audience of that board — everyone with `dispatch.view` in the
+     * organization. A new topic would mean a new authorization rule that had to
+     * be kept in step with an existing one, which is how two rules drift apart.
+     */
+    case 'field_request.updated':
+      return org === null ? [] : [`org:${org}:incidents`];
 
     case 'personnel.updated':
       return org === null ? [] : [`org:${org}:personnel`];

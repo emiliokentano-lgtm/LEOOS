@@ -1,7 +1,8 @@
 import { sql } from 'drizzle-orm';
 import type { Database } from '@leoos/db';
 import type {
-  IncidentAssignedPayload, IncidentClosedPayload, IncidentPayload, NotificationPayload,
+  FieldRequestPayload, IncidentAssignedPayload, IncidentClosedPayload, IncidentPayload,
+  NotificationPayload,
   PanicPayload, PanicResolvedPayload, PersonnelPayload, RealtimeActor, UnitMemberPayload,
   UnitPayload, UnitStatusPayload,
 } from '@leoos/contracts';
@@ -56,6 +57,7 @@ export type DispatchEmission =
   }
   | { kind: 'panic.triggered'; organizationId: string; payload: PanicPayload }
   | { kind: 'panic.resolved'; organizationId: string; payload: PanicResolvedPayload }
+  | { kind: 'field_request.updated'; organizationId: string; payload: FieldRequestPayload }
   | { kind: 'personnel.updated'; organizationId: string; payload: PersonnelPayload }
   /**
    * A notification for ONE person, addressed by user id.
@@ -190,6 +192,11 @@ export function publishDispatchEvents(
         break;
       case 'panic.resolved':
         publisher.panicResolved({ organizationId: event.organizationId, actor }, event.payload);
+        break;
+      case 'field_request.updated':
+        publisher.fieldRequestUpdated(
+          { organizationId: event.organizationId, actor }, event.payload,
+        );
         break;
       case 'personnel.updated':
         publisher.personnelUpdated({ organizationId: event.organizationId, actor }, event.payload);

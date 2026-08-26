@@ -191,6 +191,115 @@ rely on.
 
 ---
 
+## 6b. Field requests: backup, and sharing where you are
+
+Two things an officer does from the field with one keypress: **ask for backup**,
+and **tell everyone where I am**. They look like different features and they are
+one row with two outcomes.
+
+### The decision: neither an incident nor an attachment, but its own row
+
+The obvious modelling choices were both wrong.
+
+**Not an incident.** An incident is a *call* — something that happened in the
+world, with a number, a type, a location, a timeline, and an expectation that
+somebody closes it. A backup request is a momentary appeal from one person to
+their colleagues, and most of them are answered or irrelevant within a minute.
+Turning each into a numbered incident would fill the call queue with entries
+nobody closes and corrupt every count on the dashboard, which is composed from
+the same reads.
+
+**Not merely an attachment to an incident either**, because the requester
+frequently has no incident. A traffic stop that turns bad is a unit, a position
+and no call. A model that could only express "backup on incident X" would be
+unable to represent the case the feature exists for.
+
+So: `field_request`, its own table, with its own lifecycle — `pending`,
+`accepted`, `declined`, `cancelled`, `expired`. It is a first-class record
+because "who asked for help, when, and did anybody come" is a question somebody
+asks afterwards, and the answer must not depend on whether a dispatcher happened
+to open a call.
+
+### What accepting actually does
+
+| Requester's situation | What the accepting unit is attached to |
+| --- | --- |
+| Their unit is on an incident | **That incident.** The accept calls the ordinary `assignUnit` path — same authorization, same audit row, same timeline entry, same events. |
+| Their unit is on no incident | **Nothing, and we do not invent one.** |
+
+The second row is a deliberate refusal. Auto-creating an incident to have
+something to attach to would put an untyped, untitled call on the board that
+nobody requested and nobody will close — manufacturing a record to satisfy a
+foreign key. The acceptance is still recorded on the `field_request` row, the
+waypoint is still set, and the requester is still told who is coming. If the
+situation deserves a call, a dispatcher opens one; the field request is visible
+on the board precisely so they can.
+
+A **location share** never attaches anybody to anything, whatever the requester
+is doing. It is information, not dispatch. Accepting it places a marker; that is
+the whole of it.
+
+### The position is a snapshot, not a track
+
+A shared location is the requester's position **at the moment they shared it**,
+frozen. It does not follow them.
+
+Live tracking already exists for on-duty units and is gated on `map.track_units`.
+A share that kept updating would be a way to obtain continuous tracking of a
+colleague without that permission, which is surveillance wearing a helpful
+label. One point, and it expires.
+
+### Lifetimes, and why a request expires at all
+
+| | Backup request | Location share |
+| --- | --- | --- |
+| Lives for | 3 minutes | 15 minutes |
+| Then | `expired` | `expired` |
+
+A backup request that nobody has taken in three minutes has been answered by
+events one way or the other, and a prompt that surfaces later is confusion
+rather than help. A share is longer because it is passive — nobody is waiting on
+it — but it still ends, because a position from an hour ago is worse than no
+position.
+
+Expiry is evaluated **on read**, from `expires_at`, rather than by a job that
+rewrites rows. Nothing runs when nobody is looking, and a request cannot be
+accepted after its deadline even if a client is holding a stale prompt.
+
+### Who hears about it
+
+Derived, never supplied. The audience is every **active member of the
+requester's organization who is on duty**, minus the requester. No contract type
+has a field for a recipient list and no endpoint accepts one — the same rule the
+notification system already holds.
+
+Cross-organization is not a filter, it is a denial: a request names no
+organization, and the one it belongs to is read from the requester's membership
+inside the transaction.
+
+**Declining is recorded, not silent.** A backup request that eight people
+dismissed is a different fact from one nobody saw, and it is exactly what a
+supervisor reviewing an incident wants to know.
+
+### Where authority is checked
+
+| Action | Needs |
+| --- | --- |
+| Raise a backup request | An active membership and `dispatch.request_backup` |
+| Share your location | An active membership and `dispatch.share_location` |
+| Accept | An active membership in the **same organization**, decided from the acceptor's own context inside the transaction |
+| Decline | The same |
+| Cancel | Being the requester |
+| See it on the board | `dispatch.view` in that organization |
+
+Accepting is a self-action in the sense that matters — you are volunteering
+yourself — so it needs no permission over anybody else. What it must never do is
+let somebody in another organization volunteer into a call they cannot see, and
+that is checked against the acceptor's live membership, not against anything the
+request carries.
+
+---
+
 ## 7. Real-time readiness
 
 The same seam the map uses. `DispatchDataSource` (`apps/web/lib/dispatch/`) is

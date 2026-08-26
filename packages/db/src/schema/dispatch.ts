@@ -1,12 +1,12 @@
 import { relations, sql } from 'drizzle-orm';
 import {
-  boolean, check, doublePrecision, index, integer, jsonb, pgTable, text, timestamp,
-  uniqueIndex, uuid,
+  boolean, check, doublePrecision, index, integer, jsonb, pgTable, primaryKey, text,
+  timestamp, uniqueIndex, uuid,
 } from 'drizzle-orm/pg-core';
 import {
-  citext, createdAt, incidentLinkEntityEnum, incidentLinkRelationEnum, incidentLogEntryEnum,
-  incidentSourceEnum, incidentStatusEnum, mapMarkerTypeEnum, primaryId, softDelete,
-  timestamps, unitStatusEnum,
+  citext, createdAt, fieldRequestKindEnum, fieldRequestStatusEnum, incidentLinkEntityEnum,
+  incidentLinkRelationEnum, incidentLogEntryEnum, incidentSourceEnum, incidentStatusEnum,
+  mapMarkerTypeEnum, primaryId, softDelete, timestamps, unitStatusEnum,
 } from './_shared';
 import { userAccount } from './identity';
 import { organization, organizationMember } from './organization';
@@ -521,4 +521,158 @@ export const memberStatusRelations = relations(memberStatus, ({ one }) => ({
     references: [operationalStatus.key],
   }),
   unit: one(unit, { fields: [memberStatus.unitId], references: [unit.id] }),
+}));
+
+/**
+ * A request raised from the field.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * NOT AN INCIDENT, AND THE DISTINCTION IS LOAD-BEARING
+ *
+ * An incident is a call: a number, a type, a timeline, and an expectation that
+ * somebody closes it. Most backup requests are answered or overtaken by events
+ * within a minute. Modelling each as an incident would fill the call queue with
+ * entries nobody closes and corrupt every dashboard count, because the dashboard
+ * is composed from the same reads.
+ *
+ * Nor is it merely an attachment to an incident, because the asker frequently
+ * has none — a traffic stop that turns bad is a unit, a position and no call.
+ *
+ * So it is its own row, and a first-class record: "who asked for help, when, and
+ * did anybody come" is a question asked afterwards, and the answer must not
+ * depend on whether a dispatcher happened to open a call.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+export const fieldRequest = pgTable(
+  'field_request',
+  {
+    id: primaryId(),
+    kind: fieldRequestKindEnum('kind').notNull(),
+
+    /** Keyed on the MEMBERSHIP: a person in two organizations asks as one of them. */
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => organizationMember.id, { onDelete: 'cascade' }),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organization.id, { onDelete: 'restrict' }),
+
+    unitId: uuid('unit_id').references(() => unit.id, { onDelete: 'set null' }),
+
+    /**
+     * The call they were on WHEN THEY ASKED.
+     *
+     * Captured rather than read live from the unit at accept time: a unit that
+     * has since moved to another call must not silently redirect the people who
+     * accepted this request to somewhere they never agreed to go.
+     */
+    incidentId: uuid('incident_id').references(() => incident.id, { onDelete: 'set null' }),
+
+    /** A snapshot, never a track. A share that followed you would be surveillance. */
+    posX: doublePrecision('pos_x'),
+    posY: doublePrecision('pos_y'),
+
+    note: text('note'),
+    source: text('source').notNull().default('web'),
+
+    status: fieldRequestStatusEnum('status').notNull().default('pending'),
+
+    /**
+     * Expiry is a COLUMN, evaluated on read.
+     *
+     * No job rewrites these rows. Nothing runs when nobody is looking, and a
+     * request cannot be accepted past its deadline even if a client is holding
+     * a prompt that went stale in a pocket.
+     */
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+
+    resolvedBy: uuid('resolved_by').references(() => organizationMember.id, {
+      onDelete: 'set null',
+    }),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+
+    ...timestamps(),
+  },
+  (t) => [
+    /**
+     * One live request per member per kind, enforced by the DATABASE.
+     *
+     * A held key, or a flaky network retrying, must not put four identical
+     * prompts on everybody's screen. Only the database can decide this under
+     * concurrency; the service reads the conflict as "you already have one
+     * live" rather than as an error.
+     */
+    uniqueIndex('field_request_one_live_per_member')
+      .on(t.memberId, t.kind)
+      .where(sql`status = 'pending'`),
+    index('field_request_live_idx')
+      .on(t.organizationId, t.createdAt)
+      .where(sql`status = 'pending'`),
+    index('field_request_member_idx').on(t.memberId, t.createdAt),
+    index('field_request_incident_idx')
+      .on(t.incidentId)
+      .where(sql`incident_id IS NOT NULL`),
+    check(
+      'field_request_resolution_consistent',
+      sql`(status = 'pending' AND resolved_at IS NULL)
+          OR (status <> 'pending' AND resolved_at IS NOT NULL)`,
+    ),
+    check('field_request_position_paired', sql`(pos_x IS NULL) = (pos_y IS NULL)`),
+    check(
+      'field_request_accepted_has_resolver',
+      sql`status <> 'accepted' OR resolved_by IS NOT NULL`,
+    ),
+  ],
+);
+
+/**
+ * Who was offered a request, and what they did about it.
+ *
+ * A DECLINE IS A FACT WORTH KEEPING. "Eight people dismissed this" is a
+ * different thing from "nobody saw it", and it is the first question asked when
+ * somebody reviews why help did not arrive. Without this table the two are
+ * indistinguishable.
+ */
+export const fieldRequestResponse = pgTable(
+  'field_request_response',
+  {
+    fieldRequestId: uuid('field_request_id')
+      .notNull()
+      .references(() => fieldRequest.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => organizationMember.id, { onDelete: 'cascade' }),
+    response: text('response').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.fieldRequestId, t.memberId] }),
+    index('field_request_response_member_idx').on(t.memberId, t.createdAt),
+    check('field_request_response_kind', sql`response IN ('accepted', 'declined')`),
+  ],
+);
+
+export const fieldRequestRelations = relations(fieldRequest, ({ one, many }) => ({
+  member: one(organizationMember, {
+    fields: [fieldRequest.memberId],
+    references: [organizationMember.id],
+  }),
+  organization: one(organization, {
+    fields: [fieldRequest.organizationId],
+    references: [organization.id],
+  }),
+  unit: one(unit, { fields: [fieldRequest.unitId], references: [unit.id] }),
+  incident: one(incident, { fields: [fieldRequest.incidentId], references: [incident.id] }),
+  responses: many(fieldRequestResponse),
+}));
+
+export const fieldRequestResponseRelations = relations(fieldRequestResponse, ({ one }) => ({
+  request: one(fieldRequest, {
+    fields: [fieldRequestResponse.fieldRequestId],
+    references: [fieldRequest.id],
+  }),
+  member: one(organizationMember, {
+    fields: [fieldRequestResponse.memberId],
+    references: [organizationMember.id],
+  }),
 }));

@@ -86,5 +86,6 @@ export const BOARD_EVENTS: readonly RealtimeEventType[] = [
   'unit.member.left',
   'panic.triggered',
   'panic.resolved',
+  'field_request.updated',
   'personnel.updated',
 ];
