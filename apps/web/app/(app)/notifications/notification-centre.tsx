@@ -1,10 +1,11 @@
 'use client';
 
 import * as React from 'react';
-import { BellOff, CheckCheck, Loader2, Volume2 } from 'lucide-react';
+import { BellOff, CheckCheck, Loader2, Play, Volume2 } from 'lucide-react';
 import {
-  NOTIFICATION_CATEGORIES, canMuteCategory,
-  type NotificationCategory, type NotificationDto, type NotificationSeverity,
+  NOTIFICATION_CATEGORIES, SOUND_CUES, SOUND_CUE_KEYS, canMuteCategory, canMuteCue,
+  type NotificationCategory, type NotificationDto, type NotificationPreferences,
+  type NotificationSeverity, type SoundCue,
 } from '@leoos/contracts';
 import {
   Alert, Button, Checkbox, EmptyState, ErrorState, FilterChip, Panel, PanelBody, PanelHeader,
@@ -14,6 +15,9 @@ import { PageContainer } from '@/components/shell/page-container';
 import { useNotifications } from '@/components/shell/notification-context';
 import { NotificationItem } from '@/components/domain/notification-item';
 import { useNow } from '@/lib/map/use-now';
+import {
+  getAudioReadiness, getServerAudioReadiness, subscribeAudioReadiness,
+} from '@/lib/notifications/cue-player';
 import { cn } from '@/lib/utils';
 
 /**
@@ -398,6 +402,12 @@ function SoundSettings() {
           />
         </div>
 
+        <SoundCueSettings
+          preferences={preferences}
+          saving={saving}
+          onUpdate={update}
+        />
+
         <div className="flex flex-col gap-1.5 border-t border-border-subtle pt-3">
           <span className="flex items-center gap-1.5 text-xs font-medium text-text-secondary">
             <BellOff className="size-3.5" aria-hidden />
@@ -438,5 +448,110 @@ function SoundSettings() {
         </div>
       </PanelBody>
     </Panel>
+  );
+}
+
+/**
+ * Which cues make a sound.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * A CONTROL THAT SAYS WHAT IT WILL DO, AND A WAY TO HEAR IT
+ *
+ * Every cue is described in words, because "backup" alone does not tell an
+ * operator what they are turning on, and each has a preview — an operator
+ * deciding whether to keep a sound needs to hear it, and a settings screen that
+ * makes you provoke a real panic to find out is not one.
+ *
+ * The readiness line is the honest part. A browser that has not seen a click on
+ * this page refuses to start an AudioContext, so "sound is on" would be a green
+ * light the application has not earned. It says which of the two is true and
+ * what to do about it (engineering rule 45).
+ *
+ * PANIC IS PRESENT AND CANNOT BE SILENCED. Shown with its reason in words
+ * rather than as a disabled switch with no explanation — the same treatment the
+ * unmutable notification category gets.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+function SoundCueSettings({
+  preferences, saving, onUpdate,
+}: {
+  preferences: NotificationPreferences;
+  saving: boolean;
+  onUpdate: (patch: Partial<NotificationPreferences>) => Promise<void>;
+}) {
+  const { previewCue } = useNotifications();
+  /**
+   * Read from a store rather than state: the value changes on a user gesture
+   * this component cannot see, and computing it needs a side effect a render
+   * may not perform. Subscribing also primes the audio context.
+   */
+  const readiness = React.useSyncExternalStore(
+    subscribeAudioReadiness, getAudioReadiness, getServerAudioReadiness,
+  );
+
+  function toggleCue(cue: SoundCue, enabled: boolean) {
+    const next = enabled
+      ? preferences.mutedCues.filter((key) => key !== cue)
+      : [...new Set([...preferences.mutedCues, cue])];
+    void onUpdate({ mutedCues: next });
+  }
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-border-subtle pt-3">
+      <h3 className="text-xs font-medium text-text-secondary">Which sounds</h3>
+
+      {preferences.soundEnabled && readiness === 'blocked' ? (
+        <Alert tone="warning" title="Your browser has not allowed sound yet">
+          Click anywhere on this page and it will. Until then nothing will play,
+          including a panic — which is why sound is never the alarm.
+        </Alert>
+      ) : null}
+      {preferences.soundEnabled && readiness === 'unsupported' ? (
+        <Alert tone="warning" title="This browser cannot play the alert tones">
+          Everything is still shown visually.
+        </Alert>
+      ) : null}
+
+      {SOUND_CUE_KEYS.map((cue) => {
+        const meta = SOUND_CUES[cue];
+        const mutable = canMuteCue(cue);
+        const enabled = mutable ? !preferences.mutedCues.includes(cue) : true;
+
+        return (
+          <div key={cue} className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              {mutable ? (
+                <Toggle
+                  checked={enabled}
+                  disabled={saving || !preferences.soundEnabled}
+                  onCheckedChange={(next) => toggleCue(cue, next)}
+                  label={meta.label}
+                  description={meta.description}
+                />
+              ) : (
+                /* Said in words, not offered as a switch that refuses. */
+                <div className="py-1">
+                  <p className="text-xs text-text-primary">
+                    {meta.label}
+                    <span className="ml-2 text-2xs text-text-tertiary">always audible</span>
+                  </p>
+                  <p className="text-2xs text-text-tertiary">{meta.description}</p>
+                </div>
+              )}
+            </div>
+
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={!preferences.soundEnabled}
+              onClick={() => previewCue(cue)}
+              aria-label={`Play the ${meta.label.toLowerCase()} sound`}
+            >
+              <Play aria-hidden />
+            </Button>
+          </div>
+        );
+      })}
+    </div>
   );
 }

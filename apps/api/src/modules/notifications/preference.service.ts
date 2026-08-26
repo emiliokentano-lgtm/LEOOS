@@ -1,7 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { notificationPreference, type Database } from '@leoos/db';
 import {
-  DEFAULT_NOTIFICATION_PREFERENCES, canMuteCategory,
+  DEFAULT_NOTIFICATION_PREFERENCES, canMuteCategory, canMuteCue, isKnownCue,
   type NotificationCategory, type NotificationPreferences,
 } from '@leoos/contracts';
 
@@ -47,7 +47,20 @@ export async function readPreferences(
     soundVolume: row.soundVolume,
     criticalToasts: row.criticalToasts,
     mutedCategories: sanitizeCategories(row.mutedCategories),
+    mutedCues: sanitizeCues(row.mutedCues),
   };
+}
+
+/**
+ * Drops anything that is not a silenceable cue.
+ *
+ * The same treatment `sanitizeCategories` gets, and for the same reason: a row
+ * that somehow contains `panic` — an old backup, a hand-edited row — must not
+ * produce a client that silently plays nothing for a panic. It produces a
+ * client that plays it, and the next write cleans the row up.
+ */
+function sanitizeCues(values: readonly string[]): string[] {
+  return values.filter((value) => isKnownCue(value) && canMuteCue(value));
 }
 
 /**
@@ -89,6 +102,7 @@ export async function writePreferences(
     soundVolume: clampVolume(update.soundVolume ?? current.soundVolume),
     criticalToasts: update.criticalToasts ?? current.criticalToasts,
     mutedCategories: sanitizeCategories(update.mutedCategories ?? current.mutedCategories),
+    mutedCues: sanitizeCues(update.mutedCues ?? current.mutedCues),
   };
 
   await db
@@ -100,6 +114,7 @@ export async function writePreferences(
       soundVolume: next.soundVolume,
       criticalToasts: next.criticalToasts,
       mutedCategories: next.mutedCategories,
+      mutedCues: next.mutedCues,
     })
     .onConflictDoUpdate({
       target: notificationPreference.userId,
@@ -109,6 +124,7 @@ export async function writePreferences(
         soundVolume: next.soundVolume,
         criticalToasts: next.criticalToasts,
         mutedCategories: next.mutedCategories,
+        mutedCues: next.mutedCues,
         updatedAt: sql`now()`,
       },
     });

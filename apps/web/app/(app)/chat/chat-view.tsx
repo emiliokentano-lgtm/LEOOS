@@ -18,6 +18,7 @@ import { cn, formatRelative } from '@/lib/utils';
 import { deleteMessage, markConversationRead, sendMessage } from '@/lib/chat-actions';
 import { useRealtimeRefresh } from '@/lib/realtime/realtime-context';
 import { useAuth } from '@/components/shell/auth-context';
+import { useNotifications } from '@/components/shell/notification-context';
 import { userTopics } from '@/lib/realtime/topics';
 
 /**
@@ -40,6 +41,7 @@ import { userTopics } from '@/lib/realtime/topics';
 export function ChatView() {
   const auth = useAuth();
   const toast = useToast();
+  const { playCue } = useNotifications();
 
   const [list, setList] = React.useState<ConversationListDto | null>(null);
   const [failed, setFailed] = React.useState(false);
@@ -83,6 +85,17 @@ export function ChatView() {
    */
   const topics = React.useMemo(() => userTopics(auth.userId), [auth.userId]);
   useRealtimeRefresh(topics, () => {
+    /**
+     * The cue fires here, beside the refetch, for the same reason the status
+     * cue fires beside its refresh: this is the moment the screen learns
+     * something arrived. Chat raises no notification — it travels on
+     * `message.created` straight to the open thread — so without this the one
+     * cue an operator hears most often would not exist.
+     *
+     * Rate limiting lives in the player: a conversation going quickly is one
+     * cue every few seconds, not one per message.
+     */
+    playCue('message');
     loadList();
     if (activeId !== null) loadThread(activeId);
   }, { interestingTypes: ['message.created'] });

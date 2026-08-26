@@ -12,6 +12,7 @@ export * from './realtime';
 export * from './fivem';
 export * from './admin';
 export * from './notifications';
+export * from './sound';
 export * from './field-requests';
 export * from './tasks';
 export * from './chat';

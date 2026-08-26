@@ -178,6 +178,56 @@ toast, a number on the bell, an entry in the centre, and for a panic an
 unfilterable alert bar on the map ([map §9.4](05-map.md)) and a row on the
 dashboard ([dashboard §1](10-dashboard.md)).
 
+### Cues: sound for things that are not notifications
+
+Sound started out driven entirely by notifications. That covers events pushed to
+you from elsewhere and cannot cover the thing operators asked for first — **the
+confirmation that your own action landed**. Setting your status raises no
+notification to you, by design (you are not told about what you just did), so
+there was nothing for a tone to hang on.
+
+A **cue** has two sources and one player:
+
+| Source | Example | Fired from |
+| --- | --- | --- |
+| Remote | a panic, a backup request, an assignment | the notification arrives → `cueForNotification(type)` |
+| Local | your status changed; a chat message landed | the screen that already re-read the data |
+
+The rule that keeps this honest: **a cue is fired from the same place that
+already updated the screen** — after the server said yes, never on the click,
+never from a second fetch. A confirmation tone for something that was then
+refused tells an operator their status changed when it did not.
+
+**The gates compose, they do not replace one another.** A notification-sourced
+cue must pass `shouldPlaySound` (is the type audible at all, is sound on, does
+the critical-only filter allow it) *and* `shouldPlayCue` (has the operator
+silenced this cue). Neither can widen the other, which is what keeps "a tone for
+a task would train operators to ignore the tones that mean something is
+happening now" true now that cues exist — there is no task cue at all, rather
+than one that could never sound. A test asserts that every entry in the
+notification→cue map is a type the catalogue already marks audible.
+
+**The shapes are data.** `SOUND_CUES` in `packages/contracts/src/sound.ts` gives
+each cue a label, a description the settings screen renders, a tone as a list of
+notes, and a minimum gap. The player knows how to play a sequence of notes and
+nothing about what any cue means, so adding one is a table entry rather than a
+branch. The tones are shaped to be told apart without looking — panic is the
+longest and the only one that repeats; the most frequent cue, a chat message, is
+the shortest and lowest, because the cue you hear most must be the least
+intrusive or it is the one that gets sound turned off entirely.
+
+**A burst is collapsed into one cue.** Every cue but panic carries a `minGapMs`;
+an operator being machine-gunned by their own notification sound turns sound off
+and loses the panic cue with it. Panic's gap is `null` — two panics four seconds
+apart are two panics, and that is exactly when both must be heard.
+
+**The settings screen says what it can actually do.** A browser that has not seen
+a click refuses to start an `AudioContext`, so the panel reports *"Your browser
+has not allowed sound yet"* rather than showing a switch that is on and silent,
+and every cue has a preview button — an operator deciding whether to keep a
+sound needs to hear it, and a screen that makes you provoke a real panic to find
+out is not one.
+
 ### Panic cannot be muted
 
 Enforced in three places, each sufficient alone:
@@ -187,6 +237,12 @@ Enforced in three places, each sufficient alone:
 | `packages/contracts` | `UNMUTABLE_CATEGORIES` — `canMuteCategory('panic')` is false, and `isMuted` returns false for panic whatever is stored |
 | the API | `writePreferences` strips it on the way in **and on the way out**, so a row restored from an old backup produces a client that shows panics, not one that hides them |
 | the database | `notification_preference_panic_unmutable` CHECK — a support script editing the row by hand is refused too |
+
+The **panic cue** is protected the same way and in the same four places:
+`UNMUTABLE_CUES` in the contracts, `sanitizeCues` stripping it on the way in,
+the same function stripping it again on the way **out** so a row from an older
+backup produces an operator who hears panics rather than one who does not, and
+`notification_preference_panic_cue_unmutable` in the database.
 
 The screen says why, in words, rather than offering a disabled control with no
 explanation: *"Panic — always shown"*.

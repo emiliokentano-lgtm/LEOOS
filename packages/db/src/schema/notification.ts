@@ -105,6 +105,14 @@ export const notificationPreference = pgTable('notification_preference', {
   soundVolume: integer('sound_volume').notNull().default(60),
   criticalToasts: boolean('critical_toasts').notNull().default(true),
   mutedCategories: text('muted_categories').array().notNull().default(sql`'{}'::text[]`),
+  /**
+   * Sound cues silenced individually.
+   *
+   * Separate from `mutedCategories`: that hides a notification's banner, this
+   * takes away only a sound — and covers cues that are not notifications at all,
+   * like the confirmation that your own status change landed.
+   */
+  mutedCues: text('muted_cues').array().notNull().default(sql`'{}'::text[]`),
 
   createdAt: createdAt(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

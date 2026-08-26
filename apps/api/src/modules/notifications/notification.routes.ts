@@ -60,6 +60,12 @@ const preferencesSchema = z.object({
   soundEnabled: z.boolean().optional(),
   soundCriticalOnly: z.boolean().optional(),
   soundVolume: z.number().int().min(0).max(100).optional(),
+  /**
+   * Cues to silence. Bounded and validated as strings rather than an enum, so a
+   * client that knows a cue this build does not is answered with the stored
+   * state rather than a 400 — the service drops what it does not recognise.
+   */
+  mutedCues: z.array(z.string().max(40)).max(20).optional(),
   criticalToasts: z.boolean().optional(),
   /**
    * `panic` is accepted by the SCHEMA and refused by the SERVICE.
@@ -213,6 +219,7 @@ export default async function notificationRoutes(app: FastifyInstance): Promise<
       soundEnabled: body.soundEnabled,
       soundCriticalOnly: body.soundCriticalOnly,
       soundVolume: body.soundVolume,
+      mutedCues: body.mutedCues,
       criticalToasts: body.criticalToasts,
       mutedCategories: body.mutedCategories as never,
     }));

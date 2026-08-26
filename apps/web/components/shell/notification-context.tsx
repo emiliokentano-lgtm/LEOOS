@@ -2,10 +2,10 @@
 
 import * as React from 'react';
 import {
-  BACKSTOP_POLL_MS, DEFAULT_NOTIFICATION_PREFERENCES, NOTIFICATION_SEVERITIES,
-  isMuted, shouldPlaySound,
+  BACKSTOP_POLL_MS, DEFAULT_NOTIFICATION_PREFERENCES, NOTIFICATION_SEVERITIES, SOUND_CUES,
+  cueForNotification, isMuted, shouldPlayCue, shouldPlaySound,
   type NotificationDto, type NotificationPreferences, type RealtimeEvent,
-  type UnreadSummary,
+  type SoundCue, type UnreadSummary,
 } from '@leoos/contracts';
 import { useToast } from '@/components/ui';
 import { useRealtime } from '@/lib/realtime/realtime-context';
@@ -13,7 +13,7 @@ import {
   loadNotificationPreferences, markAllNotificationsRead, markNotificationsRead,
   saveNotificationPreferences,
 } from '@/lib/notification-actions';
-import { playAlertTone } from '@/lib/notifications/alert-tone';
+import { playCueTone } from '@/lib/notifications/cue-player';
 import { useAuth } from './auth-context';
 
 /**
@@ -55,6 +55,17 @@ interface NotificationContextValue {
   savePreferences: (update: Partial<NotificationPreferences>) => Promise<{
     ok: boolean; error?: string;
   }>;
+  /**
+   * Plays a cue, if the operator has asked for one.
+   *
+   * Lives here because this is where preferences already are, and because one
+   * player means one place that de-duplicates and rate-limits. Call it from the
+   * SAME PLACE that already updated the screen — a cue for something the screen
+   * did not show would be the application asserting what it does not know.
+   */
+  playCue: (cue: SoundCue) => void;
+  /** Ignores the mute list. The settings screen's preview, and nothing else. */
+  previewCue: (cue: SoundCue) => void;
 }
 
 const NotificationContext = React.createContext<NotificationContextValue | null>(null);
@@ -196,6 +207,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
    */
   const topics = React.useMemo(() => [`user:${auth.userId}`], [auth.userId]);
 
+  /** Set below, once `playCue` exists. See the note there. */
+  const playCueRef = React.useRef<(cue: SoundCue) => void>(() => {});
+
   const onEvent = React.useCallback((event: RealtimeEvent) => {
     if (event.type !== 'notification.created') return;
     const { payload } = event;
@@ -233,12 +247,18 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     /**
      * Sound, if and only if the operator asked for it.
      *
-     * `shouldPlaySound` is the shared decision — the type must be audible at
-     * all, sound must be enabled, and the critical-only filter must pass. It is
-     * off by default, and a muted category makes no noise either.
+     * THREE GATES, and they compose rather than replace one another. The
+     * notification catalogue decides whether the type is audible at all and the
+     * critical-only filter applies (`shouldPlaySound`); the cue catalogue then
+     * decides which shape it makes and whether the operator has silenced that
+     * shape (inside `playCue`). Neither can widen the other: a type marked
+     * silent stays silent however its cue is configured, which is what keeps
+     * "a tone for a task would train operators to ignore the tones that matter"
+     * true after cues were added.
      */
     if (!muted && shouldPlaySound(payload.type, payload.severity, current)) {
-      playAlertTone(payload.severity === 'critical', current.soundVolume);
+      const cue = cueForNotification(payload.type);
+      if (cue !== null) playCueRef.current(cue);
     }
 
     // Refetch: the payload is a headline, the list is the record.
@@ -248,6 +268,57 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const onResync = React.useCallback(() => { refresh(); }, [refresh]);
 
   useRealtime({ topics, onEvent, onResync });
+
+  // ── Sound ────────────────────────────────────────────────────────────────
+
+  /**
+   * When each cue last sounded.
+   *
+   * A ref, not state: a cue must never cause a render. Rate limiting lives here
+   * rather than in the catalogue's consumers because there is exactly one
+   * player, and a limit applied at three call sites is three limits.
+   */
+  const lastCueAt = React.useRef<Partial<Record<SoundCue, number>>>({});
+
+  const playCue = React.useCallback((cue: SoundCue) => {
+    const current = preferencesRef.current;
+    if (!shouldPlayCue(cue, current)) return;
+
+    /**
+     * Collapse a burst into one cue.
+     *
+     * A busy channel must not turn into a machine gun: an operator being shot
+     * at by their own notification sound turns sound off, and loses the panic
+     * cue with it. `minGapMs` is null for panic — two panics four seconds apart
+     * are two panics, and that is exactly when you must hear both.
+     */
+    const gap = SOUND_CUES[cue]?.minGapMs ?? null;
+    if (gap !== null) {
+      const previous = lastCueAt.current[cue] ?? 0;
+      if (Date.now() - previous < gap) return;
+    }
+    lastCueAt.current[cue] = Date.now();
+
+    playCueTone(cue, current.soundVolume);
+  }, []);
+
+  // `onEvent` is declared above this block and would otherwise capture the
+  // first `playCue`; the ref keeps it pointing at the current one without
+  // reordering the file around a render-time dependency.
+  React.useEffect(() => { playCueRef.current = playCue; }, [playCue]);
+
+  /**
+   * The settings preview.
+   *
+   * Deliberately bypasses the mute list — an operator turning a cue back on
+   * wants to hear what they are turning on — but NOT the master switch or the
+   * volume, because those are what they are actually setting.
+   */
+  const previewCue = React.useCallback((cue: SoundCue) => {
+    const current = preferencesRef.current;
+    if (!current.soundEnabled) return;
+    playCueTone(cue, current.soundVolume);
+  }, []);
 
   // ── Read state ───────────────────────────────────────────────────────────
 
@@ -283,10 +354,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   const value = React.useMemo<NotificationContextValue>(() => ({
     notifications, unread, loading, error, preferences,
-    refresh, markRead, markAllRead, savePreferences,
+    refresh, markRead, markAllRead, savePreferences, playCue, previewCue,
   }), [
     notifications, unread, loading, error, preferences,
-    refresh, markRead, markAllRead, savePreferences,
+    refresh, markRead, markAllRead, savePreferences, playCue, previewCue,
   ]);
 
   return (

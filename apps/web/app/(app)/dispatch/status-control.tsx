@@ -3,12 +3,13 @@
 import * as React from 'react';
 import { LogOut, MapPin, Siren, TriangleAlert } from 'lucide-react';
 import type {
-  DispatchCapabilities, DispatchSelfState, DispatchUnit, OperationalStatusMeta,
+  DispatchCapabilities, DispatchSelfState, DispatchUnit, OperationalStatusMeta, SoundCue,
 } from '@leoos/contracts';
 import { Button, Panel, PanelHeader, Select, useToast } from '@/components/ui';
 import { Icon } from '@/components/icon';
 import { joinUnit, leaveUnit, raiseFieldRequest } from '@/lib/dispatch-actions';
 import { useDutyStatus } from '@/components/shell/duty-status-context';
+import { useNotifications } from '@/components/shell/notification-context';
 import { cn } from '@/lib/utils';
 
 /**
@@ -47,6 +48,7 @@ export function StatusControl({
    * the board while the top bar keeps yesterday's value until its own poll.
    */
   const duty = useDutyStatus();
+  const { playCue } = useNotifications();
 
   // Panic is not offered as an ordinary status: it is a separate, deliberate
   // action with its own confirmation and its own server-side lifecycle.
@@ -54,7 +56,23 @@ export function StatusControl({
   const current = statuses.find((s) => s.key === self.statusKey) ?? null;
   const myUnit = units.find((u) => u.id === self.unitId) ?? null;
 
-  async function run(label: string, fn: () => Promise<{ ok: boolean; error?: string }>) {
+  /**
+   * Every self-action goes through here, which is why the cue does too.
+   *
+   * Fired AFTER the server said yes and next to the refresh that updates the
+   * screen — never before the request, never on the click. A confirmation tone
+   * for something that was then refused is worse than no tone at all: it tells
+   * an operator their status changed when it did not.
+   *
+   * `cue` is null for the actions whose confirmation is already unmistakable on
+   * screen — joining and leaving a unit rewrite the whole panel — because a cue
+   * for everything is a cue for nothing.
+   */
+  async function run(
+    label: string,
+    fn: () => Promise<{ ok: boolean; error?: string }>,
+    cue: SoundCue | null = null,
+  ) {
     setPending(label);
     const result = await fn();
     setPending(null);
@@ -62,6 +80,7 @@ export function StatusControl({
       toast.push({ tone: 'danger', title: 'Refused', description: result.error });
       return;
     }
+    if (cue !== null) playCue(cue);
     onChanged();
   }
 
@@ -106,7 +125,7 @@ export function StatusControl({
                 key={status.key}
                 type="button"
                 disabled={pending !== null}
-                onClick={() => { void run(status.key, () => duty.setStatus(status.key)); }}
+                onClick={() => { void run(status.key, () => duty.setStatus(status.key), 'status'); }}
                 aria-pressed={active}
                 className={cn(
                   'flex items-center gap-1.5 rounded-xs border px-2 py-1.5 text-xs',
@@ -168,7 +187,7 @@ export function StatusControl({
             <Button
               variant="secondary" size="sm" className="flex-1"
               disabled={pending !== null}
-              onClick={() => { void run('backup', () => raiseFieldRequest({ kind: 'backup' })); }}
+              onClick={() => { void run('backup', () => raiseFieldRequest({ kind: 'backup' }), 'backup'); }}
             >
               <Siren aria-hidden /> Backup
             </Button>
@@ -199,7 +218,7 @@ export function StatusControl({
                   disabled={pending !== null}
                   onClick={() => {
                     setConfirmPanic(false);
-                    void run('panic', () => duty.triggerPanic());
+                    void run('panic', () => duty.triggerPanic(), 'panic');
                   }}
                 >
                   Confirm panic

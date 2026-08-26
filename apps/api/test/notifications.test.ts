@@ -857,9 +857,14 @@ describe('a fan-out larger than one statement can carry', () => {
      * the thing it was meant to measure. They are inert rows: no memberships,
      * no sessions, nothing that could sign in.
      */
+    // The tag makes the usernames unique PER RUN. Without it a second run
+    // against the same database collides on `username`, and the test fails on
+    // its own leftovers rather than on what it measures.
+    const tag = Date.now().toString(36);
     const distinct = await h.db.execute<{ id: string }>(sql`
       INSERT INTO user_account (email, username, password_hash, display_name, status)
-      SELECT 'fanout' || n || '@example.invalid', 'fanout' || n, 'x', 'Fan Out ' || n, 'disabled'
+      SELECT 'fanout' || ${tag} || n || '@example.invalid', 'fanout' || ${tag} || n,
+             'x', 'Fan Out ' || n, 'disabled'
         FROM generate_series(1, 6000) AS n
       RETURNING id
     `);
@@ -888,4 +893,114 @@ describe('a fan-out larger than one statement can carry', () => {
     `);
     expect(Number(written[0]?.count ?? 0)).toBeGreaterThanOrEqual(6_000);
   }, 60_000);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+describe('sound cues', () => {
+  /**
+   * The same shape as muting a category, and for the same reason.
+   *
+   * A cue silences a SOUND; muting a category hides a BANNER. They are separate
+   * because they do different things, and because a cue can exist for something
+   * that raises no notification at all — the confirmation that your own status
+   * change landed.
+   */
+  async function readPrefs(headers: Record<string, string>) {
+    const res = await h.app.inject({
+      method: 'GET', url: '/api/v1/notifications/preferences', headers,
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json() as { mutedCues: string[]; soundEnabled: boolean };
+  }
+
+  async function writePrefs(headers: Record<string, string>, payload: Record<string, unknown>) {
+    const res = await h.app.inject({
+      method: 'PUT', url: '/api/v1/notifications/preferences', headers, payload,
+    });
+    return { status: res.statusCode, body: res.json() as { mutedCues?: string[] } };
+  }
+
+  it('starts with nothing silenced', async () => {
+    const user = await operator('cuedefault', 'PD', 'officer');
+    expect((await readPrefs(user.headers)).mutedCues).toEqual([]);
+  });
+
+  it('persists a silenced cue', async () => {
+    const user = await operator('cuewrite', 'PD', 'officer');
+    const result = await writePrefs(user.headers, { mutedCues: ['message', 'status'] });
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(result.body.mutedCues?.sort()).toEqual(['message', 'status']);
+    expect((await readPrefs(user.headers)).mutedCues.sort()).toEqual(['message', 'status']);
+  });
+
+  it('STRIPS panic on the way in, and answers with what was actually stored', async () => {
+    /**
+     * The request is not refused — it is honoured minus the part that is not
+     * allowed, and the response says so. A 400 would leave a client guessing
+     * which of its cues survived; returning the stored state means it renders
+     * the truth.
+     */
+    const user = await operator('cuepanic', 'PD', 'officer');
+    const result = await writePrefs(user.headers, { mutedCues: ['panic', 'message'] });
+
+    expect(result.status).toBe(200);
+    expect(result.body.mutedCues).toEqual(['message']);
+    expect((await readPrefs(user.headers)).mutedCues).toEqual(['message']);
+  });
+
+  it('STRIPS panic on the way OUT, so a hand-edited row cannot silence anybody', async () => {
+    // The CHECK constraint refuses this too; the read path is what protects an
+    // operator whose row arrived from an older backup taken before it existed.
+    const user = await operator('cuepanicrow', 'PD', 'officer');
+    await writePrefs(user.headers, { mutedCues: ['message'] });
+
+    await h.db.execute(sql`
+      ALTER TABLE notification_preference DROP CONSTRAINT notification_preference_panic_cue_unmutable
+    `);
+    try {
+      await h.db.execute(sql`
+        UPDATE notification_preference SET muted_cues = ARRAY['panic', 'message']
+         WHERE user_id = ${await userIdOf(user.creds.username)}
+      `);
+      expect((await readPrefs(user.headers)).mutedCues).toEqual(['message']);
+    } finally {
+      await h.db.execute(sql`
+        UPDATE notification_preference SET muted_cues = ARRAY['message']
+         WHERE user_id = ${await userIdOf(user.creds.username)}
+      `);
+      await h.db.execute(sql`
+        ALTER TABLE notification_preference
+          ADD CONSTRAINT notification_preference_panic_cue_unmutable
+          CHECK (NOT ('panic' = ANY (muted_cues)))
+      `);
+    }
+  });
+
+  it('is refused by the DATABASE as well', async () => {
+    const user = await operator('cuepanicdb', 'PD', 'officer');
+    await writePrefs(user.headers, { mutedCues: [] });
+
+    await expect(h.db.execute(sql`
+      UPDATE notification_preference SET muted_cues = ARRAY['panic']
+       WHERE user_id = ${await userIdOf(user.creds.username)}
+    `)).rejects.toThrow();
+  });
+
+  it('drops a cue this build does not know rather than storing it', async () => {
+    // A newer client naming a cue this deployment has never heard of is not an
+    // error; it is a cue that does not exist here, and the response says so.
+    const user = await operator('cueunknown', 'PD', 'officer');
+    const result = await writePrefs(user.headers, { mutedCues: ['message', 'teleport'] });
+    expect(result.status).toBe(200);
+    expect(result.body.mutedCues).toEqual(['message']);
+  });
+
+  it('leaves the cue list alone when a request does not mention it', async () => {
+    // Engineering rule 48: a client that predates this field must not wipe it
+    // by saving the volume.
+    const user = await operator('cuepartial', 'PD', 'officer');
+    await writePrefs(user.headers, { mutedCues: ['message'] });
+    await writePrefs(user.headers, { soundVolume: 20 });
+    expect((await readPrefs(user.headers)).mutedCues).toEqual(['message']);
+  });
 });

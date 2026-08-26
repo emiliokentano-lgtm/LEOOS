@@ -390,6 +390,15 @@ export interface NotificationPreferences {
   criticalToasts: boolean;
   /** Categories the operator has muted in-app. Panic can never be muted. */
   mutedCategories: NotificationCategory[];
+  /**
+   * Sound cues the operator has silenced individually.
+   *
+   * Separate from `mutedCategories`, which hides a notification's banner — this
+   * only takes away its sound, and it also covers cues that are not
+   * notifications at all (the status confirmation). Panic can never be
+   * silenced; see UNMUTABLE_CUES in ./sound.
+   */
+  mutedCues: string[];
 }
 
 export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
@@ -398,6 +407,7 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   soundVolume: 60,
   criticalToasts: true,
   mutedCategories: [],
+  mutedCues: [],
 };
 
 /**
