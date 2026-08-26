@@ -6,7 +6,7 @@ import {
 import {
   citext, createdAt, fieldRequestKindEnum, fieldRequestStatusEnum, incidentLinkEntityEnum,
   incidentLinkRelationEnum, incidentLogEntryEnum, incidentSourceEnum, incidentStatusEnum,
-  mapMarkerTypeEnum, primaryId, softDelete, timestamps, unitStatusEnum,
+  mapMarkerTypeEnum, mapShapeKindEnum, primaryId, softDelete, timestamps, unitStatusEnum,
 } from './_shared';
 import { userAccount } from './identity';
 import { organization, organizationMember } from './organization';
@@ -440,6 +440,53 @@ export const mapMarker = pgTable(
   (t) => [
     index('map_marker_org_idx').on(t.organizationId).where(sql`deleted_at IS NULL`),
     index('map_marker_expiry_idx').on(t.expiresAt).where(sql`expires_at IS NOT NULL`),
+  ],
+);
+
+/**
+ * Areas and routes drawn on the map.
+ *
+ * A SEPARATE TABLE FROM `mapMarker`, and that is not a parallel model. A marker
+ * is a point; a shape is a sequence of them. One table would mean every marker
+ * row carrying a nullable geometry column and every query filtering on kind.
+ * They share what should be shared — the `map.markers.manage` permission, the
+ * organization visibility rule, expiry-on-read, soft deletion — and differ only
+ * in the geometry.
+ *
+ * GEOMETRY IS TWO PARALLEL ARRAYS, not PostGIS and not jsonb. PostGIS answers
+ * spatial QUERIES ("which shapes contain this point") and this product asks
+ * none: shapes are drawn, listed and rendered, never intersected. Arrays let the
+ * database enforce the point count, which an opaque blob cannot — see the CHECK
+ * constraints in migration 0014.
+ */
+export const mapShape = pgTable(
+  'map_shape',
+  {
+    id: primaryId(),
+    kind: mapShapeKindEnum('kind').notNull(),
+    /** Null means visible to every organization, exactly as it does for a marker. */
+    organizationId: uuid('organization_id').references(() => organization.id, {
+      onDelete: 'cascade',
+    }),
+    label: text('label').notNull(),
+    description: text('description'),
+    color: text('color'),
+    pointsX: doublePrecision('points_x').array().notNull(),
+    pointsY: doublePrecision('points_y').array().notNull(),
+    createdBy: uuid('created_by').references(() => userAccount.id, { onDelete: 'set null' }),
+    ...timestamps(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    ...softDelete(),
+  },
+  (t) => [
+    index('map_shape_live_idx').on(t.organizationId).where(sql`deleted_at IS NULL`),
+    check('map_shape_points_paired', sql`array_length(points_x, 1) = array_length(points_y, 1)`),
+    check(
+      'map_shape_min_points',
+      sql`array_length(points_x, 1) >= CASE WHEN kind = 'area' THEN 3 ELSE 2 END`,
+    ),
+    check('map_shape_max_points', sql`array_length(points_x, 1) <= 500`),
+    check('map_shape_label_not_blank', sql`length(btrim(label)) > 0`),
   ],
 );
 

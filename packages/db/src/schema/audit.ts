@@ -217,6 +217,13 @@ export const AUDIT_ACTIONS = {
   MAP_MARKER_UPDATED: 'map.marker_updated',
   MAP_MARKER_REMOVED: 'map.marker_removed',
   /**
+   * Shape lifecycle. `drawn` rather than `created`, because that is what the
+   * operator did and the log reads better for it.
+   */
+  MAP_SHAPE_DRAWN: 'map.shape_drawn',
+  MAP_SHAPE_UPDATED: 'map.shape_updated',
+  MAP_SHAPE_REMOVED: 'map.shape_removed',
+  /**
    * Position playback. Reviewing where a unit was over past hours is a
    * surveillance capability, so every query is recorded — see
    * docs/architecture/05-map.md §5.

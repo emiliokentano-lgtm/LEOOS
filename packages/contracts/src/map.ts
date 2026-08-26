@@ -2,6 +2,7 @@ import type { IncidentPriority, IncidentStatusKey } from './statuses';
 // The offline threshold is the ingest layer's own position TTL, imported rather
 // than duplicated so the two cannot drift apart. See UNIT_OFFLINE_AFTER_MS.
 import { FIVEM_POSITION_TTL_MS } from './fivem';
+import type { MapShape } from './map-shapes';
 
 /**
  * Map subsystem contracts.
@@ -202,6 +203,12 @@ export interface MapSnapshot {
   units: MapUnit[];
   incidents: MapIncidentMarker[];
   markers: MapMarker[];
+  /**
+   * Areas and routes. In the SNAPSHOT rather than behind their own endpoint: a
+   * second endpoint would be a second visibility clause to keep in step with
+   * this one, and the map has one payload for exactly that reason.
+   */
+  shapes: MapShape[];
   /** Organizations the caller may filter by — the ones that can appear at all. */
   organizations: MapOrganizationRef[];
   capabilities: MapCapabilities;
@@ -307,6 +314,7 @@ export interface MapFilterState {
   showUnits: boolean;
   showIncidents: boolean;
   showMarkers: boolean;
+  showShapes: boolean;
   /** Free text over callsign, unit name, crew names and plate. */
   query: string;
 }
@@ -323,6 +331,7 @@ export const EMPTY_MAP_FILTER: MapFilterState = {
   showUnits: true,
   showIncidents: true,
   showMarkers: true,
+  showShapes: true,
   query: '',
 };
 
@@ -338,7 +347,8 @@ export function countActiveMapFilters(filter: MapFilterState): number {
     (filter.includeOffDuty ? 1 : 0) +
     (filter.showUnits ? 0 : 1) +
     (filter.showIncidents ? 0 : 1) +
-    (filter.showMarkers ? 0 : 1)
+    (filter.showMarkers ? 0 : 1) +
+    (filter.showShapes ? 0 : 1)
   );
 }
 

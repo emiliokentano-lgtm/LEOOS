@@ -241,6 +241,15 @@ export const mapMarkerTypeEnum = pgEnum('map_marker_type', [
   'custom',
 ]);
 
+/**
+ * A shape is a SEQUENCE of points; a marker is one point.
+ *
+ * `route` is deliberately not called a path or a navigation: this repository has
+ * no road graph, so a route is a polyline somebody drew. See
+ * docs/architecture/05-map.md §9.5.
+ */
+export const mapShapeKindEnum = pgEnum('map_shape_kind', ['area', 'route']);
+
 export const actorTypeEnum = pgEnum('actor_type', ['user', 'system', 'game_server', 'job']);
 export const auditOutcomeEnum = pgEnum('audit_outcome', ['success', 'denied', 'error']);
 

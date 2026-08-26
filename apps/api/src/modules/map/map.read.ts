@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import {
-  incident, incidentType, mapMarker, operationalStatus, organization, organizationMember,
-  person, unit, unitMember, userAccount, vehicle, type Database,
+  incident, incidentType, mapMarker, mapShape, operationalStatus, organization,
+  organizationMember, person, unit, unitMember, userAccount, vehicle, type Database,
 } from '@leoos/db';
 import type { ActorContext } from '@leoos/authz-core';
 import { resolveMapScope, type MapScope } from './map.scope.js';
@@ -323,6 +323,95 @@ export async function listMapMarkers(db: Database, scope: MapScope): Promise<Map
       orgClause,
     ))
     .orderBy(desc(mapMarker.createdAt), asc(mapMarker.id));
+}
+
+export interface MapShapeRow {
+  id: string;
+  kind: string;
+  label: string;
+  description: string | null;
+  color: string | null;
+  pointsX: number[];
+  pointsY: number[];
+  organizationId: string | null;
+  organizationKey: string | null;
+  organizationShortName: string | null;
+  organizationColor: string | null;
+  createdByName: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  expiresAt: Date | null;
+}
+
+/**
+ * Operator-drawn areas and routes.
+ *
+ * THE SAME visibility clause as markers, and gated on the same `canViewMarkers`.
+ * A shape the caller may not see is never SELECTed — it is not in the payload
+ * the browser filters, which is the whole reason the client-side filter is
+ * allowed to be a view filter (docs/architecture/05-map.md §5).
+ *
+ * Lapsed shapes are excluded in SQL, like lapsed markers, so a cordon stops
+ * being drawn the moment it lapses rather than when a sweep happens to run.
+ */
+export async function listMapShapes(db: Database, scope: MapScope): Promise<MapShapeRow[]> {
+  if (!scope.canViewMarkers) return [];
+
+  const orgClause = scope.canTrackAllOrganizations
+    ? undefined
+    : scope.organizationIds.length > 0
+      ? or(inArray(mapShape.organizationId, scope.organizationIds), isNull(mapShape.organizationId))
+      : isNull(mapShape.organizationId);
+
+  return db
+    .select({
+      id: mapShape.id,
+      kind: mapShape.kind,
+      label: mapShape.label,
+      description: mapShape.description,
+      color: mapShape.color,
+      pointsX: mapShape.pointsX,
+      pointsY: mapShape.pointsY,
+      organizationId: mapShape.organizationId,
+      organizationKey: organization.key,
+      organizationShortName: organization.shortName,
+      organizationColor: organization.color,
+      createdByName: userAccount.displayName,
+      createdAt: mapShape.createdAt,
+      updatedAt: mapShape.updatedAt,
+      expiresAt: mapShape.expiresAt,
+    })
+    .from(mapShape)
+    .leftJoin(organization, eq(organization.id, mapShape.organizationId))
+    .leftJoin(userAccount, eq(userAccount.id, mapShape.createdBy))
+    .where(and(
+      isNull(mapShape.deletedAt),
+      or(isNull(mapShape.expiresAt), gt(mapShape.expiresAt, sql`now()`)),
+      orgClause,
+    ))
+    .orderBy(desc(mapShape.createdAt), asc(mapShape.id));
+}
+
+/**
+ * One shape, WITHOUT the visibility clause.
+ *
+ * The caller applies its own — `assertOverlayScope` — because a mutation must
+ * distinguish "another organization's" from "does not exist", and a query that
+ * had already filtered one out could not tell them apart.
+ */
+export async function getShapeCore(db: Database, shapeId: string) {
+  const [row] = await db
+    .select({
+      id: mapShape.id,
+      kind: mapShape.kind,
+      label: mapShape.label,
+      organizationId: mapShape.organizationId,
+      deletedAt: mapShape.deletedAt,
+    })
+    .from(mapShape)
+    .where(eq(mapShape.id, shapeId))
+    .limit(1);
+  return row ?? null;
 }
 
 /** Organizations that can appear on this caller's map — the filter chip list. */

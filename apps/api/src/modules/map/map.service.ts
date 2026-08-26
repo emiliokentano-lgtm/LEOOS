@@ -1,20 +1,21 @@
 import { and, eq, isNull } from 'drizzle-orm';
 import {
-  isWithinWorldBounds,
-  type MapSnapshot, type MapSourceStatus, type MapTick, type MapUnit,
-  type UnitPositionDelta,
+  isWithinWorldBounds, validateShapeGeometry,
+  type MapShapeKind, type MapShapePoint, type MapSnapshot, type MapSourceStatus, type MapTick,
+  type MapUnit, type UnitPositionDelta,
 } from '@leoos/contracts';
-import { AUDIT_ACTIONS, mapMarker, type Database } from '@leoos/db';
+import { AUDIT_ACTIONS, mapMarker, mapShape, type Database } from '@leoos/db';
 import type { ActorContext } from '@leoos/authz-core';
 import { ForbiddenError, NotFoundError, ValidationError } from '../../lib/errors.js';
 import { writeAudit } from '../../lib/audit.js';
 import type { RequestMeta } from '../auth/auth.service.js';
 import {
-  getMarkerCore, listMapCrew, listMapIncidents, listMapMarkers, listMapOrganizations,
-  listMapUnits, type MapUnitRow,
+  getMarkerCore, getShapeCore, listMapCrew, listMapIncidents, listMapMarkers,
+  listMapOrganizations, listMapShapes, listMapUnits, type MapUnitRow,
 } from './map.read.js';
 import {
-  toMapCapabilitiesDto, toMapIncidentDto, toMapMarkerDto, toMapUnitDto, toPositionDeltaDto,
+  toMapCapabilitiesDto, toMapIncidentDto, toMapMarkerDto, toMapShapeDto, toMapUnitDto,
+  toPositionDeltaDto,
 } from './map.dto.js';
 import type { MapScope } from './map.scope.js';
 import type { LivePositionStore } from './sources/live-positions.js';
@@ -65,10 +66,11 @@ export async function buildMapSnapshot(
   deps: SnapshotDeps,
   scope: MapScope,
 ): Promise<MapSnapshot> {
-  const [unitRows, incidentRows, markerRows, organizations] = await Promise.all([
+  const [unitRows, incidentRows, markerRows, shapeRows, organizations] = await Promise.all([
     listMapUnits(deps.db, scope),
     listMapIncidents(deps.db, scope),
     listMapMarkers(deps.db, scope),
+    listMapShapes(deps.db, scope),
     listMapOrganizations(deps.db, scope),
   ]);
 
@@ -91,6 +93,7 @@ export async function buildMapSnapshot(
       .map(toMapIncidentDto)
       .filter((i): i is NonNullable<typeof i> => i !== null),
     markers: markerRows.map(toMapMarkerDto),
+    shapes: shapeRows.map(toMapShapeDto),
     organizations,
     capabilities: toMapCapabilitiesDto(scope),
     source: deps.source,
@@ -165,25 +168,31 @@ function assertPlaceable(x: number, y: number): void {
 }
 
 /**
- * Decides which organization a marker belongs to.
+ * Decides which organization a marker or a shape belongs to.
  *
- * NOT read from the request body as given: a caller may only pin a marker to an
- * organization they are acting in. Allowing an arbitrary id would let anyone
+ * NOT read from the request body as given: a caller may only pin an overlay to
+ * an organization they are acting in. Allowing an arbitrary id would let anyone
  * place a "roadblock" on another agency's map — cosmetic in isolation, but the
  * same shape of bug as every cross-organization write this system defends
  * against, so it is refused the same way (engineering rule 11).
  *
- * A GLOBAL marker (`null`) requires `map.track_all_orgs`, the same clearance
+ * A GLOBAL overlay (`null`) requires `map.track_all_orgs`, the same clearance
  * that lets someone see every organization in the first place. A caller without
  * it is scoped DOWN to their own organization rather than refused: `null` is
- * indistinguishable from an omitted field, and placing a marker without naming
+ * indistinguishable from an omitted field, and placing something without naming
  * an organization is the ordinary case, not an attempt at anything.
+ *
+ * ONE function for both, because it is one rule. A second copy for shapes would
+ * be a second copy to drift from this one, and drift here is a cross-agency
+ * write.
  */
-function resolveMarkerOrganization(scope: MapScope, requested: string | null): string | null {
+function resolveOverlayOrganization(
+  scope: MapScope, requested: string | null, noun: string,
+): string | null {
   if (requested === null) {
     if (!scope.canTrackAllOrganizations) {
       if (scope.actorOrganizationId === null) {
-        throw new ForbiddenError('Select an organization before placing a marker.');
+        throw new ForbiddenError(`Select an organization before placing a ${noun}.`);
       }
       return scope.actorOrganizationId;
     }
@@ -192,7 +201,9 @@ function resolveMarkerOrganization(scope: MapScope, requested: string | null): s
 
   if (scope.canTrackAllOrganizations) return requested;
   if (requested !== scope.actorOrganizationId) {
-    throw new ForbiddenError('A marker can only be placed for the organization you are acting in.');
+    throw new ForbiddenError(
+      `A ${noun} can only be placed for the organization you are acting in.`,
+    );
   }
   return requested;
 }
@@ -208,7 +219,7 @@ export async function createMapMarker(
   if (!scope.canManageMarkers) throw new ForbiddenError('You cannot place map markers.');
   assertPlaceable(input.x, input.y);
 
-  const organizationId = resolveMarkerOrganization(scope, input.organizationId);
+  const organizationId = resolveOverlayOrganization(scope, input.organizationId, 'marker');
 
   return db.transaction(async (tx) => {
     const [created] = await tx
@@ -266,7 +277,7 @@ export async function updateMapMarker(
   // Scope before anything else, so a cross-organization attempt is refused as
   // exactly that rather than as a missing permission (the ordering every other
   // mutation in this codebase uses).
-  assertMarkerScope(scope, existing.organizationId);
+  assertOverlayScope(scope, existing.organizationId, 'marker');
 
   await db.transaction(async (tx) => {
     await tx
@@ -303,7 +314,7 @@ export async function removeMapMarker(
 
   const existing = await getMarkerCore(db, markerId);
   if (!existing || existing.deletedAt !== null) throw new NotFoundError('marker');
-  assertMarkerScope(scope, existing.organizationId);
+  assertOverlayScope(scope, existing.organizationId, 'marker');
 
   await db.transaction(async (tx) => {
     // Soft deletion (ADR-0008): a marker is part of the record of how a scene was
@@ -324,12 +335,205 @@ export async function removeMapMarker(
   });
 }
 
-function assertMarkerScope(scope: MapScope, markerOrganizationId: string | null): void {
+/**
+ * Refuses a change to somebody else's overlay.
+ *
+ * Another organization's is NOT FOUND rather than forbidden — the same answer
+ * the rest of the product gives about rows belonging to another agency, so a
+ * caller cannot enumerate what exists elsewhere by reading status codes. A
+ * SHARED overlay is forbidden rather than hidden: the caller can see it, so
+ * pretending it does not exist would be a lie they can disprove by looking.
+ */
+function assertOverlayScope(
+  scope: MapScope, organizationId: string | null, noun: string,
+): void {
   if (scope.canTrackAllOrganizations) return;
-  if (markerOrganizationId === null) {
-    throw new ForbiddenError('Only a global map administrator can change a shared marker.');
+  if (organizationId === null) {
+    throw new ForbiddenError(`Only a global map administrator can change a shared ${noun}.`);
   }
-  if (!scope.organizationIds.includes(markerOrganizationId)) {
-    throw new NotFoundError('marker');
+  if (!scope.organizationIds.includes(organizationId)) {
+    throw new NotFoundError(noun);
   }
+}
+
+// ── Shape mutations ────────────────────────────────────────────────────────
+
+/**
+ * Areas and routes.
+ *
+ * SHARE what should be shared with markers and differ only where they genuinely
+ * differ. The permission is the same `map.markers.manage`; the organization rule
+ * is the same function; the scope check is the same function; expiry and soft
+ * deletion behave identically. What is new is the GEOMETRY, and that is the only
+ * thing validated differently.
+ *
+ * A separate `map.shapes.manage` permission was considered and rejected: it
+ * would give every installation a second switch to forget to set, guarding a
+ * capability nobody has ever wanted to grant separately. Drawing a cordon and
+ * dropping a roadblock pin are the same job.
+ */
+
+export interface ShapeInput {
+  kind: MapShapeKind;
+  label: string;
+  description: string | null;
+  color: string | null;
+  points: MapShapePoint[];
+  /** Requested; validated against the caller's own scope, never trusted. */
+  organizationId: string | null;
+  expiresAt: Date | null;
+}
+
+/**
+ * Geometry validation, server-side, before anything is written.
+ *
+ * The rule lives in `@leoos/contracts` so the drawing tool can refuse a bad
+ * shape before the round trip, and is enforced HERE because the drawing tool is
+ * a convenience and this is the boundary. The point cap in particular is not a
+ * tidiness rule: an unbounded array is an allocation whose size the sender
+ * chooses, which is a payload attack with a friendly name.
+ */
+function assertDrawable(kind: MapShapeKind, points: MapShapePoint[]): void {
+  const problem = validateShapeGeometry(kind, points);
+  if (problem !== null) throw new ValidationError(problem);
+}
+
+export async function createMapShape(
+  db: Database,
+  actorUserId: string,
+  scope: MapScope,
+  input: ShapeInput,
+  meta: RequestMeta,
+): Promise<{ id: string }> {
+  if (!scope.canManageMarkers) throw new ForbiddenError('You cannot draw on the map.');
+  assertDrawable(input.kind, input.points);
+
+  const organizationId = resolveOverlayOrganization(scope, input.organizationId, 'shape');
+
+  return db.transaction(async (tx) => {
+    const [created] = await tx
+      .insert(mapShape)
+      .values({
+        kind: input.kind,
+        organizationId,
+        label: input.label,
+        description: input.description,
+        color: input.color,
+        pointsX: input.points.map((p) => p.x),
+        pointsY: input.points.map((p) => p.y),
+        createdBy: actorUserId,
+        expiresAt: input.expiresAt,
+      })
+      .returning({ id: mapShape.id });
+
+    if (!created) throw new ValidationError('The shape could not be created.');
+
+    await writeAudit(tx, {
+      action: AUDIT_ACTIONS.MAP_SHAPE_DRAWN,
+      actorUserId, organizationId,
+      entityType: 'map_shape', entityId: created.id,
+      after: { kind: input.kind, label: input.label },
+      metadata: {
+        // The point COUNT, not the geometry: an audit row records what happened,
+        // it is not a second copy of the shape.
+        pointCount: input.points.length,
+        global: organizationId === null,
+      },
+      ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
+    });
+
+    return { id: created.id };
+  });
+}
+
+export interface ShapeChanges {
+  label?: string;
+  description?: string | null;
+  color?: string | null;
+  points?: MapShapePoint[];
+  expiresAt?: Date | null;
+}
+
+export async function updateMapShape(
+  db: Database,
+  actorUserId: string,
+  scope: MapScope,
+  shapeId: string,
+  changes: ShapeChanges,
+  meta: RequestMeta,
+): Promise<void> {
+  if (!scope.canManageMarkers) throw new ForbiddenError('You cannot change map shapes.');
+
+  const existing = await getShapeCore(db, shapeId);
+  if (!existing || existing.deletedAt !== null) throw new NotFoundError('shape');
+
+  // Scope BEFORE geometry, so a cross-organization attempt is refused as exactly
+  // that rather than being told its polygon is malformed.
+  assertOverlayScope(scope, existing.organizationId, 'shape');
+
+  /**
+   * The KIND cannot change, and re-validating against the STORED one is why.
+   *
+   * Turning a two-point route into an "area" would produce a polygon enclosing
+   * nothing, and the honest fix is to draw the area — so a change of kind is not
+   * offered rather than being silently coerced.
+   */
+  if (changes.points !== undefined) {
+    assertDrawable(existing.kind as MapShapeKind, changes.points);
+  }
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(mapShape)
+      .set({
+        ...(changes.label === undefined ? {} : { label: changes.label }),
+        ...(changes.description === undefined ? {} : { description: changes.description }),
+        ...(changes.color === undefined ? {} : { color: changes.color }),
+        ...(changes.points === undefined ? {} : {
+          pointsX: changes.points.map((p) => p.x),
+          pointsY: changes.points.map((p) => p.y),
+        }),
+        ...(changes.expiresAt === undefined ? {} : { expiresAt: changes.expiresAt }),
+      })
+      .where(and(eq(mapShape.id, shapeId), isNull(mapShape.deletedAt)));
+
+    await writeAudit(tx, {
+      action: AUDIT_ACTIONS.MAP_SHAPE_UPDATED,
+      actorUserId, organizationId: existing.organizationId,
+      entityType: 'map_shape', entityId: shapeId,
+      metadata: { changed: Object.keys(changes) },
+      ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
+    });
+  });
+}
+
+export async function removeMapShape(
+  db: Database,
+  actorUserId: string,
+  scope: MapScope,
+  shapeId: string,
+  meta: RequestMeta,
+): Promise<void> {
+  if (!scope.canManageMarkers) throw new ForbiddenError('You cannot remove map shapes.');
+
+  const existing = await getShapeCore(db, shapeId);
+  if (!existing || existing.deletedAt !== null) throw new NotFoundError('shape');
+  assertOverlayScope(scope, existing.organizationId, 'shape');
+
+  await db.transaction(async (tx) => {
+    // Soft (ADR-0008): "when was the cordon lifted, and by whom" is a question
+    // asked after the fact, and a hard delete answers it with nothing.
+    await tx
+      .update(mapShape)
+      .set({ deletedAt: new Date(), deletedBy: actorUserId })
+      .where(and(eq(mapShape.id, shapeId), isNull(mapShape.deletedAt)));
+
+    await writeAudit(tx, {
+      action: AUDIT_ACTIONS.MAP_SHAPE_REMOVED,
+      actorUserId, organizationId: existing.organizationId,
+      entityType: 'map_shape', entityId: shapeId,
+      before: { kind: existing.kind, label: existing.label },
+      ip: meta.ip, userAgent: meta.userAgent, requestId: meta.requestId,
+    });
+  });
 }

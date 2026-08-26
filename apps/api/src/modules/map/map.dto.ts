@@ -1,9 +1,12 @@
 import type {
   IncidentPriority, IncidentStatusKey, MapCapabilities, MapIncidentMarker, MapMarker,
-  MapMarkerType, MapOrganizationRef, MapUnit, UnitLocation, UnitPositionDelta,
+  MapMarkerType, MapOrganizationRef, MapShape, MapShapeKind, MapShapePoint, MapUnit,
+  UnitLocation, UnitPositionDelta,
 } from '@leoos/contracts';
 import type { MapScope } from './map.scope.js';
-import type { MapCrewRow, MapIncidentRow, MapMarkerRow, MapUnitRow } from './map.read.js';
+import type {
+  MapCrewRow, MapIncidentRow, MapMarkerRow, MapShapeRow, MapUnitRow,
+} from './map.read.js';
 
 /**
  * Map serialisation boundary.
@@ -142,6 +145,39 @@ export function toMapMarkerDto(row: MapMarkerRow): MapMarker {
     ),
     createdByName: row.createdByName,
     createdAt: row.createdAt.toISOString(),
+    expiresAt: row.expiresAt === null ? null : row.expiresAt.toISOString(),
+  };
+}
+
+/**
+ * Re-pairs the two stored coordinate arrays into points.
+ *
+ * The DATABASE stores them apart so it can constrain the point count; the WIRE
+ * carries them together so a renderer cannot pair them up wrongly. If the two
+ * ever disagree in length — which a CHECK constraint forbids — the shorter wins
+ * rather than producing a point with an undefined coordinate.
+ */
+function pointsOf(xs: readonly number[], ys: readonly number[]): MapShapePoint[] {
+  const length = Math.min(xs.length, ys.length);
+  const points: MapShapePoint[] = [];
+  for (let i = 0; i < length; i += 1) points.push({ x: xs[i]!, y: ys[i]! });
+  return points;
+}
+
+export function toMapShapeDto(row: MapShapeRow): MapShape {
+  return {
+    id: row.id,
+    kind: row.kind as MapShapeKind,
+    label: row.label,
+    description: row.description,
+    color: row.color,
+    points: pointsOf(row.pointsX, row.pointsY),
+    organization: optionalOrganizationRef(
+      row.organizationId, row.organizationKey, row.organizationShortName, row.organizationColor,
+    ),
+    createdByName: row.createdByName,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
     expiresAt: row.expiresAt === null ? null : row.expiresAt.toISOString(),
   };
 }

@@ -1,11 +1,12 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { MAP } from '@leoos/contracts';
+import { MAP, MAP_SHAPE_MAX_POINTS } from '@leoos/contracts';
 import { NotFoundError } from '../../lib/errors.js';
 import type { RequestMeta } from '../auth/auth.service.js';
 import { resolveMapScope, type MapScope } from './map.scope.js';
 import {
-  buildMapSnapshot, buildMapTick, createMapMarker, removeMapMarker, updateMapMarker,
+  buildMapSnapshot, buildMapTick, createMapMarker, createMapShape, removeMapMarker,
+  removeMapShape, updateMapMarker, updateMapShape,
 } from './map.service.js';
 
 /**
@@ -26,6 +27,7 @@ import {
  */
 
 const markerIdParam = z.object({ markerId: z.uuid() });
+const shapeIdParam = z.object({ shapeId: z.uuid() });
 
 /** Coordinates are bounded at the edge, not merely typed as numbers. */
 const worldX = z.number().finite().min(MAP.worldMinX).max(MAP.worldMaxX);
@@ -63,6 +65,45 @@ const updateMarkerSchema = z.object({
   .refine((v) => (v.x === undefined) === (v.y === undefined), {
     message: 'Provide both x and y to move a marker.',
   });
+
+/**
+ * Geometry, bounded at the EDGE.
+ *
+ * The point cap is here as well as in the service and as a CHECK constraint,
+ * and that is deliberate rather than redundant: a 100 000-point array is
+ * rejected before it is parsed into objects, which is the difference between a
+ * 400 and a garbage-collection pause. `.strict()` throughout, so a client cannot
+ * smuggle a `z` or an `organizationId` into a point.
+ */
+const shapePoint = z.object({ x: worldX, y: worldY }).strict();
+const shapePoints = z.array(shapePoint).min(2).max(MAP_SHAPE_MAX_POINTS);
+
+const createShapeSchema = z.object({
+  kind: z.enum(['area', 'route']),
+  label: z.string().trim().min(1).max(80),
+  description: z.string().trim().max(500).nullish(),
+  color: z.string().trim().regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex colour.').nullish(),
+  points: shapePoints,
+  /** A REQUEST. The service decides, per engineering rule 11. */
+  organizationId: z.uuid().nullish(),
+  expiresAt: z.iso.datetime().nullish(),
+}).strict();
+
+/**
+ * `kind` is absent on purpose.
+ *
+ * A route cannot become an area: three points would be needed and two do not
+ * enclose anything. Offering the change and then refusing it is worse than not
+ * offering it.
+ */
+const updateShapeSchema = z.object({
+  label: z.string().trim().min(1).max(80).optional(),
+  description: z.string().trim().max(500).nullish(),
+  color: z.string().trim().regex(/^#[0-9a-fA-F]{6}$/).nullish(),
+  points: shapePoints.optional(),
+  expiresAt: z.iso.datetime().nullish(),
+}).strict()
+  .refine((v) => Object.keys(v).length > 0, { message: 'No changes supplied.' });
 
 const tickSchema = z.object({
   /**
@@ -175,6 +216,61 @@ export default async function mapRoutes(app: FastifyInstance): Promise<void> {
     await removeMapMarker(
       app.db, actor, request.auth!.userId, scope, markerId, meta(request),
     );
+    return reply.send({ removed: true });
+  });
+
+  // ── Shapes ───────────────────────────────────────────────────────────────
+  //
+  // There is no GET: shapes travel in the SNAPSHOT, with the units, the
+  // incidents and the markers. A second endpoint would be a second visibility
+  // clause to keep in step with the first, and the map has one payload for
+  // exactly that reason.
+  app.post('/shapes', async (request, reply) => {
+    const scope = requireMap(request);
+    const body = createShapeSchema.parse(request.body);
+
+    const result = await createMapShape(
+      app.db, request.auth!.userId, scope,
+      {
+        kind: body.kind,
+        label: body.label,
+        description: body.description ?? null,
+        color: body.color ?? null,
+        points: body.points,
+        organizationId: body.organizationId ?? null,
+        expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
+      },
+      meta(request),
+    );
+    return reply.status(201).send(result);
+  });
+
+  app.patch('/shapes/:shapeId', async (request, reply) => {
+    const scope = requireMap(request);
+    const { shapeId } = shapeIdParam.parse(request.params);
+    const body = updateShapeSchema.parse(request.body);
+
+    await updateMapShape(
+      app.db, request.auth!.userId, scope, shapeId,
+      {
+        ...(body.label === undefined ? {} : { label: body.label }),
+        ...(body.description === undefined ? {} : { description: body.description ?? null }),
+        ...(body.color === undefined ? {} : { color: body.color ?? null }),
+        ...(body.points === undefined ? {} : { points: body.points }),
+        ...(body.expiresAt === undefined
+          ? {}
+          : { expiresAt: body.expiresAt ? new Date(body.expiresAt) : null }),
+      },
+      meta(request),
+    );
+    return reply.send({ updated: true });
+  });
+
+  app.delete('/shapes/:shapeId', async (request, reply) => {
+    const scope = requireMap(request);
+    const { shapeId } = shapeIdParam.parse(request.params);
+
+    await removeMapShape(app.db, request.auth!.userId, scope, shapeId, meta(request));
     return reply.send({ removed: true });
   });
 }
