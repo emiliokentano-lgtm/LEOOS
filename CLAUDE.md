@@ -223,6 +223,7 @@ regression test that fails without the fix — see
 | 29 | Parallel arrays rather than PostGIS. PostGIS answers spatial QUERIES and this product asks none — shapes are drawn and rendered, never intersected — and arrays let the database constrain the point count, which jsonb cannot. | [migration 0014](packages/db/migrations/0014_map_shapes.sql) |
 | 34, 45 | THIS REPOSITORY HAS NO ROAD GRAPH. A "route" is a polyline a human drew, its size is reported as DRAWN LENGTH, and the detail panel says in words that it does not follow roads. The benchmark states what it does not measure — rasterisation — rather than reporting its number as a frame time. | [map §10.0, §10.3](docs/architecture/05-map.md) |
 | 31, 32, 40 | The geometry and cross-organization guards are release-gate tests, each verified by being broken first: nine fail without them. | `apps/api/test/map.test.ts` |
+| 40, 41 | The walkthrough is a release gate, and it earned its keep: it found that the scope dropdown offered agencies the caller could not draw for and DEFAULTED to one, so a PD sergeant's cordon was refused after being drawn. Fixed by not offering an option that can only fail — in the marker dialog too, which the shape dialog had inherited it from. | [map §10.6](docs/architecture/05-map.md), `apps/web/scripts/live-map-check.mjs` |
 
 ### Global administration
 

@@ -637,3 +637,22 @@ list:
 Each guard was verified by breaking it: with `assertOverlayScope`,
 `resolveOverlayOrganization` and `assertDrawable` disabled for shapes, **nine of
 these tests fail**.
+
+`apps/web/scripts/live-map-check.mjs` adds the two questions a unit test cannot
+answer: whether the modal drawing tool places points where they are clicked, and
+whether a shape stays inside its organization once it is in a live payload. It
+draws a four-point cordon through the real tool, reads it back from the server,
+and then opens a session in another organization and searches its **raw snapshot
+text** for the label and the id — a shape that reached the browser at all has
+already leaked, whatever the screen chooses to draw.
+
+**It earned its keep immediately.** The cordon came back as `undefined`: the
+scope dropdown offered "organizations that can appear on this caller's map",
+which includes agencies that merely share on the public map, and defaulted to the
+first of them — LSMD, for a PD sergeant. The API refused the save, correctly,
+*after* the shape had been drawn. Two things came out of that: a caller without
+`map.track_all_orgs` is now offered no scope field at all, since the organization
+they are acting in is the only value that would be accepted; and the marker
+dialog, which the shape dialog had inherited the pattern from, had the same
+defect and was fixed with it. The walkthrough now asserts the cordon belongs to
+the agency that drew it.
