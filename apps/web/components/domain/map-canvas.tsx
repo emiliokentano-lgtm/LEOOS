@@ -2,11 +2,13 @@
 
 import * as React from 'react';
 import {
-  DEFAULT_CLUSTER_CELL, MAP, MAP_TICK_MS, WORLD_BOUNDS,
+  DEFAULT_CLUSTER_CELL, MAP, MAP_SHAPE_KINDS, MAP_TICK_MS, WORLD_BOUNDS,
   boundsOf, centerViewport, clusterByScreenGrid, fitViewport, freshnessOf, matchesUnitFilter,
-  panViewport, projectToScreen, resizeViewport, screenToWorld, worldViewport, zoomViewportAt,
-  type MapFilterState, type MapIncidentMarker, type MapMarker,
-  type MapUnit, type ScreenPoint, type Viewport, type WorldPosition,
+  panViewport, projectToScreen, resizeViewport, screenToWorld, shapeBounds, shapeLabelAnchor,
+  visibleBounds, worldViewport, zoomViewportAt,
+  type MapFilterState, type MapIncidentMarker, type MapMarker, type MapShape,
+  type MapShapeKind, type MapShapePoint, type MapUnit, type ScreenPoint, type Viewport,
+  type WorldBounds, type WorldPosition,
 } from '@leoos/contracts';
 import { MapInterpolator } from '@/lib/map/interpolation';
 import type { MapUnitStore } from '@/lib/map/unit-store';
@@ -68,6 +70,17 @@ export interface MapCanvasProps {
   filter: MapFilterState;
   incidents: MapIncidentMarker[];
   markers: MapMarker[];
+  /**
+   * Areas and routes.
+   *
+   * SLOW-CHANGING, and that is what makes them safe to pass as a prop while
+   * positions are not: a shape changes when somebody draws one, which is a
+   * handful of times an hour. Their bounding boxes are computed once per change
+   * (`preparedShapes` below) rather than per frame, so an off-screen shape costs
+   * four comparisons instead of a projection per point.
+   */
+  shapes: MapShape[];
+  selectedShapeId: string | null;
   selectedUnitId: string | null;
   /**
    * The viewer's OWN unit, marked so it can be found at a glance.
@@ -85,6 +98,21 @@ export interface MapCanvasProps {
   onSelectUnit: (unit: MapUnit | null) => void;
   onSelectIncident: (incident: MapIncidentMarker) => void;
   onSelectMarker: (marker: MapMarker) => void;
+  onSelectShape: (shape: MapShape) => void;
+  /**
+   * The shape being drawn right now, or null.
+   *
+   * Lives in the PARENT, not here: the toolbar that shows the point count, the
+   * undo control and the finish button all read the same array, and a draft held
+   * privately in the canvas would need an event for each of them.
+   */
+  draft?: { kind: MapShapeKind; points: MapShapePoint[] } | null;
+  /**
+   * A click while drawing. When set, a plain left-click ADDS A POINT instead of
+   * selecting — which is why it is a separate callback rather than a mode flag:
+   * there is exactly one place the two behaviours diverge, and it is here.
+   */
+  onDraftPoint?: (position: WorldPosition) => void;
   /** Right-click, in world coordinates. Null when the caller may not place things. */
   onContextMenu?: (position: WorldPosition, at: ScreenPoint) => void;
   /**
@@ -115,7 +143,7 @@ const LABEL_OFFSET = 22;
 const LABEL_MIN_SCALE = 0.09;
 
 interface HitTarget {
-  kind: 'unit' | 'incident' | 'marker' | 'cluster';
+  kind: 'unit' | 'incident' | 'marker' | 'cluster' | 'shape';
   id: string;
   point: ScreenPoint;
   /** For a cluster, the members to fit when it is clicked. */
@@ -138,9 +166,10 @@ function useTokenResolver(): (token: string, fallback: string) => string {
 }
 
 export const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(function MapCanvas({
-  store, filter, incidents, markers, onViewportChange,
-  selectedUnitId, ownUnitId, selectedIncidentId, selectedMarkerId, followUnitId,
-  onSelectUnit, onSelectIncident, onSelectMarker, onContextMenu, className,
+  store, filter, incidents, markers, shapes, onViewportChange,
+  selectedUnitId, ownUnitId, selectedIncidentId, selectedMarkerId, selectedShapeId, followUnitId,
+  onSelectUnit, onSelectIncident, onSelectMarker, onSelectShape, onContextMenu,
+  draft = null, onDraftPoint, className,
 }, ref) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const containerRef = React.useRef<HTMLDivElement>(null);
@@ -173,6 +202,26 @@ export const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(funct
    * during render and reads it to decide the initial viewport.
    */
   const unitsRef = React.useRef<MapUnit[]>([]);
+
+  /**
+   * Shapes with their bounding boxes and label anchors, computed ONCE per change.
+   *
+   * This is the whole performance story for shapes. A 500-point area costs 500
+   * projections to draw; its box costs FOUR comparisons to reject, and the box
+   * only has to be recomputed when somebody draws, edits or removes a shape — a
+   * few times an hour, against sixty frames a second.
+   *
+   * Measured rather than asserted: the numbers, and the script that produced
+   * them, are in docs/architecture/05-map.md §9.5.
+   */
+  const preparedShapes = React.useMemo(
+    () => shapes.map((shape) => ({
+      shape,
+      bounds: shapeBounds(shape.points),
+      anchor: shapeLabelAnchor(shape.points),
+    })),
+    [shapes],
+  );
 
   /**
    * How many units are drawn, and whether any has a position yet.
@@ -452,6 +501,10 @@ export const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(funct
     const targets: HitTarget[] = [];
 
     drawBaseGrid(ctx, viewportForFrame, size, resolveToken);
+    // Shapes go UNDER everything operational. A cordon is context; a unit
+    // standing in it is the thing being looked at, and the context must never be
+    // drawn over the subject.
+    drawShapes(ctx, viewportForFrame, preparedShapes, selectedShapeId, targets, resolveToken);
     drawMarkers(ctx, viewportForFrame, markers, selectedMarkerId, targets, resolveToken);
     drawIncidents(ctx, viewportForFrame, incidents, selectedIncidentId, targets, resolveToken);
     drawUnits(
@@ -459,14 +512,19 @@ export const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(funct
       now, wallClock, targets, resolveToken,
     );
 
+    // The draft goes ON TOP of everything, because it is what the operator is
+    // doing right now and nothing should obscure it.
+    if (draft !== null) drawDraft(ctx, viewportForFrame, draft, resolveToken);
+
     hitTargets.current = targets;
 
     if (interpolator.current.isAnimating(now) || followRef.current !== null) requestDraw();
     // `unitsRef` is deliberately absent: it is a ref, refreshed by the store
     // subscription, and depending on it would be depending on nothing.
   }, [
-    effectiveViewport, size, incidents, markers,
-    selectedUnitId, ownUnitId, selectedIncidentId, selectedMarkerId, resolveToken, requestDraw,
+    effectiveViewport, size, incidents, markers, preparedShapes, draft,
+    selectedUnitId, ownUnitId, selectedIncidentId, selectedMarkerId, selectedShapeId,
+    resolveToken, requestDraw,
   ]);
 
   React.useEffect(() => {
@@ -546,6 +604,18 @@ export const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(funct
     }
     if (drag === null || drag.moved) return;
 
+    /**
+     * While drawing, a click is a POINT, not a selection.
+     *
+     * Dragging still pans — a drawing tool that cannot be moved around while it
+     * is open would force the operator to cancel and start again the moment the
+     * shape runs off the screen.
+     */
+    if (onDraftPoint !== undefined && effectiveViewport !== null) {
+      onDraftPoint(screenToWorld(effectiveViewport, pointerPosition(e)));
+      return;
+    }
+
     const target = hitTest(pointerPosition(e));
     if (target === null) { onSelectUnit(null); return; }
 
@@ -562,6 +632,11 @@ export const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(funct
     if (target.kind === 'incident') {
       const incident = incidents.find((i) => i.id === target.id);
       if (incident) onSelectIncident(incident);
+      return;
+    }
+    if (target.kind === 'shape') {
+      const shape = shapes.find((candidate) => candidate.id === target.id);
+      if (shape) onSelectShape(shape);
       return;
     }
     const marker = markers.find((m) => m.id === target.id);
@@ -598,7 +673,9 @@ export const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(funct
         style={{ width: size.width, height: size.height, touchAction: 'none' }}
         className={cn(
           'block',
-          hoveredIsInteractive ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing',
+          onDraftPoint !== undefined
+            ? 'cursor-crosshair'
+            : hoveredIsInteractive ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing',
         )}
         /**
          * The canvas is not the only way to reach this information: the side
@@ -610,7 +687,8 @@ export const MapCanvas = React.forwardRef<MapCanvasHandle, MapCanvasProps>(funct
         aria-label={
           `Tactical map: ${drawn.count} unit${drawn.count === 1 ? '' : 's'}, ` +
           `${incidents.length} incident${incidents.length === 1 ? '' : 's'}, ` +
-          `${markers.length} marker${markers.length === 1 ? '' : 's'}. ` +
+          `${markers.length} marker${markers.length === 1 ? '' : 's'}, ` +
+          `${shapes.length} drawn shape${shapes.length === 1 ? '' : 's'}. ` +
           'The same units are listed in the side panel.'
         }
       />
@@ -685,6 +763,183 @@ function drawBaseGrid(
   ctx.moveTo(origin.x - 7, origin.y); ctx.lineTo(origin.x + 7, origin.y);
   ctx.moveTo(origin.x, origin.y - 7); ctx.lineTo(origin.x, origin.y + 7);
   ctx.stroke();
+}
+
+interface PreparedShape {
+  shape: MapShape;
+  bounds: WorldBounds | null;
+  anchor: { x: number; y: number } | null;
+}
+
+/**
+ * Areas and routes.
+ *
+ * THREE THINGS MAKE THIS CHEAP ENOUGH TO RUN EVERY FRAME.
+ *
+ *   1. BOX CULL. A shape whose precomputed bounds do not meet the visible world
+ *      rectangle is skipped before a single point is projected. At street zoom
+ *      that is most of them.
+ *
+ *   2. ONE PATH PER SHAPE. Points go into a single path and are stroked once,
+ *      rather than a `beginPath`/`stroke` pair per segment — the difference
+ *      between one rasterisation and five hundred.
+ *
+ *   3. A VERTEX BUDGET AT LOW ZOOM. Zoomed out, adjacent points land on the same
+ *      pixel; drawing every one costs time and changes nothing visible, so the
+ *      polyline is decimated to roughly one point per two screen pixels. The
+ *      SHAPE is untouched — this is a drawing decision, not an edit — and at any
+ *      zoom where the detail is visible the stride is 1.
+ *
+ * What is deliberately NOT here is polygon hit-testing. An area covering half
+ * the map would swallow every click meant for the units inside it, which is
+ * exactly backwards: those units are the reason the cordon was drawn. The LABEL
+ * is the handle instead, so a shape is selected by clicking the thing that
+ * names it.
+ */
+/**
+ * The shape being drawn.
+ *
+ * Every vertex is shown as a square handle and every segment is drawn, with no
+ * decimation: at drawing time the operator needs to see exactly what they have
+ * placed, and a draft is at most a few dozen points anyway. An area's closing
+ * segment is drawn faintly so it is clear the polygon will close, without
+ * pretending the point has been placed.
+ */
+function drawDraft(
+  ctx: CanvasRenderingContext2D,
+  vp: Viewport,
+  draft: { kind: MapShapeKind; points: MapShapePoint[] },
+  resolve: Resolver,
+): void {
+  const points = draft.points;
+  const first = points[0];
+  if (first === undefined) return;
+
+  const accent = resolve('--color-accent', '#4d8ee8');
+  const screen = points.map((p) => projectToScreen(vp, p));
+
+  if (screen.length > 1) {
+    ctx.beginPath();
+    ctx.moveTo(screen[0]!.x, screen[0]!.y);
+    for (let i = 1; i < screen.length; i += 1) ctx.lineTo(screen[i]!.x, screen[i]!.y);
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    if (draft.kind === 'area' && screen.length > 2) {
+      ctx.beginPath();
+      ctx.moveTo(screen[screen.length - 1]!.x, screen[screen.length - 1]!.y);
+      ctx.lineTo(screen[0]!.x, screen[0]!.y);
+      ctx.setLineDash([4, 4]);
+      ctx.globalAlpha = 0.5;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.setLineDash([]);
+    }
+  }
+
+  for (const point of screen) {
+    ctx.fillStyle = accent;
+    ctx.fillRect(point.x - 3, point.y - 3, 6, 6);
+  }
+}
+
+function drawShapes(
+  ctx: CanvasRenderingContext2D,
+  vp: Viewport,
+  prepared: readonly PreparedShape[],
+  selectedId: string | null,
+  targets: HitTarget[],
+  resolve: Resolver,
+): void {
+  if (prepared.length === 0) return;
+
+  const fallback = resolve('--color-text-secondary', '#9aa4b8');
+  const accent = resolve('--color-accent', '#4d8ee8');
+  const base = resolve('--color-base', '#0b0e14');
+  /**
+   * A generous margin. A shape can be entirely off-screen and still have a
+   * segment crossing the viewport, so the box test is widened rather than made
+   * exact: an occasional shape drawn that need not be is free; one skipped that
+   * should not be is a cordon that vanishes when you pan.
+   */
+  const view = visibleBounds(vp, 64);
+
+  for (const { shape, bounds, anchor } of prepared) {
+    if (bounds === null) continue;
+    if (bounds.maxX < view.minX || bounds.minX > view.maxX) continue;
+    if (bounds.maxY < view.minY || bounds.minY > view.maxY) continue;
+
+    const points = shape.points;
+    const first = points[0];
+    if (first === undefined) continue;
+
+    const selected = shape.id === selectedId;
+    const color = shape.color ?? shape.organization?.color ?? fallback;
+    const closed = MAP_SHAPE_KINDS[shape.kind]?.closed ?? false;
+
+    // How many points to skip: the shape's on-screen span in pixels decides how
+    // much detail can actually be seen.
+    const spanPixels = Math.max(
+      (bounds.maxX - bounds.minX) * vp.scale,
+      (bounds.maxY - bounds.minY) * vp.scale,
+      1,
+    );
+    const stride = Math.max(1, Math.floor(points.length / Math.max(spanPixels / 2, 8)));
+
+    ctx.beginPath();
+    const start = projectToScreen(vp, first);
+    ctx.moveTo(start.x, start.y);
+    for (let i = stride; i < points.length - 1; i += stride) {
+      const p = projectToScreen(vp, points[i]!);
+      ctx.lineTo(p.x, p.y);
+    }
+    // The LAST point always lands, whatever the stride: a route that stops short
+    // of where it was drawn to is a wrong route.
+    const last = projectToScreen(vp, points[points.length - 1]!);
+    ctx.lineTo(last.x, last.y);
+    if (closed) ctx.closePath();
+
+    if (closed) {
+      // A wash, not a fill: an area must never hide what is standing in it.
+      ctx.fillStyle = color;
+      ctx.globalAlpha = selected ? 0.18 : 0.1;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = selected ? 2.5 : 1.5;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    // A route is DASHED and an area is solid, so the two are told apart without
+    // colour and without a legend.
+    ctx.setLineDash(closed ? [] : [8, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    if (anchor === null) continue;
+    const at = projectToScreen(vp, anchor);
+    if (at.x < -60 || at.y < -30 || at.x > vp.width + 60 || at.y > vp.height + 30) continue;
+
+    // A permanent label — no hover, no animation. It is also the click target.
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const width = ctx.measureText(shape.label).width + 10;
+    ctx.fillStyle = base;
+    ctx.globalAlpha = 0.8;
+    ctx.fillRect(at.x - width / 2, at.y - 8, width, 16);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = selected ? accent : color;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(at.x - width / 2, at.y - 8, width, 16);
+    ctx.fillStyle = color;
+    ctx.fillText(shape.label, at.x, at.y);
+
+    targets.push({ kind: 'shape', id: shape.id, point: at });
+  }
 }
 
 function drawMarkers(

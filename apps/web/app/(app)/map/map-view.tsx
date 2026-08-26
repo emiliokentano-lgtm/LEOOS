@@ -2,18 +2,20 @@
 
 import * as React from 'react';
 import {
-  Crosshair, Layers, Maximize2, Minimize2, PanelRightClose, PanelRightOpen,
-  RefreshCw, ZoomIn, ZoomOut,
+  Check, Crosshair, Hexagon, Layers, Maximize2, Minimize2, PanelRightClose, PanelRightOpen,
+  RefreshCw, Spline, Undo2, X, ZoomIn, ZoomOut,
 } from 'lucide-react';
 import {
-  EMPTY_MAP_FILTER, FRESHNESS_META, UNIT_TYPES, countActiveMapFilters,
-  matchesIncidentFilter, matchesMarkerFilter, matchesUnitFilter,
-  type LocationFreshness, type MapFilterState, type MapSnapshot, type MapUnit,
+  EMPTY_MAP_FILTER, FRESHNESS_META, MAP_SHAPE_KINDS, MAP_SHAPE_MAX_POINTS, UNIT_TYPES,
+  countActiveMapFilters, matchesIncidentFilter, matchesMarkerFilter, matchesShapeFilter,
+  matchesUnitFilter, minPointsFor,
+  type LocationFreshness, type MapFilterState, type MapShapeKind, type MapShapePoint,
+  type MapSnapshot, type MapUnit,
   type UnitPositionDelta, type Viewport, type WorldPosition,
 } from '@leoos/contracts';
 import {
-  Alert, Badge, EmptyState, FilterBar, FilterChip, IconButton, OrgTag, Panel, PanelHeader,
-  SearchInput,
+  Alert, Badge, Button, EmptyState, FilterBar, FilterChip, IconButton, OrgTag, Panel,
+  PanelHeader, SearchInput,
 } from '@/components/ui';
 import { Icon } from '@/components/icon';
 import { MapCanvas, type MapCanvasHandle } from '@/components/domain/map-canvas';
@@ -28,7 +30,8 @@ import { mapTopics } from '@/lib/realtime/topics';
 import { useAuth } from '@/components/shell/auth-context';
 import { cn } from '@/lib/utils';
 import { MarkerDialog } from './marker-dialog';
-import { UnitDetail, IncidentDetail, MarkerDetail } from './map-details';
+import { ShapeDialog } from './shape-dialog';
+import { UnitDetail, IncidentDetail, MarkerDetail, ShapeDetail } from './map-details';
 
 /**
  * Live map screen.
@@ -68,8 +71,23 @@ export function MapView({
   const [selectedUnitId, setSelectedUnitId] = React.useState<string | null>(null);
   const [selectedIncidentId, setSelectedIncidentId] = React.useState<string | null>(null);
   const [selectedMarkerId, setSelectedMarkerId] = React.useState<string | null>(null);
+  const [selectedShapeId, setSelectedShapeId] = React.useState<string | null>(null);
   const [followUnitId, setFollowUnitId] = React.useState<string | null>(null);
   const [pendingMarker, setPendingMarker] = React.useState<WorldPosition | null>(null);
+  /**
+   * The shape being drawn, or null when the tool is closed.
+   *
+   * Held here rather than in the canvas because four things read it: the canvas
+   * draws it, the toolbar counts it, undo pops it, and the dialog saves it.
+   */
+  const [draft, setDraft] = React.useState<
+    { kind: MapShapeKind; points: MapShapePoint[] } | null
+  >(null);
+  /** The drawn shape waiting to be named. Separate, so cancelling the dialog
+      does not throw away the geometry. */
+  const [pendingShape, setPendingShape] = React.useState<
+    { kind: MapShapeKind; points: MapShapePoint[] } | null
+  >(null);
   const [viewport, setViewport] = React.useState<Viewport | null>(null);
 
   const canvasRef = React.useRef<MapCanvasHandle>(null);
@@ -227,12 +245,17 @@ export function MapView({
     () => (snapshot?.markers ?? []).filter((m) => matchesMarkerFilter(m, filter)),
     [snapshot, filter],
   );
+  const visibleShapes = React.useMemo(
+    () => (snapshot?.shapes ?? []).filter((sh) => matchesShapeFilter(sh, filter)),
+    [snapshot, filter],
+  );
 
   const selectedUnit = visibleUnits.find((u) => u.id === selectedUnitId)
     ?? units.find((u) => u.id === selectedUnitId) ?? null;
   const selectedIncident = (snapshot?.incidents ?? []).find((i) => i.id === selectedIncidentId)
     ?? null;
   const selectedMarker = (snapshot?.markers ?? []).find((m) => m.id === selectedMarkerId) ?? null;
+  const selectedShape = (snapshot?.shapes ?? []).find((sh) => sh.id === selectedShapeId) ?? null;
 
   const activeFilters = countActiveMapFilters(filter);
 
@@ -283,6 +306,7 @@ export function MapView({
     setSelectedUnitId(unit.id);
     setSelectedIncidentId(null);
     setSelectedMarkerId(null);
+    setSelectedShapeId(null);
   }, [store]);
 
   /**
@@ -312,7 +336,47 @@ export function MapView({
     setSelectedUnitId(null);
     setSelectedIncidentId(null);
     setSelectedMarkerId(null);
+    setSelectedShapeId(null);
     setFollowUnitId(null);
+  }, []);
+
+  // ── Drawing ─────────────────────────────────────────────────────────────
+  /**
+   * The drawing tool.
+   *
+   * Deliberately MODAL: while it is open a click places a point and nothing is
+   * selectable, because a tool where clicking sometimes draws and sometimes
+   * selects is a tool that draws when you meant to select. The mode is visible
+   * (a toolbar, a crosshair cursor) and leaves on Escape.
+   */
+  const startDrawing = React.useCallback((kind: MapShapeKind) => {
+    clearSelection();
+    setDraft({ kind, points: [] });
+  }, [clearSelection]);
+
+  const addDraftPoint = React.useCallback((position: WorldPosition) => {
+    setDraft((current) => {
+      if (current === null) return current;
+      // The cap is enforced by the API and by a CHECK constraint; refusing here
+      // as well means the operator finds out at the point of clicking rather
+      // than when they try to save.
+      if (current.points.length >= MAP_SHAPE_MAX_POINTS) return current;
+      return { ...current, points: [...current.points, { x: position.x, y: position.y }] };
+    });
+  }, []);
+
+  const undoDraftPoint = React.useCallback(() => {
+    setDraft((current) => (
+      current === null ? current : { ...current, points: current.points.slice(0, -1) }
+    ));
+  }, []);
+
+  const finishDrawing = React.useCallback(() => {
+    setDraft((current) => {
+      if (current === null || current.points.length < minPointsFor(current.kind)) return current;
+      setPendingShape(current);
+      return null;
+    });
   }, []);
 
   // ── Keyboard ────────────────────────────────────────────────────────────
@@ -333,7 +397,18 @@ export function MapView({
 
       if (event.key === 'Escape') {
         if (pendingMarker !== null) { setPendingMarker(null); return; }
+        // Escape leaves the drawing tool before it clears a selection: the tool
+        // is the thing the operator is currently inside.
+        if (draft !== null) { setDraft(null); return; }
         clearSelection();
+        return;
+      }
+
+      if (draft !== null) {
+        if (event.key === 'Enter') { event.preventDefault(); finishDrawing(); return; }
+        if (event.key === 'Backspace') { event.preventDefault(); undoDraftPoint(); return; }
+        // Every other shortcut is suppressed while drawing. `F` following a unit
+        // halfway through a cordon is not what anybody meant.
         return;
       }
 
@@ -366,7 +441,10 @@ export function MapView({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [clearSelection, locateOwnUnit, organizations, ownUnit, pendingMarker, selectedUnitId]);
+  }, [
+    clearSelection, draft, finishDrawing, locateOwnUnit, organizations, ownUnit,
+    pendingMarker, selectedUnitId, undoDraftPoint,
+  ]);
 
   // ── Fullscreen ──────────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -546,6 +624,12 @@ export function MapView({
           count={snapshot?.markers.length ?? 0}
           onToggle={() => setFilter((f) => ({ ...f, showMarkers: !f.showMarkers }))}
         />
+        <FilterChip
+          label="Areas & routes"
+          active={filter.showShapes}
+          count={snapshot?.shapes.length ?? 0}
+          onToggle={() => setFilter((f) => ({ ...f, showShapes: !f.showShapes }))}
+        />
       </FilterBar>
 
       <div className="relative flex min-h-0 flex-1">
@@ -567,22 +651,34 @@ export function MapView({
             onViewportChange={setViewport}
             incidents={visibleIncidents}
             markers={visibleMarkers}
+            shapes={visibleShapes}
             selectedUnitId={selectedUnitId}
             selectedIncidentId={selectedIncidentId}
             selectedMarkerId={selectedMarkerId}
+            selectedShapeId={selectedShapeId}
             followUnitId={followUnitId}
             onSelectUnit={selectUnit}
             onSelectIncident={(incident) => {
               setSelectedIncidentId(incident.id);
               setSelectedUnitId(null);
               setSelectedMarkerId(null);
+              setSelectedShapeId(null);
             }}
             onSelectMarker={(marker) => {
               setSelectedMarkerId(marker.id);
               setSelectedUnitId(null);
               setSelectedIncidentId(null);
+              setSelectedShapeId(null);
             }}
-            onContextMenu={capabilities?.canManageMarkers
+            onSelectShape={(shape) => {
+              setSelectedShapeId(shape.id);
+              setSelectedUnitId(null);
+              setSelectedIncidentId(null);
+              setSelectedMarkerId(null);
+            }}
+            draft={draft}
+            onDraftPoint={draft === null ? undefined : addDraftPoint}
+            onContextMenu={capabilities?.canManageMarkers && draft === null
               ? (position) => setPendingMarker(position)
               : undefined}
             className="absolute inset-0"
@@ -652,7 +748,44 @@ export function MapView({
             >
               <RefreshCw aria-hidden />
             </IconButton>
+
+            {/* The drawing tools sit with the viewport controls rather than in
+                the filter bar: they act on the map, not on what it shows. Hidden
+                entirely without the permission — the API would refuse, and a
+                control that always fails is worse than no control. */}
+            {capabilities?.canManageMarkers ? (
+              <>
+                <span className="my-0.5 h-px w-full bg-border" aria-hidden />
+                <IconButton
+                  label="Draw an area"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => startDrawing('area')}
+                  disabled={draft !== null}
+                >
+                  <Hexagon aria-hidden />
+                </IconButton>
+                <IconButton
+                  label="Draw a route"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => startDrawing('route')}
+                  disabled={draft !== null}
+                >
+                  <Spline aria-hidden />
+                </IconButton>
+              </>
+            ) : null}
           </div>
+
+          {draft !== null ? (
+            <DrawingToolbar
+              draft={draft}
+              onUndo={undoDraftPoint}
+              onFinish={finishDrawing}
+              onCancel={() => setDraft(null)}
+            />
+          ) : null}
 
           <MapLegend />
         </div>
@@ -680,6 +813,12 @@ export function MapView({
                 marker={selectedMarker}
                 canManage={capabilities?.canManageMarkers ?? false}
                 onClose={() => setSelectedMarkerId(null)}
+              />
+            ) : selectedShape ? (
+              <ShapeDetail
+                shape={selectedShape}
+                canManage={capabilities?.canManageMarkers ?? false}
+                onClose={() => setSelectedShapeId(null)}
               />
             ) : null}
 
@@ -726,6 +865,20 @@ export function MapView({
           </div>
         ) : null}
       </div>
+
+      {pendingShape !== null ? (
+        <ShapeDialog
+          kind={pendingShape.kind}
+          points={pendingShape.points}
+          organizations={organizations}
+          canDrawGlobal={capabilities?.canTrackAllOrganizations ?? false}
+          onClose={() => setPendingShape(null)}
+          onDrawn={() => {
+            setPendingShape(null);
+            sourceRef.current?.refresh();
+          }}
+        />
+      ) : null}
 
       {pendingMarker !== null ? (
         <MarkerDialog
@@ -946,3 +1099,73 @@ const MapUnitRow = React.memo(function MapUnitRow({
     </button>
   );
 });
+
+/**
+ * The drawing tool's controls.
+ *
+ * Anchored at the BOTTOM CENTRE, away from the viewport controls at the right
+ * and the status banner at the top, because it appears and disappears and would
+ * otherwise shift something the operator was reaching for.
+ *
+ * It states the two things that decide what happens next: how many points are
+ * down, and how many are still needed. "Finish" is disabled below the minimum
+ * with the reason on the button itself, rather than enabled and then refused.
+ */
+function DrawingToolbar({
+  draft, onUndo, onFinish, onCancel,
+}: {
+  draft: { kind: MapShapeKind; points: MapShapePoint[] };
+  onUndo: () => void;
+  onFinish: () => void;
+  onCancel: () => void;
+}) {
+  const meta = MAP_SHAPE_KINDS[draft.kind];
+  const minimum = minPointsFor(draft.kind);
+  const short = minimum - draft.points.length;
+  const atCap = draft.points.length >= MAP_SHAPE_MAX_POINTS;
+
+  return (
+    <div
+      role="group"
+      aria-label={`Drawing ${meta.label.toLowerCase()}`}
+      className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-xs
+        border border-accent bg-surface/95 px-3 py-2 text-xs text-text-primary"
+    >
+      <span className="flex items-center gap-1.5">
+        {draft.kind === 'area'
+          ? <Hexagon className="size-3.5 text-accent" aria-hidden />
+          : <Spline className="size-3.5 text-accent" aria-hidden />}
+        <span className="font-medium">Drawing {meta.label.toLowerCase()}</span>
+      </span>
+
+      <span className="font-mono text-text-secondary">
+        {draft.points.length} point{draft.points.length === 1 ? '' : 's'}
+      </span>
+
+      <span className="text-text-tertiary">
+        {atCap
+          ? `That is the maximum of ${MAP_SHAPE_MAX_POINTS}.`
+          : short > 0
+            ? `${short} more needed`
+            : 'Click to add points'}
+      </span>
+
+      <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+
+      <Button
+        size="xs"
+        variant="secondary"
+        onClick={onUndo}
+        disabled={draft.points.length === 0}
+      >
+        <Undo2 aria-hidden /> Undo
+      </Button>
+      <Button size="xs" onClick={onFinish} disabled={short > 0}>
+        <Check aria-hidden /> Finish
+      </Button>
+      <Button size="xs" variant="ghost" onClick={onCancel}>
+        <X aria-hidden /> Cancel
+      </Button>
+    </div>
+  );
+}

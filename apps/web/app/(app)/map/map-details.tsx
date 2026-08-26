@@ -4,15 +4,15 @@ import * as React from 'react';
 import Link from 'next/link';
 import { Crosshair, ExternalLink, PanelRightClose, Trash2, TriangleAlert } from 'lucide-react';
 import {
-  FRESHNESS_META, MAP_MARKER_TYPES, UNIT_TYPES, formatWorldPosition, freshnessOf,
-  headingToCompass,
-  type MapIncidentMarker, type MapMarker, type MapUnit,
+  FRESHNESS_META, MAP_MARKER_TYPES, MAP_SHAPE_KINDS, UNIT_TYPES, drawnLength, enclosedArea,
+  formatWorldPosition, freshnessOf, headingToCompass,
+  type MapIncidentMarker, type MapMarker, type MapShape, type MapUnit,
 } from '@leoos/contracts';
 import {
   Badge, Button, IconButton, OrgTag, Panel, PanelHeader, PriorityBadge, useToast,
 } from '@/components/ui';
 import { Icon } from '@/components/icon';
-import { removeMapMarker } from '@/lib/map-actions';
+import { removeMapMarker, removeMapShape } from '@/lib/map-actions';
 import { useNow } from '@/lib/map/use-now';
 import type { MapUnitStore } from '@/lib/map/unit-store';
 import { useUnitPosition } from '@/lib/map/use-unit-store';
@@ -382,4 +382,122 @@ export function MarkerDetail({
       ) : null}
     </Panel>
   );
+}
+
+/**
+ * A drawn area or route.
+ *
+ * The size line is the one thing worth stating plainly, and its WORDING is the
+ * point: a route reports its DRAWN LENGTH, never a distance or a travel time.
+ * The line was drawn by hand over a coordinate grid; nothing here has ever seen
+ * a road (docs/architecture/05-map.md §9.5).
+ */
+export function ShapeDetail({
+  shape, canManage, onClose,
+}: {
+  shape: MapShape;
+  canManage: boolean;
+  onClose: () => void;
+}) {
+  const [removing, setRemoving] = React.useState(false);
+  const toast = useToast();
+  const now = useNow();
+  const meta = MAP_SHAPE_KINDS[shape.kind];
+
+  async function remove() {
+    setRemoving(true);
+    const result = await removeMapShape(shape.id);
+    setRemoving(false);
+
+    if (!result.ok) {
+      toast.push({
+        tone: 'danger', title: 'Could not remove it', description: result.error,
+      });
+      return;
+    }
+    toast.push({ tone: 'success', title: `${meta?.label ?? 'Shape'} removed` });
+    onClose();
+  }
+
+  const size = shape.kind === 'area'
+    ? formatSquareMetres(enclosedArea(shape.points))
+    : formatMetres(drawnLength(shape.points));
+
+  return (
+    <Panel flush>
+      <PanelHeader
+        title={shape.label}
+        icon={<Icon name={shape.kind === 'area' ? 'Hexagon' : 'Spline'} />}
+        actions={
+          <IconButton label="Close" size="xs" onClick={onClose}>
+            <PanelRightClose aria-hidden />
+          </IconButton>
+        }
+      />
+      <dl className="flex flex-col gap-2 p-3 text-xs">
+        <Row label="Type">{meta?.label ?? shape.kind}</Row>
+        <Row label="Scope">
+          {shape.organization ? (
+            <OrgTag
+              shortName={shape.organization.shortName}
+              color={shape.organization.color}
+            />
+          ) : (
+            <span className="text-text-tertiary">All organizations</span>
+          )}
+        </Row>
+        <Row label={shape.kind === 'area' ? 'Encloses' : 'Drawn length'}>
+          <span className="font-mono">{size}</span>
+        </Row>
+        <Row label="Points"><span className="font-mono">{shape.points.length}</span></Row>
+        {shape.createdByName ? <Row label="Drawn by">{shape.createdByName}</Row> : null}
+        <Row label="Drawn">
+          <span className="font-mono">
+            {now === 0 ? '—' : timeAgo(new Date(shape.createdAt), new Date(now))}
+          </span>
+        </Row>
+        {shape.expiresAt ? (
+          <Row label="Expires">
+            <span className="font-mono">{new Date(shape.expiresAt).toLocaleString()}</span>
+          </Row>
+        ) : null}
+      </dl>
+
+      {shape.description ? (
+        <p className="border-t border-border-subtle px-3 py-2 text-xs text-text-secondary">
+          {shape.description}
+        </p>
+      ) : null}
+
+      {shape.kind === 'route' ? (
+        <p className="border-t border-border-subtle px-3 py-2 text-2xs text-text-tertiary">
+          A line drawn by hand. It is not a navigated route and does not follow roads.
+        </p>
+      ) : null}
+
+      {canManage ? (
+        <div className="border-t border-border-subtle p-2">
+          <Button
+            variant="danger"
+            size="sm"
+            className="w-full"
+            onClick={() => { void remove(); }}
+            disabled={removing}
+          >
+            <Trash2 aria-hidden /> {removing ? 'Removing…' : `Remove ${meta?.label.toLowerCase() ?? 'shape'}`}
+          </Button>
+        </div>
+      ) : null}
+    </Panel>
+  );
+}
+
+function formatMetres(value: number): string {
+  return value >= 1000 ? `${(value / 1000).toFixed(2)} km` : `${Math.round(value)} m`;
+}
+
+function formatSquareMetres(value: number): string {
+  return value >= 1_000_000
+    ? `${(value / 1_000_000).toFixed(2)} km²`
+    : `${Math.round(value)} m²`;
 }
