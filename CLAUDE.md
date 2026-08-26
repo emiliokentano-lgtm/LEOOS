@@ -298,6 +298,21 @@ cache's TTL were all built for it; until now nothing could actually write one.
 | 21, 22 | Setting or clearing one bumps `permission_version`, so it takes effect on the very next request with no wait. EXPIRY is the one case no transaction can announce — nothing runs when the clock passes `expires_at` — which is precisely what the identity cache's five-second TTL is for, and both halves are tested. | [performance §4](docs/architecture/14-performance.md) |
 | 24 | An expired override is kept, not deleted: it is a record of something that was once approved, and the audit trail refers to it. Reads filter on the expiry rather than the row's existence. | `personnel.read.ts`, `context.service.ts` |
 
+### Tasks
+
+| Rules | Mechanism | Location |
+| --- | --- | --- |
+| 5, 6, 7, 8 | Priority is a TABLE, seeded in the migration because `task` has a foreign key to it — a database migrated but not seeded must still accept a task. Nothing switches on a priority key; the colour token travels with the row. | [migration 0012](packages/db/migrations/0012_tasks.sql) |
+| 13, 14, 41 | Assigning is PERMISSION-gated and deliberately NOT rank-gated, which is a departure from everything else here that acts on another person. The hierarchy rules exist because rank is authority; a task is a request with a deadline. The consequence — a sergeant with `tasks.assign` can assign to a chief — is stated in the doc and pinned by a named test rather than left to be discovered. | [dashboard §4b](docs/architecture/10-dashboard.md), `apps/api/test/tasks.test.ts` |
+| 9, 10, 12 | Three different questions with three different answers: assigning needs the permission, COMPLETING is the assignee's alone (not the creator's, not a chief's — somebody else ticking off your work would make the record say you did something you did not), CANCELLING is the creator's alone (the assignee cannot make work vanish by deciding it does not matter). All three verified by breaking them first. | `apps/api/src/modules/tasks/task.service.ts` |
+| 11 | The assignee is read under lock from the CALLER'S organization; a member id from another agency resolves to nothing and answers NOT FOUND rather than confirming they exist elsewhere. | `createTask` |
+| 24, 25 | Termination cancels open tasks assigned TO the leaver and KEEPS the ones they created — they cannot do the first set, and the second is work that still needs doing plus a record of who asked. History preserved, live state corrected. | `personnel.service.ts`, `cancelTasksForDepartedMember` |
+| 30, 45 | Overdue is DERIVED from `due_at` against a clock, never stored — a stored flag is wrong between the moment a deadline passes and whatever job noticed. `taskState` and `compareTasks` take the clock as an argument, so the API's ordering and the browser's cannot disagree. | `packages/contracts/src/tasks.ts` |
+| 26 | Loading, FAILED, empty and loaded are four states and they look different. A list rendered empty because a request timed out is a lie in the safe-looking direction — the operator concludes there is nothing to do — so a failed load says so in words. | `apps/web/app/(app)/dashboard/task-panel.tsx` |
+| 21, 22 | Tasks are polled on their own minute-long clock rather than folded into the dashboard snapshot, which moves every few seconds: a task list changes when somebody assigns or ticks one. The panel's own tick is per MINUTE, because a deadline is measured in hours — the field-request strip ticks per second because it counts down from three minutes. | `dashboard-view.tsx` |
+| 23 | Four audit keys. Assignment and cancellation because they are one member acting on another's workload; completion because "it was done" is the claim the feature exists to record; re-opening because undoing that claim is what somebody would later dispute. | `packages/db/src/schema/audit.ts` |
+| 43 | Overdue and due-soon are called out in WORDS as well as colour and position, and the ordering puts what is already late at the top without a sort or a filter. | `task-panel.tsx` |
+
 ### Field requests
 
 | Rules | Mechanism | Location |

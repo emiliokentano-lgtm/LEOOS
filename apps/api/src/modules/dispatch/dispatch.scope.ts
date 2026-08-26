@@ -32,6 +32,14 @@ export interface DispatchScope {
   canRequestBackup: boolean;
   /** Broadcasting your own position to your organization. Also a self-action. */
   canShareLocation: boolean;
+  /**
+   * Putting work on somebody else's dashboard.
+   *
+   * The only thing here that is NOT rank-gated despite acting on another
+   * person — a task is a request with a deadline, not authority. See
+   * docs/architecture/10-dashboard.md §4b.
+   */
+  canAssignTasks: boolean;
   /** Sees every organization's board rather than only their own. */
   canViewAllOrganizations: boolean;
 
@@ -63,6 +71,7 @@ export function resolveDispatchScope(actor: ActorContext, actorUserId: string): 
     canAcknowledgePanic: can(actor, 'dispatch.panic.acknowledge'),
     canRequestBackup: can(actor, 'dispatch.request_backup'),
     canShareLocation: can(actor, 'dispatch.share_location'),
+    canAssignTasks: can(actor, 'tasks.assign'),
     canViewAllOrganizations,
     organizationId: actor.organizationId,
     organizationIds: actor.organizationId === null ? [] : [actor.organizationId],

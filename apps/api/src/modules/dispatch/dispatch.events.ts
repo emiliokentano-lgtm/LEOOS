@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import type { FastifyRequest } from 'fastify';
 import type { Database } from '@leoos/db';
 import type {
   FieldRequestPayload, IncidentAssignedPayload, IncidentClosedPayload, IncidentPayload,
@@ -134,6 +135,25 @@ export function notificationEmissions(
     userId: delivery.userId,
     payload: deliveryPayload(delivery),
   }));
+}
+
+/**
+ * Who to attribute an event to.
+ *
+ * A display name and a user id, and nothing else — the actor travels to every
+ * subscribed console, and an event envelope is the easiest place in the system
+ * to leak a detail nobody asked for (rule 16).
+ *
+ * Lives here rather than in a route file because more than one module publishes
+ * now, and a second copy of this is a second place for somebody to add a field
+ * to it.
+ */
+export function realtimeActorOf(request: FastifyRequest): RealtimeActor {
+  return {
+    kind: 'user',
+    userId: request.auth?.userId ?? null,
+    label: request.auth?.identity.account.displayName ?? null,
+  };
 }
 
 /**

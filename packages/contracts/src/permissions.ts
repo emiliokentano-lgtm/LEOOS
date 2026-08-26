@@ -96,6 +96,17 @@ export const PERMISSIONS = {
   'dispatch.share_location': {
     category: 'dispatch', risk: 'low', label: 'Share own location',
   },
+  /**
+   * Putting work on somebody else's dashboard.
+   *
+   * MEDIUM, not low: it is the only thing in this catalogue that lets one
+   * member write to another's screen, and a dashboard anybody can write to is a
+   * dashboard nobody reads. Deliberately NOT rank-gated — see
+   * docs/architecture/10-dashboard.md §4b — which makes this permission the
+   * only lever an organization has, and therefore one worth granting
+   * deliberately.
+   */
+  'tasks.assign': { category: 'dispatch', risk: 'medium', label: 'Assign tasks' },
 
   // ── map ──────────────────────────────────────────────────────────────────
   'map.view': { category: 'map', risk: 'low', label: 'View map' },

@@ -64,3 +64,38 @@ export function initials(name: string): string {
     .map((part) => part[0]?.toUpperCase() ?? '')
     .join('');
 }
+
+/**
+ * "in 3 hours", "2 days ago".
+ *
+ * Distinct from `formatElapsed`, which is a stopwatch for something that
+ * started — this is for a moment that may be in either direction, which is what
+ * a deadline needs. Written by hand rather than reached for through
+ * `Intl.RelativeTimeFormat` because the deployment is single-locale and the
+ * output has to be terse enough for a dense panel: "in 3h" and "3h ago" rather
+ * than "in 3 hours" wrapping onto a second line.
+ *
+ * Takes the clock as an argument so a caller can drive it from one tick rather
+ * than reading `Date.now()` per row.
+ */
+export function formatRelative(at: Date | string, now: number = Date.now()): string {
+  const when = typeof at === 'string' ? Date.parse(at) : at.getTime();
+  if (!Number.isFinite(when)) return '—';
+
+  const deltaMs = when - now;
+  const abs = Math.abs(deltaMs);
+  const future = deltaMs > 0;
+
+  const minutes = Math.round(abs / 60_000);
+  if (minutes < 1) return 'now';
+  if (minutes < 60) return future ? `in ${minutes}m` : `${minutes}m ago`;
+
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return future ? `in ${hours}h` : `${hours}h ago`;
+
+  const days = Math.round(hours / 24);
+  if (days < 30) return future ? `in ${days}d` : `${days}d ago`;
+
+  const months = Math.round(days / 30);
+  return future ? `in ${months}mo` : `${months}mo ago`;
+}

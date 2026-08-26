@@ -62,6 +62,7 @@ export type NotificationType =
   | 'field_request.backup'
   | 'field_request.location'
   | 'field_request.accepted'
+  | 'task.assigned'
   | 'unit.assigned'
   | 'unit.released'
   | 'organization.announcement'
@@ -156,6 +157,22 @@ export const NOTIFICATION_TYPES: Record<NotificationType, NotificationTypeMeta> 
     key: 'field_request.location',
     label: 'Location shared',
     icon: 'MapPin',
+    defaultSeverity: 'info',
+    audible: false,
+    category: 'incidents',
+  },
+  /**
+   * Work has landed on your dashboard.
+   *
+   * `info` and SILENT. A task has a deadline measured in hours or days; a tone
+   * for one would train operators to ignore the tones that mean something is
+   * happening now. The bell carries it, and the dashboard panel is where it
+   * actually lives.
+   */
+  'task.assigned': {
+    key: 'task.assigned',
+    label: 'Task assigned',
+    icon: 'ListChecks',
     defaultSeverity: 'info',
     audible: false,
     category: 'incidents',

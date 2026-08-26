@@ -17,6 +17,7 @@ import { bumpPermissionVersion, loadActorContextLocked } from '../auth/context.s
 import { revokeAllSessions } from '../auth/session.service.js';
 import type { RequestMeta } from '../auth/auth.service.js';
 import { lockMemberships, lockMembershipsByUser } from './locking.js';
+import { cancelTasksForDepartedMember } from '../tasks/task.service.js';
 
 /**
  * Personnel management.
@@ -435,6 +436,19 @@ export async function terminateMember(
       await tx.insert(memberStatusHistory).values({
         memberId: input.memberId, toStatusKey: 'off_duty', changedBy: actorUserId,
       });
+
+      /**
+       * Open tasks assigned to them are cancelled; ones they CREATED are kept.
+       *
+       * They cannot do the first set, and leaving them open pointing at
+       * somebody who has left makes every count on every dashboard wrong. The
+       * second set is different: the work still needs doing, and who asked for
+       * it is part of the record.
+       *
+       * Same principle as everything else here — history is preserved, live
+       * state is corrected. See docs/architecture/10-dashboard.md §4b.
+       */
+      await cancelTasksForDepartedMember(tx, input.memberId);
 
       await bumpPermissionVersion(tx, target.userId);
       // Access ends now, not when their session happens to expire.

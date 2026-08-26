@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { FIELD_REQUEST_KIND_KEYS, MAP, type RealtimeActor } from '@leoos/contracts';
+import { FIELD_REQUEST_KIND_KEYS, MAP } from '@leoos/contracts';
 import { NotFoundError } from '../../lib/errors.js';
 import type { RequestMeta } from '../auth/auth.service.js';
 import { resolveDispatchScope, type DispatchScope } from './dispatch.scope.js';
@@ -19,7 +19,9 @@ import {
   attachAcceptorToIncident, cancelFieldRequest, raiseFieldRequest, respondToFieldRequest,
 } from './field-request.service.js';
 import { getFieldRequestRevision, listLiveFieldRequests } from './field-request.read.js';
-import { publishDispatchEvents, type DispatchEmission } from './dispatch.events.js';
+import {
+  publishDispatchEvents, realtimeActorOf, type DispatchEmission,
+} from './dispatch.events.js';
 
 /**
  * Dispatch routes.
@@ -159,14 +161,6 @@ const deltaSchema = z.object({
  * subscribed console, and an event envelope is the easiest place in the system
  * to leak a detail nobody asked for (rule 16).
  */
-function realtimeActor(request: FastifyRequest): RealtimeActor {
-  return {
-    kind: 'user',
-    userId: request.auth?.userId ?? null,
-    label: request.auth?.identity.account.displayName ?? null,
-  };
-}
-
 function meta(request: FastifyRequest): RequestMeta {
   return {
     ip: request.ip,
@@ -191,7 +185,7 @@ export default async function dispatchRoutes(app: FastifyInstance): Promise<void
 
   /** Publishes what a mutation reported. Never awaited — see publisher.ts. */
   function publish(request: FastifyRequest, events: readonly DispatchEmission[]): void {
-    publishDispatchEvents(app.events, realtimeActor(request), events);
+    publishDispatchEvents(app.events, realtimeActorOf(request), events);
   }
 
   // ── Board ────────────────────────────────────────────────────────────────

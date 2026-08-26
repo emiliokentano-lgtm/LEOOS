@@ -348,3 +348,114 @@ export const memberRoleRelations = relations(memberRole, ({ one }) => ({
   }),
   role: one(role, { fields: [memberRole.roleId], references: [role.id] }),
 }));
+
+/**
+ * Task priority, as data.
+ *
+ * A table rather than an enum for the same reason operational statuses are one:
+ * adding "urgent" should be a row an administrator inserts, not a migration and
+ * a branch in five components. `sortOrder` drives display rather than the key,
+ * so inserting a level between two existing ones renumbers nothing.
+ */
+export const taskPriority = pgTable('task_priority', {
+  key: text('key').primaryKey(),
+  label: text('label').notNull(),
+  shortLabel: text('short_label').notNull(),
+  colorToken: text('color_token').notNull(),
+  sortOrder: integer('sort_order').notNull().default(100),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: createdAt(),
+});
+
+/**
+ * Work one member asked another to do.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * PERMISSION-GATED, NOT RANK-GATED
+ *
+ * The hierarchy rules exist because rank is AUTHORITY — promoting somebody
+ * above you hands them power over you. A task is not authority: it is a request
+ * with a deadline, and the assignee can complete it, ignore it, or take it up
+ * with their supervisor. Importing H1–H8 here would answer a question tasks do
+ * not raise.
+ *
+ * So `tasks.assign` decides it, which means an organization that wants only
+ * lieutenants assigning work grants it to lieutenants. The policy stays with
+ * the agency instead of being compiled in.
+ * See docs/architecture/10-dashboard.md §4b.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+export const task = pgTable(
+  'task',
+  {
+    id: primaryId(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organization.id, { onDelete: 'restrict' }),
+
+    /** A MEMBERSHIP. A task follows somebody out of an agency no more than a
+     *  callsign does. */
+    assigneeMemberId: uuid('assignee_member_id')
+      .notNull()
+      .references(() => organizationMember.id, { onDelete: 'cascade' }),
+
+    /** Kept when they leave: who wanted this is part of the record. */
+    createdByMemberId: uuid('created_by_member_id')
+      .references(() => organizationMember.id, { onDelete: 'set null' }),
+
+    title: text('title').notNull(),
+    detail: text('detail'),
+    priorityKey: text('priority_key')
+      .notNull()
+      .references(() => taskPriority.key, { onDelete: 'restrict' }),
+
+    /**
+     * Nullable, on purpose.
+     *
+     * Plenty of work has no deadline. Inventing one would make every such task
+     * either permanently overdue or permanently ignorable, and there is no
+     * third option once the column is `NOT NULL`.
+     */
+    dueAt: timestamp('due_at', { withTimezone: true }),
+
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    completedByMemberId: uuid('completed_by_member_id')
+      .references(() => organizationMember.id, { onDelete: 'set null' }),
+
+    /** Soft, per ADR-0008: what was asked for and then not needed is a fact. */
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    cancelledReason: text('cancelled_reason'),
+
+    ...timestamps(),
+  },
+  (t) => [
+    index('task_assignee_open_idx')
+      .on(t.assigneeMemberId, t.dueAt)
+      .where(sql`completed_at IS NULL AND cancelled_at IS NULL`),
+    index('task_org_open_idx')
+      .on(t.organizationId, t.createdAt)
+      .where(sql`completed_at IS NULL AND cancelled_at IS NULL`),
+    index('task_creator_idx').on(t.createdByMemberId, t.createdAt),
+    check(
+      'task_completion_consistent',
+      sql`(completed_at IS NULL) = (completed_by_member_id IS NULL)`,
+    ),
+    check('task_one_ending', sql`completed_at IS NULL OR cancelled_at IS NULL`),
+    check('task_title_not_blank', sql`length(btrim(title)) > 0`),
+  ],
+);
+
+export const taskRelations = relations(task, ({ one }) => ({
+  organization: one(organization, {
+    fields: [task.organizationId],
+    references: [organization.id],
+  }),
+  assignee: one(organizationMember, {
+    fields: [task.assigneeMemberId],
+    references: [organizationMember.id],
+  }),
+  priority: one(taskPriority, {
+    fields: [task.priorityKey],
+    references: [taskPriority.key],
+  }),
+}));

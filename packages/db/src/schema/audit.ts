@@ -177,6 +177,19 @@ export const AUDIT_ACTIONS = {
   FIELD_REQUEST_DECLINED: 'dispatch.field_request_declined',
   FIELD_REQUEST_CANCELLED: 'dispatch.field_request_cancelled',
 
+  /**
+   * Tasks.
+   *
+   * Assignment and cancellation are audited because they are one member acting
+   * on another's workload. Completion is audited because "it was done" is the
+   * claim the whole feature exists to record, and re-opening because undoing
+   * that claim is exactly the thing somebody would later dispute.
+   */
+  TASK_ASSIGNED: 'dispatch.task_assigned',
+  TASK_COMPLETED: 'dispatch.task_completed',
+  TASK_REOPENED: 'dispatch.task_reopened',
+  TASK_CANCELLED: 'dispatch.task_cancelled',
+
   // map
   /**
    * Marker lifecycle. Separate keys rather than one `map.marker_changed`,

@@ -61,7 +61,7 @@ const FIELD_OFFICER: PermissionKey[] = [
 
 const SUPERVISOR: PermissionKey[] = [
   ...FIELD_OFFICER,
-  'dispatch.close', 'dispatch.panic.acknowledge', 'units.manage',
+  'dispatch.close', 'dispatch.panic.acknowledge', 'units.manage', 'tasks.assign',
   'personnel.edit', 'personnel.callsign',
   'persons.warrants.manage',
 ];
@@ -90,7 +90,7 @@ const MEDICAL_SENIOR: PermissionKey[] = [
   ...MEDICAL_BASE,
   'organization.announce',
   'persons.create', 'persons.edit',
-  'dispatch.manage', 'dispatch.assign', 'dispatch.close', 'dispatch.panic.acknowledge',
+  'dispatch.manage', 'dispatch.assign', 'dispatch.close', 'dispatch.panic.acknowledge', 'tasks.assign',
   'units.manage', 'map.markers.manage',
 ];
 

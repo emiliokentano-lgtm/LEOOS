@@ -6,7 +6,7 @@ import { ArrowUpRight, Radio, TriangleAlert } from 'lucide-react';
 import {
   BACKSTOP_POLL_MS, DASHBOARD_POLL_MS, INCIDENT_STATUSES, PRIORITY_LIST,
   type DashboardAlert, type DashboardSnapshot, type DispatchIncidentSummary,
-  type DispatchUnit, type OperationalStatusMeta,
+  type DispatchUnit, type OperationalStatusMeta, type TaskListDto,
 } from '@leoos/contracts';
 import {
   Alert, Badge, Button, EmptyState, Panel, PanelHeader, SkeletonRows, useToast,
@@ -24,6 +24,7 @@ import { useRealtimeRefresh, useRealtimeStatus } from '@/lib/realtime/realtime-c
 import { BOARD_EVENTS, dashboardTopics } from '@/lib/realtime/topics';
 import { cn, formatElapsed } from '@/lib/utils';
 import { CountTile, MetricTile } from './metric-tile';
+import { TaskPanel } from './task-panel';
 
 /**
  * Operational overview.
@@ -96,6 +97,36 @@ export function DashboardView({
       realtime.state === 'live' ? BACKSTOP_POLL_MS : DASHBOARD_POLL_MS,
     );
   }, [realtime.state]);
+
+  /**
+   * Tasks are fetched SEPARATELY from the dashboard snapshot.
+   *
+   * The snapshot is composed from the dispatch reads and moves whenever the
+   * board moves — every few seconds on a busy shift. A task list changes when
+   * somebody assigns or ticks one, which is far rarer, and refetching it on
+   * every board tick would be work nobody asked for.
+   *
+   * `undefined` is "not asked yet", `null` is "the load failed", and an object
+   * with an empty array is "genuinely nothing". The panel renders all three
+   * differently, because an empty list shown because a request timed out is a
+   * lie in the safe-looking direction.
+   */
+  const [tasks, setTasks] = React.useState<TaskListDto | null>(null);
+
+  const refreshTasks = React.useCallback(() => {
+    void fetch('/api/tasks')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: TaskListDto | null) => setTasks(data))
+      .catch(() => setTasks(null));
+  }, []);
+
+  React.useEffect(() => {
+    refreshTasks();
+    // A minute. A task deadline is measured in hours; polling faster would be
+    // asking a question whose answer almost never changes.
+    const id = setInterval(refreshTasks, 60_000);
+    return () => clearInterval(id);
+  }, [refreshTasks]);
 
   // ── Loading and error states ────────────────────────────────────────────
   if (snapshot === null && connection === 'connecting') {
@@ -264,18 +295,21 @@ export function DashboardView({
             </Panel>
           </div>
 
-          {/* The operator */}
-          <SelfPanel
-            self={self}
-            statuses={statuses}
-            canOperate={self.canOperate}
-            pendingStatus={duty.loading}
-            onSetStatus={async (key) => {
-              const result = await duty.setStatus(key);
-              if (result.ok) refresh();
-              return result;
-            }}
-          />
+          {/* The operator, and the work assigned to them */}
+          <div className="flex min-h-0 flex-col gap-3">
+            <SelfPanel
+              self={self}
+              statuses={statuses}
+              canOperate={self.canOperate}
+              pendingStatus={duty.loading}
+              onSetStatus={async (key) => {
+                const result = await duty.setStatus(key);
+                if (result.ok) refresh();
+                return result;
+              }}
+            />
+            <TaskPanel data={tasks} onChanged={refreshTasks} />
+          </div>
         </div>
       </div>
     </PageContainer>

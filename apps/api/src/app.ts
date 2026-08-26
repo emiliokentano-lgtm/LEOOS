@@ -20,6 +20,7 @@ import mapRoutes from './modules/map/map.routes.js';
 import dispatchRoutes from './modules/dispatch/dispatch.routes.js';
 import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
 import notificationRoutes from './modules/notifications/notification.routes.js';
+import taskRoutes from './modules/tasks/task.routes.js';
 import fivemRoutes from './modules/fivem/fivem.routes.js';
 import gameServerRoutes from './modules/fivem/gameserver.routes.js';
 import adminRoutes from './modules/admin/admin.routes.js';
@@ -210,6 +211,16 @@ export async function buildApp(options: BuildOptions = {}): Promise<FastifyInsta
    * of its own.
    */
   await app.register(notificationRoutes, { prefix: '/api/v1/notifications' });
+
+  /**
+   * Tasks.
+   *
+   * Its own prefix rather than a corner of dispatch: a task is not an
+   * operational event, appears on no board, and has a different authority model
+   * — permission-gated rather than rank-gated. See
+   * docs/architecture/10-dashboard.md §4b.
+   */
+  await app.register(taskRoutes, { prefix: '/api/v1/tasks' });
   /**
    * Real-time is TWO surfaces, deliberately separate.
    *

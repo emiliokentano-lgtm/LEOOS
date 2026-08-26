@@ -111,6 +111,67 @@ beside it needed no redesign of the screen.
 
 ---
 
+## 4b. Tasks
+
+Somebody has to remember that the evidence locker needs auditing before Friday.
+Today that is a message in a chat nobody scrolls back through; tasks make it a
+row with a due date and a tick.
+
+### Who may assign one, and to whom
+
+**A permission, not a rank.** `tasks.assign`, seeded to supervisors and above.
+Three options were on the table:
+
+| Option | Verdict |
+| --- | --- |
+| **Shared membership alone** | Rejected. Every probationary officer could put work on every colleague's dashboard, and a dashboard anybody can write to is a dashboard nobody reads. |
+| **A rank ceiling, like promotion** | Rejected, and this is the interesting one. The hierarchy rules exist because rank is AUTHORITY: promoting somebody above you would hand them power over you. A task is not authority — it is a request with a deadline, and the assignee can mark it done, ignore it, or take it up with their supervisor. Borrowing H1–H8 here would import a constraint that answers a question tasks do not raise. |
+| **A permission** | **Chosen.** It is data, so an organization that wants only lieutenants assigning work grants it to lieutenants, and one that wants everyone to grants it to everyone. The choice stays with the agency instead of being compiled in. |
+
+The consequence, stated plainly: **a sergeant with `tasks.assign` can assign a
+task to the chief.** That is deliberate. It is visible, it is audited, and the
+chief can close it. An organization that considers it insubordinate withholds
+the permission from sergeants — which is a policy decision the data model is
+happy to express and the code has no opinion about.
+
+**Not across organizations.** A task is organizational work, and its assignee is
+a *membership*, not a user. A global administrator with no membership can assign
+nothing, which is right: they administer the installation, they do not run a
+shift.
+
+### What happens when somebody leaves
+
+| | |
+| --- | --- |
+| Tasks assigned **to** a terminated member | **Cancelled**, with the reason recorded. They cannot do them, and leaving open work pointing at somebody who has left makes every count wrong. |
+| Tasks that member **created** | **Kept.** The work still needs doing, and who asked for it is part of the record. |
+
+Both follow the same principle the rest of the product uses: history is
+preserved, live state is corrected.
+
+### Priority is data
+
+`task_priority` is a table, like every other catalogue here. Adding "urgent" is a
+row, not a branch in five components, and nothing in the UI switches on a key.
+
+### Overdue is DERIVED, never stored
+
+A stored `is_overdue` would be wrong between the moment a deadline passes and
+whatever job noticed. It is computed from `due_at` against the database clock on
+read, in exactly the way field-request expiry is, and for the same reason.
+
+The dashboard distinguishes three things that a single "open" count would
+conflate:
+
+- **Overdue** — the deadline has passed.
+- **Due soon** — within the next 24 hours.
+- **Open** — everything else.
+
+They are ordered that way on screen and the first two are marked in words as well
+as colour.
+
+---
+
 ## 5. Layout
 
 Everything needing a decision is above the fold on a 1920×1080 display: an
